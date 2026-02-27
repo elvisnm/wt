@@ -73,6 +73,7 @@ type MsgConfirmAction struct {
 	Desc   string
 }
 
+
 func actions_for_worktree(wt worktree.Worktree) []ui.PickerAction {
 	if wt.Type == worktree.TypeLocal {
 		if wt.Running {

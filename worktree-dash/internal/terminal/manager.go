@@ -20,7 +20,8 @@ type Manager struct {
 // Used when running as a standalone process (not inner mode).
 func NewManager() *Manager {
 	return &Manager{
-		server: NewTmuxServer(),
+		server:  NewTmuxServer(),
+		next_id: 1, // Start at 1; id 0 is reserved for preview sessions
 	}
 }
 
@@ -28,7 +29,8 @@ func NewManager() *Manager {
 // Used in inner mode where the outer process owns the server.
 func NewManagerWithServer(server *TmuxServer) *Manager {
 	return &Manager{
-		server: server,
+		server:  server,
+		next_id: 1, // Start at 1; id 0 is reserved for preview sessions
 	}
 }
 

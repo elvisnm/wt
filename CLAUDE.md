@@ -90,7 +90,7 @@ Real-time container stats via `docker stats`. Integrated terminal sessions for s
 
 **Tmux prefix key:** `Ctrl+]` — rarely conflicts with terminal apps. `prefix+q` returns focus to the dashboard. `prefix+f` toggles fullscreen. `prefix+1-9` jumps to tab N.
 
-**AWS keys lifecycle:** When `features.awsCredentials` is enabled, `Shift+A` opens the aws-keys script. The dashboard kills local dev processes first, then after the script exits successfully it auto-closes the tab, reloads `~/.aws/credentials` into the process env, and restarts all affected dev servers.
+**AWS keys lifecycle:** When `features.awsCredentials` is enabled, `Shift+A` opens the aws-keys script in a terminal tab. The user pastes their 3-line AWS export block. When the script finishes (detected via sentinel file `$TMPDIR/wt-aws-keys-done`), the dashboard auto-closes the tab, reloads `~/.aws/credentials` into the process env, then restarts all affected services — local worktrees via `restart_local_services` (kill processes, close dev tab, open fresh dev tab with new env) and Docker worktrees via stop + start.
 
 **Host-build lifecycle:** When a worktree is created with host-build mode, the dashboard automatically opens an esbuild watch tab after creation completes. Stopping a host-build worktree closes the build tab and stops the container.
 
@@ -137,7 +137,7 @@ Real-time container stats via `docker stats`. Integrated terminal sessions for s
 
 | Key | Action |
 |---|---|
-| `Enter` | Preview service logs (inline) |
+| `Enter` | Preview service logs (inline); press again to promote to full tab |
 | `l` | Open service logs in tab |
 | `r` | Restart service |
 
@@ -210,6 +210,16 @@ Real-time container stats via `docker stats`. Integrated terminal sessions for s
 - **NEVER include `Co-Authored-By` lines in commit messages.** Write commits as the developer, not as AI.
 - Commit messages: imperative mood, concise subject line, optional body for context
 - Do not commit `.env.worktree`, `docker-compose.worktree.yml`, `docker-compose.traefik.yml`, or `.docker-overrides/` — these are per-worktree runtime artifacts excluded via `.git/info/exclude`
+
+## Building
+
+The official `wt` binary is installed via Homebrew. When developing locally, always build as `wt-dev` to avoid overwriting the installed version:
+
+```bash
+cd worktree-dash && go build -o wt-dev .
+```
+
+This produces `worktree-dash/wt-dev`. Never build as just `wt` — that conflicts with the Homebrew-managed binary at `/usr/local/bin/wt`.
 
 ## Testing
 

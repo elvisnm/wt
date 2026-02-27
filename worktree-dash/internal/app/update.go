@@ -164,41 +164,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "render":
-			// Check if aws-keys finished
-			if m.aws_keys_running && !m.term_mgr.IsLabelAlive("AWS Keys") {
-				m.aws_keys_running = false
-				exit_code := m.term_mgr.ExitCodeForLabel("AWS Keys")
-
-				if exit_code == 0 {
-					// Success: close the aws-keys tab
-					m.term_mgr.CloseByLabel("AWS Keys")
-
-					// Reload AWS credentials into this process env
-					reload_aws_credentials()
-
-					// Restart dev servers that were running before
-					wts := m.aws_restart_wts
-					m.aws_restart_wts = nil
-					if len(wts) > 0 {
-						var cmd tea.Cmd
-						for _, wt := range wts {
-							m, cmd = m.start_dev_server(wt)
-						}
-						_ = cmd
-					}
-					m.activity = ""
-					if m.term_mgr.Count() == 0 {
-						m.focus = PanelWorktrees
-					}
-					return m, tea.Batch(
-						tick_after(100*time.Millisecond, "render"),
-						tick_after(3*time.Second, "status"),
-					)
-				}
-				// Error: keep the tab open so user can see what went wrong
-				m.aws_restart_wts = nil
-				m.activity = "AWS keys update failed — check the tab for errors"
-			}
 			// Check if a "Create —" tab finished for a host-build worktree
 			for _, wt := range m.worktrees {
 				create_label := fmt.Sprintf("Create — %s", wt.Alias)
@@ -215,6 +180,62 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						tick_after(100*time.Millisecond, "render"),
 						m.cmd_discover(),
 					)
+				}
+			}
+			// Check if the AWS Keys script finished (via sentinel file)
+			if m.aws_keys_running {
+				sentinel := filepath.Join(os.TempDir(), "wt-aws-keys-done")
+				if data, err := os.ReadFile(sentinel); err == nil {
+					os.Remove(sentinel)
+					exit_code := -1
+					fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &exit_code)
+					m.aws_keys_running = false
+					m.term_mgr.CloseByLabel("AWS Keys")
+					if m.pane_layout != nil {
+						m.pane_layout.FocusLeft()
+					}
+					if exit_code != 0 {
+						m.activity = "AWS keys update failed"
+						if m.term_mgr.Count() == 0 {
+							m.focus = PanelWorktrees
+						}
+						return m, tick_after(100*time.Millisecond, "render")
+					}
+					reload_aws_credentials()
+					m.activity = "AWS keys updated — restarting services..."
+					cmds := []tea.Cmd{
+						tick_after(100*time.Millisecond, "render"),
+						tick_after(3*time.Second, "status"),
+					}
+					for _, wt := range m.worktrees {
+						if !wt.Running {
+							continue
+						}
+						switch wt.Type {
+						case worktree.TypeLocal:
+							var cmd tea.Cmd
+							m, cmd = m.restart_local_services(wt)
+							if cmd != nil {
+								cmds = append(cmds, cmd)
+							}
+						case worktree.TypeDocker:
+							wt := wt
+							cmds = append(cmds, tea.Sequence(
+								func() tea.Msg {
+									return MsgActionStarted{WtName: wt.Name, Status: "refreshing..."}
+								},
+								func() tea.Msg {
+									run_docker("stop", wt.Container)
+									out, err := run_worktree_up(wt, m.repo_root, m.cfg)
+									return MsgActionOutput{Output: out, Err: err}
+								},
+							))
+						}
+					}
+					if m.term_mgr.Count() == 0 {
+						m.focus = PanelWorktrees
+					}
+					return m, tea.Batch(cmds...)
 				}
 			}
 			// Re-render tick for PTY output updates
@@ -694,7 +715,13 @@ func (m Model) handle_services_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, Keys.Enter):
 		if wt != nil && wt.Running && m.service_cursor >= 0 && m.service_cursor < len(m.services) {
-			return m, m.open_preview_logs(*wt, m.services[m.service_cursor])
+			svc := m.services[m.service_cursor]
+			if m.preview_session != nil && m.preview_svc_name == svc.Name {
+				// Already previewing this service — promote to full log tab
+				m.close_preview()
+				return m.open_service_logs(*wt, svc)
+			}
+			return m, m.open_preview_logs(*wt, svc)
 		}
 		return m, nil
 	}
@@ -1589,29 +1616,10 @@ func (m Model) execute_maintenance_action(action ui.PickerAction) (Model, tea.Cm
 }
 
 // open_aws_keys runs the aws-keys.js script in a terminal session.
-// Before running, it closes any active Dev terminal tabs for local worktrees
-// and remembers them. After the aws-keys script finishes, the render tick
-// detects the session died and auto-restarts the dev servers.
+// The render tick detects when the session exits and triggers service restarts.
 func (m Model) open_aws_keys() (tea.Model, tea.Cmd) {
 	w, h := m.right_pane_dimensions()
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "aws-keys.js")
-
-	// Find local worktrees with running dev processes and kill them.
-	// Close any matching terminal tabs too (could be "Dev —" or "Create —" etc).
-	m.aws_restart_wts = nil
-	for _, wt := range m.worktrees {
-		if wt.Type != worktree.TypeLocal {
-			continue
-		}
-		if kill_local_dev_processes(wt.Path) {
-			m.aws_restart_wts = append(m.aws_restart_wts, wt)
-		}
-		// Close any terminal tab associated with this worktree
-		dev_label := fmt.Sprintf("Dev — %s", wt.Alias)
-		m.term_mgr.CloseByLabel(dev_label)
-		create_label := fmt.Sprintf("Create — %s", wt.Alias)
-		m.term_mgr.CloseByLabel(create_label)
-	}
 
 	label := "AWS Keys"
 	_, err := m.term_mgr.Open(label, "node", []string{script}, w, h, m.repo_root)
@@ -1624,10 +1632,10 @@ func (m Model) open_aws_keys() (tea.Model, tea.Cmd) {
 	m.terminal_output = ""
 	m.prev_focus = m.focus
 	m.focus = PanelTerminal
-	// Focus the right pane for native terminal interaction
 	if m.pane_layout != nil {
 		m.pane_layout.FocusRight()
 	}
+
 	return m, tick_after(100*time.Millisecond, "render")
 }
 

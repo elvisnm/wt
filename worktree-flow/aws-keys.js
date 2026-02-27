@@ -1,71 +1,9 @@
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const readline = require('readline');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
 
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
-
-function resolve_worktrees_dir() {
-  if (config && config.repo._worktreesDirResolved) {
-    return config.repo._worktreesDirResolved;
-  }
-  const repo_root = run('git rev-parse --show-toplevel');
-  const project_name = path.basename(repo_root);
-  const parent_dir = path.dirname(repo_root);
-  return path.join(parent_dir, `${project_name}-worktrees`);
-}
-
-function find_active_docker_worktrees() {
-  const worktrees_dir = resolve_worktrees_dir();
-  if (!fs.existsSync(worktrees_dir)) return [];
-
-  const results = [];
-
-  function scan(dir, prefix) {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const full_path = path.join(dir, entry.name);
-      const rel_name = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (fs.existsSync(path.join(full_path, 'docker-compose.worktree.yml'))) {
-        results.push({ name: rel_name, path: full_path });
-      } else {
-        scan(full_path, rel_name);
-      }
-    }
-  }
-
-  scan(worktrees_dir, '');
-  return results;
-}
-
-function is_container_running(worktree_path) {
-  try {
-    const output = run('docker compose -f docker-compose.worktree.yml ps --format json', {
-      cwd: worktree_path,
-    });
-    if (!output) return false;
-
-    const lines = output.split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        const data = JSON.parse(line);
-        const state = data.State || data.state || '';
-        if (state === 'running') return true;
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    return false;
-  }
-  return false;
-}
+const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-aws-keys-done');
 
 function detect_shell() {
   const shell = process.env.SHELL || '';
@@ -193,30 +131,6 @@ aws_session_token = ${keys.session_token}
   console.log(`Updated ${creds_path}`);
 }
 
-function restart_docker_worktrees() {
-  const worktrees = find_active_docker_worktrees();
-  const running = worktrees.filter((w) => is_container_running(w.path));
-
-  if (running.length > 0) {
-    console.log(`\nRestarting ${running.length} Docker worktree container(s)...`);
-    for (const w of running) {
-      try {
-        console.log(`  Restarting ${w.name}...`);
-        execSync('docker compose -f docker-compose.worktree.yml restart', {
-          stdio: 'inherit',
-          cwd: w.path,
-        });
-      } catch {
-        console.warn(`  Warning: Failed to restart ${w.name}`);
-      }
-    }
-    console.log('All running containers restarted with fresh AWS credentials.');
-  } else {
-    console.log('\nNo running Docker worktree containers to restart.');
-  }
-
-}
-
 async function read_input_lines() {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -246,8 +160,12 @@ async function read_input_lines() {
 async function main() {
   const lines = await read_input_lines();
 
+  // Clean up any stale sentinel from a previous run
+  try { fs.unlinkSync(SENTINEL_PATH); } catch {}
+
   if (lines.length < 3) {
     console.error('Expected 3 lines of AWS export commands.');
+    fs.writeFileSync(SENTINEL_PATH, '1');
     process.exit(1);
   }
 
@@ -258,6 +176,7 @@ async function main() {
     console.error('  export AWS_ACCESS_KEY_ID="..."');
     console.error('  export AWS_SECRET_ACCESS_KEY="..."');
     console.error('  export AWS_SESSION_TOKEN="..."');
+    fs.writeFileSync(SENTINEL_PATH, '1');
     process.exit(1);
   }
 
@@ -275,13 +194,11 @@ async function main() {
   update_shell_profile(keys, shell_name, profile_path);
   update_aws_credentials(keys);
 
-  restart_docker_worktrees();
-
   console.log('');
-  console.log('Done. New shell sessions will pick up the keys automatically.');
-  if (profile_path) {
-    console.log(`For THIS shell session, run: source ${profile_path}`);
-  }
+  console.log('Done. Dashboard will restart services with fresh keys.');
+
+  fs.writeFileSync(SENTINEL_PATH, '0');
+  process.exit(0);
 }
 
 main();

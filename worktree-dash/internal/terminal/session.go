@@ -35,8 +35,10 @@ func NewSession(id int, label string, cmd_name string, args []string, width, hei
 	window := fmt.Sprintf("w%d", id)
 	target := fmt.Sprintf("%s.0", window)
 
-	// Build the shell command to run inside tmux
-	shell_cmd := cmd_name
+	// Build the shell command to run inside tmux.
+	// Use exec so the shell replaces itself with the target process.
+	// This ensures remain-on-exit detects when the process actually exits.
+	shell_cmd := "exec " + cmd_name
 	if len(args) > 0 {
 		// Quote args that contain spaces
 		quoted := make([]string, len(args))

@@ -72,9 +72,8 @@ type Model struct {
 	activity    string
 	spin_frame  int
 
-	// AWS keys restart: tracks when aws-keys is running and which dev tabs to reopen
+	// AWS keys: tracks when the aws-keys script is running
 	aws_keys_running bool
-	aws_restart_wts  []worktree.Worktree
 
 	repo_root     string
 	worktrees_dir string
