@@ -176,6 +176,16 @@ node worktree-flow/dc-lan.js <name> [--off]
 
 Detects LAN IP and builds a nip.io domain (e.g., `my-feat.192.168.1.100.nip.io`). Updates `.env.worktree` and restarts the container. Requires `features.lan`.
 
+### `dc-skip-worktree.js` — Toggle skip-worktree flags
+
+```bash
+node worktree-flow/dc-skip-worktree.js apply <name>    # Apply skip-worktree
+node worktree-flow/dc-skip-worktree.js remove <name>   # Remove skip-worktree
+node worktree-flow/dc-skip-worktree.js list <name>     # List skipped files
+```
+
+Applies or removes `git update-index --skip-worktree` on paths configured in `git.skipWorktree`. Hides noisy local-only changes (build artifacts, lock files, etc.) from `git status`. Supports both local and Docker worktrees. Also auto-applied on worktree creation when configured.
+
 ## Maintenance
 
 ### `dc-autostop.js` — Stop idle containers

@@ -160,6 +160,33 @@ function ensure_git_exclude(worktree_path) {
   fs.appendFileSync(exclude_file, separator + missing.join('\n') + '\n');
 }
 
+// ── Skip-worktree ───────────────────────────────────────────────────
+
+function apply_skip_worktree(worktree_path) {
+  const paths = config && config.git && Array.isArray(config.git.skipWorktree)
+    ? config.git.skipWorktree
+    : [];
+  if (paths.length === 0) return;
+
+  const applied = [];
+  for (const p of paths) {
+    try {
+      const files = run(`git -C "${worktree_path}" ls-files -z "${p}"`)
+        .split('\0')
+        .filter(Boolean);
+      if (files.length === 0) continue;
+      const file_args = files.map((f) => `"${f}"`).join(' ');
+      run(`git -C "${worktree_path}" update-index --skip-worktree ${file_args}`);
+      applied.push(p);
+    } catch {
+      // path not tracked or not present — skip silently
+    }
+  }
+  if (applied.length > 0) {
+    console.log(`Skip-worktree: ${applied.join(', ')}`);
+  }
+}
+
 // ── Override files (generate strategy) ──────────────────────────────────
 
 function ensure_override_files(repo_root, worktree_path) {
@@ -620,6 +647,7 @@ function main() {
   }
 
   ensure_git_exclude(worktree_path);
+  apply_skip_worktree(worktree_path);
 
   const compose_strategy = config ? config.docker.composeStrategy : 'generate';
   const is_shared_compose = compose_strategy !== 'generate' && config && config.docker._composeFileResolved;

@@ -41,7 +41,8 @@ var subcommands = map[string]string{
 	"seed":         "dc-seed.js",
 	"exec":         "dc-exec.js",
 	"admin":        "dc-admin.js",
-	"lan":          "dc-lan.js",
+	"lan":            "dc-lan.js",
+	"skip-worktree":  "dc-skip-worktree.js",
 	"prune":        "dc-prune.js",
 	"autostop":     "dc-autostop.js",
 	"rebuild-base": "dc-rebuild-base.js",
@@ -101,11 +102,12 @@ func launchDashboard() {
 
 func launchDashboardOuter() {
 	// Show splash immediately — stays visible until dashboard is fully loaded
-	splashStop := showSplash()
-	defer restoreTerm()
+	stopSplash := showSplash()
 
+	tw, th := termSize()
 	ts := terminal.NewTmuxServer()
-	if err := ts.EnsureStarted(); err != nil {
+	if err := ts.EnsureStarted(tw, th); err != nil {
+		stopSplash()
 		restoreTerm()
 		fmt.Fprintf(os.Stderr, "wt: %v\n", err)
 		os.Exit(1)
@@ -115,6 +117,7 @@ func launchDashboardOuter() {
 	exe_path, err := os.Executable()
 	if err != nil {
 		ts.Kill()
+		stopSplash()
 		restoreTerm()
 		fmt.Fprintf(os.Stderr, "wt: cannot determine executable path: %v\n", err)
 		os.Exit(1)
@@ -122,6 +125,7 @@ func launchDashboardOuter() {
 	exe_path, err = filepath.EvalSymlinks(exe_path)
 	if err != nil {
 		ts.Kill()
+		stopSplash()
 		restoreTerm()
 		fmt.Fprintf(os.Stderr, "wt: cannot resolve symlinks: %v\n", err)
 		os.Exit(1)
@@ -131,6 +135,7 @@ func launchDashboardOuter() {
 	pl, err := terminal.SetupPaneLayout(ts, 20, exe_path)
 	if err != nil {
 		ts.Kill()
+		stopSplash()
 		restoreTerm()
 		fmt.Fprintf(os.Stderr, "wt: %v\n", err)
 		os.Exit(1)
@@ -150,19 +155,27 @@ func launchDashboardOuter() {
 	// Block until the inner process signals that discovery is complete.
 	// The splash stays visible during this entire wait.
 	ts.Run("wait-for", "wt-ready")
-	close(splashStop)
 
-	// Attach directly — tmux takes over the terminal from the splash
-	// with no gap (no restoreTerm before attach to avoid flicker)
+	// Stop splash goroutine and wait for it to exit — guarantees no more
+	// ANSI cursor-position writes to stdout that could leak into tmux.
+	stopSplash()
+
+	// Exit alt screen from splash, then clear. tmux attach will enter
+	// its own alt screen cleanly from a known terminal state.
+	fmt.Print("\033[?1049l\033[2J\033[H")
+
+	// Attach — tmux takes over the terminal
 	cmd := exec.Command("tmux", "-L", ts.Socket(), "attach-session", "-t", "wt")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Run()
 
-	// Clean up: clear screen, restore cursor, exit alt screen
-	fmt.Print("\033[2J\033[H\033[?25h\033[?1049l")
+	// Clean up: kill tmux server, then fully reset the terminal.
+	// \033c (RIS) resets all modes tmux may have left behind (alternate charset,
+	// bracketed paste, mouse reporting, scroll regions, etc.)
 	ts.Kill()
+	fmt.Print("\033c")
 }
 
 func launchDashboardInner() {
@@ -351,9 +364,39 @@ var heiHeiArt = []string{
 	`                                       ......+..........    ........`,
 }
 
+var splashQuotes = []string{
+	"It works on my machine.",
+	"// TODO: fix this later",
+	"git push --force and pray.",
+	"There are 10 types of people in the world...",
+	"Mass-assign responsibly.",
+	"sudo make me a sandwich.",
+	"The cloud is just someone else's computer.",
+	"Debugging: being the detective in a crime movie where you are also the murderer.",
+	"99 little bugs in the code, take one down, patch it around... 127 little bugs in the code.",
+	"Works on my container.",
+	"Have you tried turning it off and on again?",
+	"It's not a bug, it's an undocumented feature.",
+	"In case of fire: git commit, git push, leave building.",
+	"A SQL query walks into a bar, sees two tables and asks... can I join you?",
+	"Weeks of coding can save you hours of planning.",
+	"There is no place like 127.0.0.1.",
+	"!false -- it's funny because it's true.",
+	"I don't always test my code, but when I do, I do it in production.",
+	"Documentation is like sex: when it's good, it's very good. When it's bad, it's better than nothing.",
+	"Mondays are fine. It's your job that sucks.",
+	"Real programmers count from 0.",
+	"Deleted code is debugged code.",
+	"One does not simply mass-migrate to TypeScript.",
+	"The best code is no code at all.",
+	"Hire a lazy developer. They'll find the easiest way to do it.",
+	"I have a joke about UDP but you might not get it.",
+}
+
 // showSplash clears the screen and displays HeiHei (the chicken from Moana)
 // scaled to 77% of the terminal, centered. Stays visible until the dashboard is fully loaded.
-func showSplash() chan struct{} {
+// Returns a function that stops the spinner and waits for the goroutine to exit.
+func showSplash() func() {
 	w, h := termSize()
 
 	// Switch to alt screen, hide cursor, clear
@@ -374,9 +417,20 @@ func showSplash() chan struct{} {
 	}
 	fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", label_row, label_col, display)
 
-	// Animate spinner in a background goroutine — caller stops it via the returned channel
+	// Pick a random quote and render it below the spinner
+	quote := fmt.Sprintf("\"%s\"", splashQuotes[time.Now().UnixNano()%int64(len(splashQuotes))])
+	quote_row := label_row + 2
+	quote_col := (w - len(quote)) / 2
+	if quote_col < 1 {
+		quote_col = 1
+	}
+	fmt.Printf("\033[%d;%dH\033[3;38;5;245m%s\033[0m", quote_row, quote_col, quote)
+
+	// Animate spinner in a background goroutine
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		i := 0
 		for {
 			select {
@@ -390,7 +444,11 @@ func showSplash() chan struct{} {
 			}
 		}
 	}()
-	return stop
+
+	return func() {
+		close(stop)
+		<-done // wait for goroutine to actually exit — no more writes to stdout
+	}
 }
 
 type heiHeiLayout struct {
@@ -744,7 +802,7 @@ func renderGuide() string {
 	sections = append(sections, guideBox("More", []string{
 		guideKey("Shift+D") + " database    " + guideKey("Shift+A") + " aws keys",
 		guideKey("Shift+M") + " maintenance " + guideKey("Shift+X") + " admin",
-		guideKey("Shift+L") + " LAN mode",
+		guideKey("Shift+L") + " LAN mode    " + guideKey("Shift+K") + " skip-worktree",
 		ansiDim + strings.Repeat("─", 42) + ansiReset,
 		guideKey("i") + " info  " + guideKey("r") + " restart  " + guideKey("u") + " start  " + guideKey("t") + " stop",
 	}, w))
@@ -863,6 +921,7 @@ func renderHelp() string {
 	// Operations
 	sections = append(sections, helpBox("Operations", []string{
 		guideKey("Shift+D") + "     database",
+		guideKey("Shift+K") + "     skip-worktree toggle",
 		guideKey("Shift+M") + "     maintenance",
 		guideKey("Shift+A") + "     aws keys",
 		guideKey("Shift+X") + "     admin toggle",
@@ -950,6 +1009,7 @@ Commands:
   admin [args]          Admin operations
   service [args]        Service management
   lan [branch]          LAN access setup
+  skip-worktree [args]  Toggle skip-worktree flags
   prune                 Clean up old worktrees
   autostop              Stop idle worktrees
   rebuild-base          Rebuild base Docker image

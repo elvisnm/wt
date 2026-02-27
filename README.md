@@ -115,6 +115,7 @@ wt/
     dc-seed.js                    # Database seed/drop/reset
     dc-service.js                 # PM2 service management
     dc-lan.js                     # LAN access toggle
+    dc-skip-worktree.js           # Skip-worktree toggle
     dc-admin.js                   # Admin account toggle
     dc-autostop.js                # Stop idle containers
     dc-prune.js                   # Clean orphaned volumes

@@ -239,6 +239,14 @@ module.exports = {
     },
   },
 
+  // ─── Git ──────────────────────────────────────────────────────────
+  git: {
+    // Paths to mark with git update-index --skip-worktree on creation.
+    // Hides noisy local-only changes from git status (build artifacts, lock files, etc.)
+    // Empty array or omitted = disabled.
+    skipWorktree: ["build/", ".beads/", "CLAUDE.md", "pnpm-lock.yaml"],
+  },
+
   // ─── Features (optional capabilities) ──────────────────────────────
   features: {
     // Host-build mode (esbuild on host, skips livereload in container)

@@ -85,7 +85,9 @@ func (ts *TmuxServer) IsStarted() bool {
 // EnsureStarted creates the tmux server on first call.
 // Creates a detached session with sensible defaults and starts a control-mode
 // client to keep the server alive for resize operations.
-func (ts *TmuxServer) EnsureStarted() error {
+// Pass the real terminal width/height so the initial pane layout matches the
+// final size after tmux attach (avoids a visible re-layout flicker).
+func (ts *TmuxServer) EnsureStarted(width, height int) error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -93,8 +95,16 @@ func (ts *TmuxServer) EnsureStarted() error {
 		return nil
 	}
 
-	// Create a new tmux session (detached, with a dummy window)
-	out, err := ts.run_locked("new-session", "-d", "-s", "wt", "-x", "200", "-y", "50")
+	if width <= 0 {
+		width = 200
+	}
+	if height <= 0 {
+		height = 50
+	}
+
+	// Create a new tmux session (detached) sized to match the real terminal
+	out, err := ts.run_locked("new-session", "-d", "-s", "wt",
+		"-x", strconv.Itoa(width), "-y", strconv.Itoa(height))
 	if err != nil {
 		// Retry without -x/-y for older tmux versions
 		out, err = ts.run_locked("new-session", "-d", "-s", "wt")

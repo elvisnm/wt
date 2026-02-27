@@ -97,6 +97,10 @@ const DEFAULTS = {
     },
   },
 
+  git: {
+    skipWorktree: [],
+  },
+
   features: {
     hostBuild: false,
     lan: false,

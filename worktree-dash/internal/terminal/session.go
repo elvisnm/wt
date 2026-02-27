@@ -28,7 +28,7 @@ type Session struct {
 // If the tmux session doesn't have any windows yet (first call after EnsureStarted),
 // it reuses the initial window. Otherwise it creates a new window.
 func NewSession(id int, label string, cmd_name string, args []string, width, height int, dir string, server *TmuxServer) (*Session, error) {
-	if err := server.EnsureStarted(); err != nil {
+	if err := server.EnsureStarted(0, 0); err != nil {
 		return nil, err
 	}
 

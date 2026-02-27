@@ -75,6 +75,9 @@ type Model struct {
 	// AWS keys: tracks when the aws-keys script is running
 	aws_keys_running bool
 
+	// Skip-worktree: tracks when the skip-worktree script is running
+	skip_worktree_running bool
+
 	// HeiHei easter egg
 	heihei_audio   []byte
 	heihei_tmpfile string

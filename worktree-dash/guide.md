@@ -39,7 +39,7 @@
 │                                                         │
 │   Shift+D  database       Shift+A  aws credentials     │
 │   Shift+M  maintenance    Shift+X  toggle admin         │
-│   Shift+L  toggle LAN                                   │
+│   Shift+L  toggle LAN     Shift+K  skip-worktree        │
 │                                                         │
 │   i  info   r  restart    u  start   t  stop            │
 │                                                         │

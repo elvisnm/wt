@@ -113,6 +113,7 @@ Real-time container stats via `docker stats`. Integrated terminal sessions for s
 | `1`–`9` | Jump to tab N | — |
 | `Shift+A` | Open AWS keys | `awsCredentials` |
 | `Shift+D` | Open database picker | — |
+| `Shift+K` | Toggle skip-worktree | `git.skipWorktree` |
 | `Shift+X` | Toggle admin accounts | `admin` |
 | `Shift+L` | Toggle LAN mode | `lan` |
 | `Shift+M` | Open maintenance picker | — |

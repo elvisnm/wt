@@ -84,6 +84,7 @@ The dashboard discovers worktrees by reading `workflow.config.js` from the repo 
 |---|---|
 | `A` | AWS credentials (mount into containers) |
 | `D` | Database operations (seed/drop/reset/fix-images) |
+| `K` | Skip-worktree toggle (apply/remove) |
 | `L` | LAN access toggle (on/off) |
 | `X` | Admin account toggle (set/unset) |
 | `M` | Maintenance (prune/autostop/rebuild) |

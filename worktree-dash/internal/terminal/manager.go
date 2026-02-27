@@ -336,22 +336,25 @@ func (mgr *Manager) CloseByLabel(label string) {
 	for i, s := range mgr.sessions {
 		if s.Label == label {
 			pl := mgr.panes
+			was_active := (i == mgr.active_tab)
 
 			// If this session is currently displayed, return it first
-			if pl != nil && i == mgr.active_tab {
+			if pl != nil && was_active {
 				pl.ReturnSession()
 			}
 
-			go s.Close()
 			mgr.sessions = append(mgr.sessions[:i], mgr.sessions[i+1:]...)
 			if mgr.active_tab >= len(mgr.sessions) && mgr.active_tab > 0 {
 				mgr.active_tab--
 			}
 
-			// Show the new active session
-			if len(mgr.sessions) > 0 && pl != nil && i == mgr.active_tab {
+			// Show the new active session if the closed one was visible
+			if len(mgr.sessions) > 0 && pl != nil && was_active {
 				pl.ShowSession(mgr.sessions[mgr.active_tab].Window())
 			}
+
+			// Kill the tmux window after swap-pane completes to avoid races
+			go s.Close()
 
 			return
 		}

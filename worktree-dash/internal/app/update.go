@@ -41,9 +41,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.discovered = true
 		m.update_worktrees(msg.Worktrees)
 
-		// Signal the outer process that we're ready (unblocks tmux attach)
+		// Signal the outer process that we're ready (unblocks tmux attach).
+		// Small delay lets any pending resize events settle before the
+		// user sees the dashboard, avoiding a visible re-layout.
 		if first_load && m.pane_layout != nil {
-			go m.pane_layout.Server().Run("wait-for", "-S", "wt-ready")
+			go func() {
+				time.Sleep(1 * time.Second)
+				m.pane_layout.Server().Run("wait-for", "-S", "wt-ready")
+			}()
 		}
 		cmds := []tea.Cmd{
 			tick_after(5*time.Second, "status"),
@@ -180,6 +185,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						tick_after(100*time.Millisecond, "render"),
 						m.cmd_discover(),
 					)
+				}
+			}
+			// Check if skip-worktree script finished (via sentinel file)
+			if m.skip_worktree_running {
+				sentinel := filepath.Join(os.TempDir(), "wt-skip-worktree-done")
+				if data, err := os.ReadFile(sentinel); err == nil {
+					os.Remove(sentinel)
+					exit_code := -1
+					fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &exit_code)
+					m.skip_worktree_running = false
+					// Close the "Skip —" tab
+					for _, s := range m.term_mgr.Sessions() {
+						if strings.HasPrefix(s.Label, "Skip — ") {
+							m.term_mgr.CloseByLabel(s.Label)
+							break
+						}
+					}
+					if exit_code == 0 {
+						m.activity = "Skip-worktree updated"
+					} else {
+						m.activity = "Skip-worktree failed"
+					}
+					if m.term_mgr.Count() == 0 {
+						// No tabs left — return to dashboard
+						if m.pane_layout != nil {
+							m.pane_layout.FocusLeft()
+						}
+						m.focus = PanelWorktrees
+					}
+					// If tabs remain, CloseByLabel already showed the next one
+					return m, tick_after(100*time.Millisecond, "render")
 				}
 			}
 			// Check if the AWS Keys script finished (via sentinel file)
@@ -495,6 +531,8 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "M":
 		return m.open_maintenance_picker()
+	case "K":
+		return m.toggle_skip_worktree()
 	case "H":
 		return m.play_heihei()
 	}
@@ -1580,6 +1618,82 @@ func (m Model) run_lan_toggle(wt worktree.Worktree, action string) (Model, tea.C
 		return m, nil
 	}
 
+	m.terminal_output = ""
+	m.prev_focus = m.focus
+	m.focus = PanelTerminal
+	return m, tick_after(100*time.Millisecond, "render")
+}
+
+// toggle_skip_worktree toggles skip-worktree flags for the selected worktree (with confirmation).
+// The gate check is done here (not in the key handler) so we can show activity messages.
+func (m Model) toggle_skip_worktree() (tea.Model, tea.Cmd) {
+	wt := m.selected_worktree()
+	if wt == nil {
+		m.activity = "Skip-worktree: no worktree selected"
+		return m, nil
+	}
+
+	// Check config — the Go config gets the raw JS export, so Git.SkipWorktree
+	// may be empty even when defaults exist. We still allow the toggle because
+	// the Node script reads the merged config with defaults.
+	has_config_paths := m.cfg != nil && len(m.cfg.Git.SkipWorktree) > 0
+	if !has_config_paths {
+		// Try detecting if the Node config has skip paths by checking the script exists
+		script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-skip-worktree.js")
+		if _, err := os.Stat(script); err != nil {
+			m.activity = "Skip-worktree: dc-skip-worktree.js not found"
+			return m, nil
+		}
+	}
+
+	// Detect current state: check if any files have skip-worktree set
+	action := "apply"
+	cmd := exec.Command("git", "-C", wt.Path, "ls-files", "-v")
+	out, err := cmd.Output()
+	if err != nil {
+		m.activity = fmt.Sprintf("Skip-worktree: git ls-files failed: %v", err)
+		return m, nil
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "S ") {
+			action = "remove"
+			break
+		}
+	}
+
+	m.confirm_open = true
+	verb := "Apply"
+	if action == "remove" {
+		verb = "Remove"
+	}
+	m.confirm_prompt = fmt.Sprintf("%s skip-worktree on %s?", verb, wt.Alias)
+	m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
+		return mdl.run_skip_worktree_toggle(*wt, action)
+	}
+	return m, nil
+}
+
+func (m Model) run_skip_worktree_toggle(wt worktree.Worktree, action string) (Model, tea.Cmd) {
+	w, h := m.right_pane_dimensions()
+	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-skip-worktree.js")
+
+	if _, err := os.Stat(script); err != nil {
+		m.activity = fmt.Sprintf("Skip-worktree: script not found: %s", script)
+		return m, nil
+	}
+
+	args := []string{script, action, wt.Name}
+	label := fmt.Sprintf("Skip — %s", wt.Alias)
+
+	m.activity = fmt.Sprintf("Running skip-worktree %s on %s...", action, wt.Alias)
+
+	_, err := m.term_mgr.Open(label, "node", args, w, h, m.repo_root)
+	if err != nil {
+		m.activity = fmt.Sprintf("Skip-worktree failed: %v", err)
+		return m, nil
+	}
+
+	m.skip_worktree_running = true
 	m.terminal_output = ""
 	m.prev_focus = m.focus
 	m.focus = PanelTerminal

@@ -101,6 +101,10 @@ module.exports = {
     },
   },
 
+  git: {
+    skipWorktree: ['build/', '.beads/', 'CLAUDE.md', 'pnpm-lock.yaml'],
+  },
+
   features: {
     hostBuild: true,
     lan: true,

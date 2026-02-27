@@ -28,6 +28,7 @@ type Config struct {
 	Env        EnvConfig        `json:"env"`
 	Features   FeaturesConfig   `json:"features"`
 	Dash       DashConfig       `json:"dash"`
+	Git        GitConfig         `json:"git"`
 	Paths      PathsConfig      `json:"paths"`
 
 	// Resolved paths (set by Load, not from JSON)
@@ -155,6 +156,10 @@ type PathsConfig struct {
 	FlowScripts     string `json:"flowScripts"`
 	DockerOverrides string `json:"dockerOverrides"`
 	BuildScript     string `json:"buildScript"`
+}
+
+type GitConfig struct {
+	SkipWorktree []string `json:"skipWorktree"`
 }
 
 // ── Finding the config ──────────────────────────────────────────────────

@@ -81,6 +81,15 @@ func (pl *PaneLayout) ConfigureBindings() {
 		key := fmt.Sprintf("%d", i)
 		ts.Run("bind-key", key, "send-keys", "-t", "wt:0.0", fmt.Sprintf("M-%d", i))
 	}
+
+	// Block C-k on the dashboard pane (pane 0). iTerm2 Cmd+K sends C-k to the
+	// terminal process. Without this, it clears the bubbletea display.
+	// Allow C-k through only on pane 1 (terminal sessions like zsh).
+	// -n = root table (no prefix needed). if-shell -F evaluates #{pane_index}:
+	// "0" is falsy (pane 0 → no-op), "1" is truthy (pane 1 → forward C-k).
+	ts.Run("bind-key", "-n", "C-k",
+		"if-shell", "-F", "#{pane_index}",
+		"send-keys C-k", "")
 }
 
 // ShowSession swaps a session's tmux window pane into the right viewport (pane 1).
