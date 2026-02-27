@@ -226,7 +226,7 @@ func (m Model) loading_view() string {
 		Width(w).
 		Height(h).
 		Align(lipgloss.Center, lipgloss.Center).
-		Foreground(ui.DimTextColor)
+		Foreground(ui.HintColor)
 
 	return box.Render(label)
 }

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 	"unsafe"
 
@@ -92,7 +93,7 @@ func launchDashboard() {
 
 func launchDashboardOuter() {
 	// Show splash immediately — stays visible until dashboard is fully loaded
-	showSplash()
+	splashStop := showSplash()
 	defer restoreTerm()
 
 	ts := terminal.NewTmuxServer()
@@ -141,6 +142,7 @@ func launchDashboardOuter() {
 	// Block until the inner process signals that discovery is complete.
 	// The splash stays visible during this entire wait.
 	ts.Run("wait-for", "wt-ready")
+	close(splashStop)
 
 	// Attach directly — tmux takes over the terminal from the splash
 	// with no gap (no restoreTerm before attach to avoid flicker)
@@ -340,7 +342,7 @@ var heiHeiArt = []string{
 
 // showSplash clears the screen and displays HeiHei (the chicken from Moana)
 // scaled to 77% of the terminal, centered. Stays visible until the dashboard is fully loaded.
-func showSplash() {
+func showSplash() chan struct{} {
 	w, h := termSize()
 
 	// Switch to alt screen, hide cursor, clear
@@ -422,7 +424,7 @@ func showSplash() {
 		scaled[y] = string(buf)
 	}
 
-	label := "Loading worktrees..."
+	label := "Loading worktrees"
 
 	// Center vertically (scaled art + 1 gap + label)
 	start_row := (h - out_h - 2) / 2
@@ -444,12 +446,33 @@ func showSplash() {
 		fmt.Printf("\033[%d;%dH\033[38;5;240m%s\033[0m", row, start_col, line)
 	}
 
+	// Render label with spinner placeholder
+	spinFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	display := fmt.Sprintf("%s %s", spinFrames[0], label)
 	label_row := start_row + out_h + 1
-	label_col := (w - len(label)) / 2
+	label_col := (w - len(display)) / 2
 	if label_col < 1 {
 		label_col = 1
 	}
-	fmt.Printf("\033[%d;%dH\033[38;5;245m%s\033[0m", label_row, label_col, label)
+	fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", label_row, label_col, display)
+
+	// Animate spinner in a background goroutine — caller stops it via the returned channel
+	stop := make(chan struct{})
+	go func() {
+		i := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				time.Sleep(80 * time.Millisecond)
+				i++
+				frame := spinFrames[i%len(spinFrames)]
+				fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", label_row, label_col, frame)
+			}
+		}
+	}()
+	return stop
 }
 
 // restoreTerm exits alt screen and restores the cursor.
