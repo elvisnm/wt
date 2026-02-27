@@ -1,0 +1,36 @@
+version: 2
+
+project_name: wt
+
+builds:
+  - id: wt
+    dir: worktree-dash
+    main: .
+    binary: wt
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: linux
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+# Raw binaries only — GH Actions bundles them with worktree-flow scripts
+archives:
+  - formats: ['binary']
+
+# GH Actions creates the release after bundling binaries + scripts
+release:
+  disable: true
+
+checksum:
+  disable: true
+
+changelog:
+  disable: true

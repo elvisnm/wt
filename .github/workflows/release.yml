@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: worktree-dash/go.mod
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install worktree-flow dependencies
+        run: npm ci --production
+        working-directory: worktree-flow
+
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: build --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Bundle tarballs
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+
+          for bin in dist/wt_*/wt; do
+            # Extract os/arch from goreleaser output path
+            dir_name=$(basename "$(dirname "$bin")")
+            # goreleaser names: wt_linux_amd64_v1, wt_darwin_arm64, wt_darwin_amd64_v1
+            os=$(echo "$dir_name" | cut -d'_' -f2)
+            arch=$(echo "$dir_name" | cut -d'_' -f3)
+
+            tarball="wt_${VERSION}_${os}_${arch}.tar.gz"
+            staging=$(mktemp -d)
+
+            mkdir -p "$staging/bin" "$staging/share/wt"
+            cp "$bin" "$staging/bin/wt"
+            cp -r worktree-flow "$staging/share/wt/worktree-flow"
+
+            tar -czf "dist/$tarball" -C "$staging" bin share
+            rm -rf "$staging"
+
+            echo "Created dist/$tarball"
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum wt_*.tar.gz > checksums.txt
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get commits since previous tag
+          prev_tag=$(git tag --sort=-version:refname | head -2 | tail -1)
+          if [ -z "$prev_tag" ] || [ "$prev_tag" = "$GITHUB_REF_NAME" ]; then
+            echo "body=Initial release" >> "$GITHUB_OUTPUT"
+          else
+            log=$(git log --oneline "$prev_tag".."$GITHUB_REF_NAME" --no-decorate)
+            EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+            echo "body<<$EOF" >> "$GITHUB_OUTPUT"
+            echo "$log" >> "$GITHUB_OUTPUT"
+            echo "$EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.changelog.outputs.body }}
+          files: |
+            dist/wt_*.tar.gz
+            dist/checksums.txt
+
+      - name: Notify homebrew-wt
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          repository: elvisnm/homebrew-wt
+          event-type: release
+          client-payload: '{"version": "${{ steps.version.outputs.version }}", "tag": "${{ github.ref_name }}"}'
