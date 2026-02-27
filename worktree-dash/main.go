@@ -23,6 +23,9 @@ import (
 //go:embed guide.md
 var guideContent string
 
+//go:embed heihei.mp3
+var heiHeiAudio []byte
+
 var version = "dev"
 
 var subcommands = map[string]string{
@@ -65,6 +68,11 @@ func main() {
 		runGuide()
 	case "_help":
 		runHelp()
+	case "_heihei":
+		if len(os.Args) < 3 {
+			os.Exit(1)
+		}
+		runHeiHei(os.Args[2])
 	default:
 		script, ok := subcommands[cmd]
 		if !ok {
@@ -167,8 +175,11 @@ func launchDashboardInner() {
 	ts := terminal.ConnectTmuxServer(socket)
 	pl := terminal.NewPaneLayout(ts)
 
+	m := app.NewModelWithLayout(ts, pl)
+	m.SetHeiHeiAudio(heiHeiAudio)
+
 	p := tea.NewProgram(
-		app.NewModelWithLayout(ts, pl),
+		m,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
@@ -348,6 +359,49 @@ func showSplash() chan struct{} {
 	// Switch to alt screen, hide cursor, clear
 	fmt.Print("\033[?1049h\033[?25l\033[2J")
 
+	// Render the art
+	art := renderHeiHeiArt(w, h)
+	fmt.Print(art.output)
+
+	// Render "Loading worktrees" spinner below the art
+	spinFrames := []string{"\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"}
+	label := "Loading worktrees"
+	display := fmt.Sprintf("%s %s", spinFrames[0], label)
+	label_row := art.startRow + art.height + 1
+	label_col := (w - len(display)) / 2
+	if label_col < 1 {
+		label_col = 1
+	}
+	fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", label_row, label_col, display)
+
+	// Animate spinner in a background goroutine — caller stops it via the returned channel
+	stop := make(chan struct{})
+	go func() {
+		i := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				time.Sleep(80 * time.Millisecond)
+				i++
+				frame := spinFrames[i%len(spinFrames)]
+				fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", label_row, label_col, frame)
+			}
+		}
+	}()
+	return stop
+}
+
+type heiHeiLayout struct {
+	output   string
+	startRow int
+	height   int
+}
+
+// renderHeiHeiArt returns the HeiHei ASCII art scaled to 77% of the given
+// terminal dimensions and centered, as a string ready to print plus layout metrics.
+func renderHeiHeiArt(w, h int) heiHeiLayout {
 	// Strip common leading whitespace to reduce effective width
 	min_indent := 9999
 	for _, line := range heiHeiArt {
@@ -383,14 +437,13 @@ func showSplash() chan struct{} {
 	target_w := int(float64(w) * 0.77)
 	target_h := int(float64(h) * 0.77)
 
-	// Scale to fit within 77% of terminal, preserving aspect ratio
+	// Scale to fit, preserving aspect ratio (no upscale)
 	scale_x := float64(target_w) / float64(art_w)
 	scale_y := float64(target_h) / float64(art_h)
 	scale := scale_x
 	if scale_y < scale {
 		scale = scale_y
 	}
-	// Don't upscale — only shrink if art is larger than target
 	if scale > 1.0 {
 		scale = 1.0
 	}
@@ -424,10 +477,8 @@ func showSplash() chan struct{} {
 		scaled[y] = string(buf)
 	}
 
-	label := "Loading worktrees"
-
-	// Center vertically (scaled art + 1 gap + label)
-	start_row := (h - out_h - 2) / 2
+	// Center vertically
+	start_row := (h - out_h) / 2
 	if start_row < 1 {
 		start_row = 1
 	}
@@ -438,41 +489,83 @@ func showSplash() chan struct{} {
 		start_col = 1
 	}
 
+	var sb strings.Builder
 	for i, line := range scaled {
 		row := start_row + i
 		if row > h {
 			break
 		}
-		fmt.Printf("\033[%d;%dH\033[38;5;240m%s\033[0m", row, start_col, line)
+		fmt.Fprintf(&sb, "\033[%d;%dH\033[38;5;240m%s\033[0m", row, start_col, line)
 	}
+	return heiHeiLayout{output: sb.String(), startRow: start_row, height: out_h}
+}
 
-	// Render label with spinner placeholder
-	spinFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-	display := fmt.Sprintf("%s %s", spinFrames[0], label)
-	label_row := start_row + out_h + 1
-	label_col := (w - len(display)) / 2
-	if label_col < 1 {
-		label_col = 1
+// runHeiHei displays the HeiHei art and plays the scream audio clip.
+// Exits when playback finishes. Re-renders on terminal resize.
+const heiHeiSentinel = "wt-heihei-done"
+
+type heiHeiScreenLayout struct {
+	msgRow int
+	msgCol int
+}
+
+func renderHeiHeiScreen(w, h int) heiHeiScreenLayout {
+	art := renderHeiHeiArt(w, h)
+	fmt.Print(art.output)
+
+	// Orange message with spinner placeholder below the art
+	msg := "  Now that you found the easter egg, you owe me a beer! - @elvisnm"
+	msg_row := art.startRow + art.height + 2
+	msg_col := (w - len(msg)) / 2
+	if msg_col < 1 {
+		msg_col = 1
 	}
-	fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", label_row, label_col, display)
+	fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", msg_row, msg_col, msg)
+	return heiHeiScreenLayout{msgRow: msg_row, msgCol: msg_col}
+}
 
-	// Animate spinner in a background goroutine — caller stops it via the returned channel
-	stop := make(chan struct{})
+func runHeiHei(audioPath string) {
+	w, h := termSize()
+	fmt.Print("\033[?25l\033[2J") // hide cursor, clear
+	sl := renderHeiHeiScreen(w, h)
+
+	// Play audio in background
+	player := exec.Command("afplay", audioPath)
+	player.Start()
+
+	// Re-render on resize
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGWINCH)
+
+	done := make(chan struct{})
 	go func() {
-		i := 0
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-				time.Sleep(80 * time.Millisecond)
-				i++
-				frame := spinFrames[i%len(spinFrames)]
-				fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", label_row, label_col, frame)
-			}
-		}
+		player.Wait()
+		close(done)
 	}()
-	return stop
+
+	// Animate spinner before the quote
+	spinFrames := []string{"\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"}
+	tick := time.NewTicker(80 * time.Millisecond)
+	defer tick.Stop()
+	i := 0
+
+	for {
+		select {
+		case <-done:
+			sentinel := filepath.Join(os.TempDir(), heiHeiSentinel)
+			os.WriteFile(sentinel, []byte("0"), 0644)
+			fmt.Print("\033[?25h")
+			return
+		case <-sig:
+			w, h = termSize()
+			fmt.Print("\033[2J")
+			sl = renderHeiHeiScreen(w, h)
+		case <-tick.C:
+			i++
+			frame := spinFrames[i%len(spinFrames)]
+			fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", sl.msgRow, sl.msgCol, frame)
+		}
+	}
 }
 
 // restoreTerm exits alt screen and restores the cursor.

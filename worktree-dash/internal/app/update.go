@@ -238,6 +238,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(cmds...)
 				}
 			}
+			// Check if HeiHei scream finished (via sentinel file)
+			if m.heihei_playing {
+				sentinel := filepath.Join(os.TempDir(), "wt-heihei-done")
+				if _, err := os.ReadFile(sentinel); err == nil {
+					os.Remove(sentinel)
+					m.heihei_playing = false
+					m.term_mgr.CloseByLabel("HeiHei")
+					if m.pane_layout != nil {
+						m.pane_layout.FocusLeft()
+					}
+					if m.term_mgr.Count() == 0 {
+						m.focus = PanelWorktrees
+					}
+				}
+			}
 			// Re-render tick for PTY output updates
 			if m.term_mgr.Count() > 0 || m.preview_session != nil {
 				return m, tick_after(100*time.Millisecond, "render")
@@ -480,6 +495,8 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "M":
 		return m.open_maintenance_picker()
+	case "H":
+		return m.play_heihei()
 	}
 
 	switch m.focus {
@@ -1629,6 +1646,52 @@ func (m Model) open_aws_keys() (tea.Model, tea.Cmd) {
 	}
 
 	m.aws_keys_running = true
+	m.terminal_output = ""
+	m.prev_focus = m.focus
+	m.focus = PanelTerminal
+	if m.pane_layout != nil {
+		m.pane_layout.FocusRight()
+	}
+
+	return m, tick_after(100*time.Millisecond, "render")
+}
+
+func (m Model) play_heihei() (tea.Model, tea.Cmd) {
+	if len(m.heihei_audio) == 0 || m.heihei_playing {
+		return m, nil
+	}
+
+	// Write embedded audio to a temp file (once, reuse on subsequent calls)
+	if m.heihei_tmpfile == "" {
+		tmp, err := os.CreateTemp("", "wt-heihei-*.mp3")
+		if err != nil {
+			return m, nil
+		}
+		if _, err := tmp.Write(m.heihei_audio); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return m, nil
+		}
+		tmp.Close()
+		m.heihei_tmpfile = tmp.Name()
+	}
+
+	// Remove stale sentinel before opening
+	os.Remove(filepath.Join(os.TempDir(), "wt-heihei-done"))
+
+	exe, err := os.Executable()
+	if err != nil {
+		return m, nil
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+
+	w, h := m.right_pane_dimensions()
+	_, err = m.term_mgr.Open("HeiHei", exe, []string{"_heihei", m.heihei_tmpfile}, w, h, "")
+	if err != nil {
+		return m, nil
+	}
+
+	m.heihei_playing = true
 	m.terminal_output = ""
 	m.prev_focus = m.focus
 	m.focus = PanelTerminal

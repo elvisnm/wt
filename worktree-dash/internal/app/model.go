@@ -75,6 +75,11 @@ type Model struct {
 	// AWS keys: tracks when the aws-keys script is running
 	aws_keys_running bool
 
+	// HeiHei easter egg
+	heihei_audio   []byte
+	heihei_tmpfile string
+	heihei_playing bool
+
 	repo_root     string
 	worktrees_dir string
 	cfg           *config.Config
@@ -138,6 +143,10 @@ func NewModelWithLayout(server *terminal.TmuxServer, pl *terminal.PaneLayout) Mo
 		term_mgr:      mgr,
 		pane_layout:   pl,
 	}
+}
+
+func (m *Model) SetHeiHeiAudio(data []byte) {
+	m.heihei_audio = data
 }
 
 func (m Model) Init() tea.Cmd {
