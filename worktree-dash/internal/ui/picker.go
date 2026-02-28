@@ -17,9 +17,9 @@ type PickerAction struct {
 }
 
 var WorktreeActions = []PickerAction{
-	{Key: "b", Label: "Shell", Desc: "Open shell in container"},
-	{Key: "z", Label: "Zsh", Desc: "Open host shell in worktree"},
-	{Key: "c", Label: "Claude", Desc: "Open Claude Code"},
+	{Key: "b", Label: "Shell", Desc: "Container shell"},
+	{Key: "z", Label: "Zsh", Desc: "Host shell"},
+	{Key: "c", Label: "Claude", Desc: "Claude Code"},
 	{Key: "r", Label: "Restart", Desc: "Restart container"},
 	{Key: "d", Label: "Stop", Desc: "Stop container"},
 	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
@@ -27,62 +27,62 @@ var WorktreeActions = []PickerAction{
 
 var StoppedActions = []PickerAction{
 	{Key: "u", Label: "Start", Desc: "Start container"},
-	{Key: "z", Label: "Zsh", Desc: "Open host shell in worktree"},
-	{Key: "c", Label: "Claude", Desc: "Open Claude Code"},
+	{Key: "z", Label: "Zsh", Desc: "Host shell"},
+	{Key: "c", Label: "Claude", Desc: "Claude Code"},
 	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
 }
 
 var DatabaseActions = []PickerAction{
-	{Key: "s", Label: "Seed", Desc: "Copy shared db into worktree db"},
-	{Key: "d", Label: "Drop", Desc: "Drop the worktree database"},
-	{Key: "r", Label: "Reset", Desc: "Drop + re-seed (fresh copy)"},
-	{Key: "f", Label: "Fix Images", Desc: "Fix fakes3 image URLs"},
+	{Key: "s", Label: "Seed", Desc: "Copy shared → worktree db"},
+	{Key: "d", Label: "Drop", Desc: "Drop worktree db"},
+	{Key: "r", Label: "Reset", Desc: "Drop + re-seed"},
+	{Key: "f", Label: "Fix Images", Desc: "Fix fakes3 URLs"},
 }
 
 var MaintenanceActions = []PickerAction{
-	{Key: "p", Label: "Prune", Desc: "Remove orphaned Docker volumes"},
+	{Key: "p", Label: "Prune", Desc: "Remove orphaned volumes"},
 	{Key: "s", Label: "Autostop", Desc: "Stop idle containers"},
-	{Key: "r", Label: "Rebuild", Desc: "Rebuild base Docker image"},
+	{Key: "r", Label: "Rebuild", Desc: "Rebuild base image"},
 }
 
 var LocalActions = []PickerAction{
-	{Key: "u", Label: "Start", Desc: "Start dev server (pnpm dev)"},
-	{Key: "b", Label: "Shell", Desc: "Open shell in worktree"},
-	{Key: "c", Label: "Claude", Desc: "Open Claude Code"},
-	{Key: "n", Label: "Create", Desc: "Create Docker container"},
-	{Key: "i", Label: "Info", Desc: "Show worktree info"},
+	{Key: "u", Label: "Start", Desc: "Start dev server"},
+	{Key: "b", Label: "Shell", Desc: "Worktree shell"},
+	{Key: "c", Label: "Claude", Desc: "Claude Code"},
+	{Key: "n", Label: "Create", Desc: "Create container"},
+	{Key: "i", Label: "Info", Desc: "Worktree info"},
 	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
 }
 
 var HostBuildRunningActions = []PickerAction{
-	{Key: "e", Label: "Build", Desc: "Start esbuild watch on host"},
-	{Key: "b", Label: "Shell", Desc: "Open shell in container"},
-	{Key: "z", Label: "Zsh", Desc: "Open host shell in worktree"},
-	{Key: "c", Label: "Claude", Desc: "Open Claude Code"},
+	{Key: "e", Label: "Build", Desc: "Esbuild watch"},
+	{Key: "b", Label: "Shell", Desc: "Container shell"},
+	{Key: "z", Label: "Zsh", Desc: "Host shell"},
+	{Key: "c", Label: "Claude", Desc: "Claude Code"},
 	{Key: "r", Label: "Restart", Desc: "Restart container"},
 	{Key: "d", Label: "Stop", Desc: "Stop container"},
 	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
 }
 
 var HostBuildStoppedActions = []PickerAction{
-	{Key: "u", Label: "Start + Build", Desc: "Start container + esbuild watch"},
-	{Key: "z", Label: "Zsh", Desc: "Open host shell in worktree"},
-	{Key: "c", Label: "Claude", Desc: "Open Claude Code"},
+	{Key: "u", Label: "Start + Build", Desc: "Container + esbuild"},
+	{Key: "z", Label: "Zsh", Desc: "Host shell"},
+	{Key: "c", Label: "Claude", Desc: "Claude Code"},
 	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
 }
 
 var RemoveActions = []PickerAction{
-	{Key: "n", Label: "Normal", Desc: "Remove worktree (fails if dirty)"},
-	{Key: "f", Label: "Force", Desc: "Force remove (even if dirty)"},
+	{Key: "n", Label: "Normal", Desc: "Fails if dirty"},
+	{Key: "f", Label: "Force", Desc: "Even if dirty"},
 }
 
 var LocalRunningActions = []PickerAction{
-	{Key: "b", Label: "Shell", Desc: "Open shell in worktree"},
-	{Key: "c", Label: "Claude", Desc: "Open Claude Code"},
-	{Key: "l", Label: "Logs", Desc: "View PM2 logs"},
-	{Key: "r", Label: "Restart", Desc: "Restart all services"},
-	{Key: "s", Label: "Services", Desc: "Manage PM2 services"},
-	{Key: "i", Label: "Info", Desc: "Show worktree info"},
+	{Key: "b", Label: "Shell", Desc: "Worktree shell"},
+	{Key: "c", Label: "Claude", Desc: "Claude Code"},
+	{Key: "l", Label: "Logs", Desc: "PM2 logs"},
+	{Key: "r", Label: "Restart", Desc: "Restart services"},
+	{Key: "s", Label: "Services", Desc: "Manage services"},
+	{Key: "i", Label: "Info", Desc: "Worktree info"},
 	{Key: "d", Label: "Stop", Desc: "Stop dev server"},
 	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
 }
