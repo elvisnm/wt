@@ -169,6 +169,7 @@ type MsgResultClear struct{}
 type MsgOpenBuildAfterStart struct{ WtName string }
 
 // Commands
+
 func (m Model) cmd_discover() tea.Cmd {
 	return func() tea.Msg {
 		wts := worktree.Discover(m.worktrees_dir, m.worktrees, m.cfg)

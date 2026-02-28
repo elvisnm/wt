@@ -42,13 +42,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.update_worktrees(msg.Worktrees)
 
 		// Signal the outer process that we're ready (unblocks tmux attach).
-		// Small delay lets any pending resize events settle before the
-		// user sees the dashboard, avoiding a visible re-layout.
 		if first_load && m.pane_layout != nil {
-			go func() {
-				time.Sleep(1 * time.Second)
-				m.pane_layout.Server().Run("wait-for", "-S", "wt-ready")
-			}()
+			m.pane_layout.Server().Run("wait-for", "-S", "wt-ready")
 		}
 		cmds := []tea.Cmd{
 			tick_after(5*time.Second, "status"),

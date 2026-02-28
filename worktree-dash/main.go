@@ -160,11 +160,16 @@ func launchDashboardOuter() {
 	// ANSI cursor-position writes to stdout that could leak into tmux.
 	stopSplash()
 
-	// Exit alt screen from splash, then clear. tmux attach will enter
-	// its own alt screen cleanly from a known terminal state.
-	fmt.Print("\033[?1049l\033[2J\033[H")
+	// Kill the control-mode client before attaching the real terminal.
+	// With 0 clients tmux may resize the window, so we force it back to
+	// the exact terminal dimensions right before attaching. This ensures
+	// the attach introduces zero resize delta — the splash on alt screen
+	// is atomically replaced by tmux's alt screen with content already
+	// at the correct size.
+	ts.KillControlClient()
+	tw, th = termSize()
+	ts.Run("resize-window", "-t", "wt:0", "-x", fmt.Sprintf("%d", tw), "-y", fmt.Sprintf("%d", th))
 
-	// Attach — tmux takes over the terminal
 	cmd := exec.Command("tmux", "-L", ts.Socket(), "attach-session", "-t", "wt")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

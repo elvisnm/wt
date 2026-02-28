@@ -167,6 +167,20 @@ func (ts *TmuxServer) run_locked(args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// KillControlClient terminates the control-mode client without killing the server.
+// Called before tmux attach so the real client is the only one — prevents a resize
+// when the real terminal's dimensions differ from the control client's.
+func (ts *TmuxServer) KillControlClient() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.ctrl_cmd != nil && ts.ctrl_cmd.Process != nil {
+		ts.ctrl_cmd.Process.Kill()
+		ts.ctrl_cmd.Wait()
+		ts.ctrl_cmd = nil
+	}
+}
+
 // Kill terminates the tmux server and cleans up the control client.
 func (ts *TmuxServer) Kill() {
 	ts.mu.Lock()
