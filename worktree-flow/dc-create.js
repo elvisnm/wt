@@ -3,7 +3,10 @@ const fs = require('fs');
 const path = require('path');
 const config_mod = require('./config');
 
+const os = require('os');
 const config = config_mod.load_config({ required: false }) || null;
+
+const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-create-done');
 
 process.on('SIGINT', () => process.exit(0));
 
@@ -174,6 +177,9 @@ function get_extra_options() {
 async function main() {
   const p = await import('@clack/prompts');
 
+  // Remove stale sentinel
+  try { fs.unlinkSync(SENTINEL_PATH); } catch {}
+
   const repo_root = check_repo();
   const worktrees_dir = config && config.repo._worktreesDirResolved
     ? config.repo._worktreesDirResolved
@@ -329,10 +335,11 @@ async function main() {
   const is_host_build = env_choice === 'host_build';
   const use_docker = env_choice !== 'local';
 
-  let actual_mode = 'full';
+  const default_mode = config && config.services.defaultMode ? config.services.defaultMode : Object.keys(config.services.modes)[0];
+  let actual_mode = default_mode;
   if (use_docker && config && Object.keys(config.services.modes).length > 1) {
     const mode_keys = Object.keys(config.services.modes);
-    mode_keys.sort((a, b) => (a === 'full' ? -1 : b === 'full' ? 1 : 0));
+    mode_keys.sort((a, b) => (a === default_mode ? -1 : b === default_mode ? 1 : 0));
     const mode_choice = await p.select({
       message: 'Services?',
       options: mode_keys.map((m) => {
@@ -463,16 +470,27 @@ async function main() {
     if (p.isCancel(confirmed) || !confirmed) { p.cancel('Cancelled.'); process.exit(0); }
 
     const up_script = path.join(scripts_dir, 'dc-worktree-up.js');
-    execSync(`node "${up_script}" "${branch_name}" "--from=${from_ref}" --no-docker`, {
-      stdio: 'inherit',
-      cwd: repo_root,
-    });
+    try {
+      execSync(`node "${up_script}" "${branch_name}" "--from=${from_ref}" --no-docker`, {
+        stdio: 'inherit',
+        cwd: repo_root,
+      });
+    } catch (e) {
+      if (e.signal === 'SIGINT') {
+        // Dev server stopped by user — normal exit
+        process.exit(0);
+      }
+      throw e;
+    }
   }
 
+  // Signal dashboard that creation finished (alias on second line)
+  fs.writeFileSync(SENTINEL_PATH, `0\n${final_alias || ''}`);
   p.outro('Worktree created!');
 }
 
 main().catch((err) => {
   console.error(err);
+  fs.writeFileSync(SENTINEL_PATH, '1');
   process.exit(1);
 });

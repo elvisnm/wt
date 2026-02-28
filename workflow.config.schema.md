@@ -294,6 +294,34 @@ module.exports = {
 
     // Dev start command for local (non-Docker) worktrees
     localDevCommand: "pnpm dev",
+
+    // Service management configuration (how the dashboard discovers and
+    // controls services). Default: pm2 for everything (backward compatible).
+    services: {
+      // How to discover and manage services:
+      // "pm2"    — discover via `pm2 jlist`, restart/logs via pm2 commands (default)
+      // "static" — define services explicitly in `list[]`, no per-service lifecycle
+      manager: "pm2",
+
+      // For "static" manager: explicit service definitions.
+      // Each entry has a name and a base port (offset is added automatically).
+      list: [
+        // { name: "web", port: 3000 },
+        // { name: "api", port: 4000 },
+      ],
+
+      // How to detect if a local worktree is running:
+      // "pm2"    — pm2 jlist has online processes for this worktree path (default)
+      // "devTab" — the "Dev — {alias}" terminal tab is alive
+      runningCheck: "pm2",
+
+      // Override service manager for Docker containers only.
+      // null = use the top-level `manager` setting.
+      // Useful when Docker containers use pm2 but local worktrees don't.
+      docker: {
+        manager: "pm2",
+      },
+    },
   },
 
   // ─── Paths (resolved relative to repo root) ───────────────────────
@@ -412,6 +440,14 @@ module.exports = {
       dev:    { label: "Dev", cmd: "pnpm dev" },
     },
     localDevCommand: "turbo dev",
+    services: {
+      manager: "static",
+      list: [
+        { name: "web", port: 3000 },
+        { name: "api", port: 4000 },
+      ],
+      runningCheck: "devTab",
+    },
   },
 
   paths: {

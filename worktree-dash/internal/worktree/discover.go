@@ -275,7 +275,7 @@ func read_container_name(worktree_path string) string {
 }
 
 func read_service_mode(worktree_path string, cfg *config.Config) string {
-	default_mode := "full"
+	default_mode := "default"
 	services_var := "WORKTREE_SERVICES"
 	if cfg != nil {
 		if cfg.Services.DefaultMode != "" {

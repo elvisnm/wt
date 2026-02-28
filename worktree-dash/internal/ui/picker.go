@@ -21,15 +21,15 @@ var WorktreeActions = []PickerAction{
 	{Key: "z", Label: "Zsh", Desc: "Host shell"},
 	{Key: "c", Label: "Claude", Desc: "Claude Code"},
 	{Key: "r", Label: "Restart", Desc: "Restart container"},
-	{Key: "d", Label: "Stop", Desc: "Stop container"},
-	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "t", Label: "Stop", Desc: "Stop container"},
+	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
 }
 
 var StoppedActions = []PickerAction{
 	{Key: "u", Label: "Start", Desc: "Start container"},
 	{Key: "z", Label: "Zsh", Desc: "Host shell"},
 	{Key: "c", Label: "Claude", Desc: "Claude Code"},
-	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
 }
 
 var DatabaseActions = []PickerAction{
@@ -51,7 +51,7 @@ var LocalActions = []PickerAction{
 	{Key: "c", Label: "Claude", Desc: "Claude Code"},
 	{Key: "n", Label: "Create", Desc: "Create container"},
 	{Key: "i", Label: "Info", Desc: "Worktree info"},
-	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
 }
 
 var HostBuildRunningActions = []PickerAction{
@@ -60,15 +60,15 @@ var HostBuildRunningActions = []PickerAction{
 	{Key: "z", Label: "Zsh", Desc: "Host shell"},
 	{Key: "c", Label: "Claude", Desc: "Claude Code"},
 	{Key: "r", Label: "Restart", Desc: "Restart container"},
-	{Key: "d", Label: "Stop", Desc: "Stop container"},
-	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "t", Label: "Stop", Desc: "Stop container"},
+	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
 }
 
 var HostBuildStoppedActions = []PickerAction{
 	{Key: "u", Label: "Start + Build", Desc: "Container + esbuild"},
 	{Key: "z", Label: "Zsh", Desc: "Host shell"},
 	{Key: "c", Label: "Claude", Desc: "Claude Code"},
-	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
 }
 
 var RemoveActions = []PickerAction{
@@ -79,12 +79,12 @@ var RemoveActions = []PickerAction{
 var LocalRunningActions = []PickerAction{
 	{Key: "b", Label: "Shell", Desc: "Worktree shell"},
 	{Key: "c", Label: "Claude", Desc: "Claude Code"},
-	{Key: "l", Label: "Logs", Desc: "PM2 logs"},
+	{Key: "l", Label: "Logs", Desc: "Dev logs"},
 	{Key: "r", Label: "Restart", Desc: "Restart services"},
 	{Key: "s", Label: "Services", Desc: "Manage services"},
 	{Key: "i", Label: "Info", Desc: "Worktree info"},
-	{Key: "d", Label: "Stop", Desc: "Stop dev server"},
-	{Key: "D", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "t", Label: "Stop", Desc: "Stop dev server"},
+	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
 }
 
 // FilterDatabaseActions returns DatabaseActions filtered by config feature flags.

@@ -51,7 +51,11 @@ const VALID_SERVICE_MODES = config && config.services.modes
   ? Object.keys(config.services.modes)
   : ['minimal', 'full'];
 
-function format_port_table(offset, { mode = 'full' } = {}) {
+const DEFAULT_SERVICE_MODE = config && config.services.defaultMode
+  ? config.services.defaultMode
+  : VALID_SERVICE_MODES[0];
+
+function format_port_table(offset, { mode = DEFAULT_SERVICE_MODE } = {}) {
   const ports = compute_ports(offset);
   const filter_list = SERVICE_MODE_FILTERS[mode];
   const services = filter_list
@@ -151,6 +155,7 @@ module.exports = {
   SERVICE_MODE_FILTERS,
   MINIMAL_SERVICES,
   VALID_SERVICE_MODES,
+  DEFAULT_SERVICE_MODE,
   compute_ports,
   format_port_table,
   find_free_offset,

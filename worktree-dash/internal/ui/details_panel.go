@@ -44,7 +44,7 @@ var minimal_services = map[string]bool{
 	"order_table_server": true, "inventory_table_server": true,
 }
 
-func RenderDetailsPanel(wt *worktree.Worktree, width, height, scroll int, focused bool, cfg *config.Config) string {
+func RenderDetailsPanel(wt *worktree.Worktree, width, height, scroll, spin_frame int, focused bool, cfg *config.Config) string {
 	title := TitleStyle(focused).Render(" d - Details ")
 	style := PanelStyle(width, height, focused)
 	inner_w := width - 4
@@ -54,7 +54,7 @@ func RenderDetailsPanel(wt *worktree.Worktree, width, height, scroll int, focuse
 		return inject_title(styled, title)
 	}
 
-	lines := build_detail_lines(wt, inner_w, cfg)
+	lines := build_detail_lines(wt, inner_w, spin_frame, cfg)
 
 	inner_h := height - 2
 	total := len(lines)
@@ -83,15 +83,27 @@ func DetailLineCount(wt *worktree.Worktree, cfg *config.Config) int {
 	if wt == nil {
 		return 0
 	}
-	return len(build_detail_lines(wt, 100, cfg))
+	return len(build_detail_lines(wt, 100, 0, cfg))
 }
 
-func build_detail_lines(wt *worktree.Worktree, inner_w int, cfg *config.Config) []string {
+func build_detail_lines(wt *worktree.Worktree, inner_w, spin_frame int, cfg *config.Config) []string {
 	var lines []string
 
 	lines = append(lines, detail_line("Branch", wt.Branch, inner_w))
 	lines = append(lines, detail_line("Alias", wt.Alias, inner_w))
 	lines = append(lines, detail_line("Type", string(wt.Type), inner_w))
+
+	// Action in progress (e.g. "removing...", "starting...")
+	if strings.HasSuffix(wt.Health, "...") {
+		action := strings.TrimSuffix(wt.Health, "...")
+		frame := spinFrames[spin_frame%len(spinFrames)]
+		status_text := fmt.Sprintf("%s %s", frame, action)
+		lines = append(lines, detail_line("Status",
+			lipgloss.NewStyle().Foreground(StartingColor).Render(status_text), inner_w))
+		lines = append(lines, "")
+		lines = append(lines, detail_line("Path", wt.Path, inner_w))
+		return lines
+	}
 
 	if wt.Type == worktree.TypeDocker {
 		status_text := "stopped"
@@ -148,8 +160,12 @@ func build_detail_lines(wt *worktree.Worktree, inner_w int, cfg *config.Config) 
 		lines = append(lines, build_port_lines(wt, cfg)...)
 	} else if wt.Type == worktree.TypeLocal {
 		if wt.Running {
+			status_label := "running (pm2)"
+			if cfg != nil && cfg.ServiceManager() != "pm2" {
+				status_label = "running (dev)"
+			}
 			lines = append(lines, detail_line("Status",
-				lipgloss.NewStyle().Foreground(RunningColor).Render("running (pm2)"), inner_w))
+				lipgloss.NewStyle().Foreground(RunningColor).Render(status_label), inner_w))
 		} else {
 			lines = append(lines, detail_line("Status",
 				lipgloss.NewStyle().Foreground(StoppedColor).Render("stopped"), inner_w))

@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -359,6 +360,25 @@ func (mgr *Manager) CloseByLabel(label string) {
 			return
 		}
 	}
+}
+
+// CloseDeadLogs closes any dead sessions whose labels start with "Logs".
+// Returns true if any sessions were closed.
+func (mgr *Manager) CloseDeadLogs() bool {
+	// Collect dead log labels outside the lock, then use CloseByLabel.
+	mgr.mu.Lock()
+	var dead_labels []string
+	for _, s := range mgr.sessions {
+		if !s.IsAlive() && strings.HasPrefix(s.Label, "Logs") {
+			dead_labels = append(dead_labels, s.Label)
+		}
+	}
+	mgr.mu.Unlock()
+
+	for _, label := range dead_labels {
+		mgr.CloseByLabel(label)
+	}
+	return len(dead_labels) > 0
 }
 
 // CloseAll closes all sessions and kills the tmux server.

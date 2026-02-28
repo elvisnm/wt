@@ -46,6 +46,7 @@ func HelpSections() []HelpSection {
 				{Key: "t", Desc: "Stop container"},
 				{Key: "u", Desc: "Start container"},
 				{Key: "i", Desc: "Info"},
+			{Key: "x", Desc: "Remove worktree"},
 			},
 		},
 		{

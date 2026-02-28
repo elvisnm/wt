@@ -7,7 +7,7 @@ import (
 func setupPaneLayout(t *testing.T) (*TmuxServer, *PaneLayout) {
 	t.Helper()
 	ts := newTestServer(t)
-	if err := ts.EnsureStarted(); err != nil {
+	if err := ts.EnsureStarted(0, 0); err != nil {
 		t.Fatalf("EnsureStarted failed: %v", err)
 	}
 
@@ -158,7 +158,7 @@ func TestNewPaneLayout(t *testing.T) {
 	ts := NewTmuxServer()
 	defer ts.Kill()
 
-	if err := ts.EnsureStarted(); err != nil {
+	if err := ts.EnsureStarted(0, 0); err != nil {
 		t.Fatalf("EnsureStarted failed: %v", err)
 	}
 

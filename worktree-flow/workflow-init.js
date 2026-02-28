@@ -808,6 +808,17 @@ function assemble_config(detections) {
     localDevCommand: devCommand,
   };
 
+  // dash.services: for shared compose strategy, services are separate containers
+  // (no pm2 inside), so use static discovery with devTab running check.
+  // For generate strategy, pm2 is the default — omit to keep config minimal.
+  if (strategy.strategy !== 'generate' && Object.keys(services.ports).length > 0) {
+    config.dash.services = {
+      manager: 'static',
+      list: Object.entries(services.ports).map(([name, port]) => ({ name, port })),
+      runningCheck: 'devTab',
+    };
+  }
+
   return config;
 }
 
@@ -934,6 +945,20 @@ function generate_config_file(config, detections) {
     }
     lines.push('    },');
     lines.push(`    localDevCommand: '${config.dash.localDevCommand}',`);
+    if (config.dash.services) {
+      const svc = config.dash.services;
+      lines.push('    services: {');
+      lines.push(`      manager: '${svc.manager}',`);
+      if (svc.list && svc.list.length > 0) {
+        lines.push('      list: [');
+        for (const entry of svc.list) {
+          lines.push(`        { name: '${entry.name}', port: ${entry.port} },`);
+        }
+        lines.push('      ],');
+      }
+      lines.push(`      runningCheck: '${svc.runningCheck}',`);
+      lines.push('    },');
+    }
     lines.push('  },');
   }
 

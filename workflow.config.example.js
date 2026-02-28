@@ -130,6 +130,19 @@ module.exports = {
       build:  { label: 'Build',  cmd: null },
     },
     localDevCommand: 'pnpm dev',
+
+    // Service management: how the dashboard discovers and controls services.
+    // Default: pm2 for everything. Set manager to 'static' for projects
+    // that don't use pm2 (e.g. turbo, vite, etc.)
+    // services: {
+    //   manager: 'static',
+    //   list: [
+    //     { name: 'web', port: 3000 },
+    //     { name: 'api', port: 4000 },
+    //   ],
+    //   runningCheck: 'devTab',
+    //   docker: { manager: 'pm2' },  // override for Docker containers
+    // },
   },
 
   paths: {

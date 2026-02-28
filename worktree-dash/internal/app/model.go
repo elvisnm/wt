@@ -1,6 +1,13 @@
 package app
 
 import (
+	"fmt"
+	"net"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/docker"
 	"github.com/elvisnm/wt/internal/pm2"
@@ -71,6 +78,10 @@ type Model struct {
 	// Activity status shown below terminal
 	activity    string
 	spin_frame  int
+
+	// Worktrees with in-progress actions (e.g. removing, starting)
+	// Prevents periodic discovery from overwriting their state.
+	actions_pending map[string]bool
 
 	// AWS keys: tracks when the aws-keys script is running
 	aws_keys_running bool
@@ -171,22 +182,24 @@ type MsgOpenBuildAfterStart struct{ WtName string }
 // Commands
 
 func (m Model) cmd_discover() tea.Cmd {
+	cfg := m.cfg
+	term_mgr := m.term_mgr
 	return func() tea.Msg {
-		wts := worktree.Discover(m.worktrees_dir, m.worktrees, m.cfg)
+		wts := worktree.Discover(m.worktrees_dir, m.worktrees, cfg)
 		wts = worktree.SortWorktrees(wts)
-		wts = docker.FetchContainerStatus(wts, m.cfg)
-		wts = docker.FetchContainerStats(wts, m.cfg)
-		wts = mark_local_running(wts)
+		wts = docker.FetchContainerStatus(wts, cfg)
+		wts = docker.FetchContainerStats(wts, cfg)
+		wts = mark_local_running(wts, cfg, term_mgr)
 		wts = worktree.SortWorktrees(wts)
 		return MsgDiscovered{Worktrees: wts}
 	}
 }
 
-func cmd_fetch_status(wt_dir string, wts []worktree.Worktree, cfg *config.Config) tea.Cmd {
+func cmd_fetch_status(wt_dir string, wts []worktree.Worktree, cfg *config.Config, term_mgr *terminal.Manager) tea.Cmd {
 	return func() tea.Msg {
 		fresh := worktree.Discover(wt_dir, wts, cfg)
 		fresh = docker.FetchContainerStatus(fresh, cfg)
-		fresh = mark_local_running(fresh)
+		fresh = mark_local_running(fresh, cfg, term_mgr)
 		fresh = worktree.SortWorktrees(fresh)
 		return MsgStatusUpdated{Worktrees: fresh}
 	}
@@ -199,45 +212,159 @@ func cmd_fetch_stats(wts []worktree.Worktree, cfg *config.Config) tea.Cmd {
 	}
 }
 
-func cmd_fetch_services(container string, wt_name string) tea.Cmd {
-	return func() tea.Msg {
-		svcs := docker.FetchServices(container, wt_name)
-		return MsgServicesUpdated{Services: svcs}
+func cmd_fetch_services(wt worktree.Worktree, cfg *config.Config) tea.Cmd {
+	manager := "pm2"
+	if cfg != nil {
+		manager = cfg.DockerServiceManager()
 	}
-}
-
-func cmd_fetch_local_services(wt_path string) tea.Cmd {
 	return func() tea.Msg {
-		svcs := pm2.FetchServices(wt_path)
-		return MsgServicesUpdated{Services: svcs}
-	}
-}
-
-// mark_local_running checks PM2 for running local worktrees and sets Running=true
-func mark_local_running(wts []worktree.Worktree) []worktree.Worktree {
-	// Build map of path -> name for local worktrees
-	local_paths := make(map[string]string)
-	for _, wt := range wts {
-		if wt.Type == worktree.TypeLocal {
-			local_paths[wt.Path] = wt.Name
+		var svcs []worktree.Service
+		switch manager {
+		case "static":
+			svcs = build_static_services(cfg, &wt)
+		default:
+			svcs = docker.FetchServices(wt.Container, wt.Name)
 		}
+		return MsgServicesUpdated{Services: svcs}
 	}
-	if len(local_paths) == 0 {
-		return wts
+}
+
+func cmd_fetch_local_services(wt worktree.Worktree, cfg *config.Config) tea.Cmd {
+	manager := "pm2"
+	if cfg != nil {
+		manager = cfg.ServiceManager()
+	}
+	return func() tea.Msg {
+		var svcs []worktree.Service
+		switch manager {
+		case "static":
+			svcs = build_static_services(cfg, &wt)
+		default:
+			svcs = pm2.FetchServices(wt.Path)
+		}
+		return MsgServicesUpdated{Services: svcs}
+	}
+}
+
+// build_static_services returns services from the config's static list.
+// For local worktrees, checks port liveness on the base port.
+// For Docker worktrees, queries the actual host port mapping from Docker.
+func build_static_services(cfg *config.Config, wt *worktree.Worktree) []worktree.Service {
+	if cfg == nil || len(cfg.Dash.Services.List) == 0 {
+		return nil
 	}
 
-	running := pm2.FetchRunningWorktrees(local_paths)
-	if len(running) == 0 {
-		for i := range wts {
-			if wts[i].Type == worktree.TypeLocal {
-				wts[i].Running = false
+	services := []worktree.Service{
+		{Name: "__all", DisplayName: "All services", Status: "online"},
+	}
+
+	all_online := true
+	for _, entry := range cfg.Dash.Services.List {
+		svc := worktree.Service{
+			Name:        entry.Name,
+			DisplayName: entry.Name,
+			Status:      "unknown",
+		}
+
+		if wt != nil && entry.Port > 0 {
+			port := 0
+			if wt.Type == worktree.TypeDocker {
+				// Query actual host port from Docker
+				port = docker_host_port(container_for_service(*wt, entry.Name, cfg), entry.Port)
+			} else {
+				port = entry.Port
+			}
+			if port > 0 {
+				addr := fmt.Sprintf("localhost:%d", port)
+				conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+				if err == nil {
+					conn.Close()
+					svc.Status = "online"
+				} else {
+					svc.Status = "stopped"
+					all_online = false
+				}
+			} else {
+				svc.Status = "stopped"
+				all_online = false
 			}
 		}
-		return wts
+
+		services = append(services, svc)
 	}
-	for i := range wts {
-		if wts[i].Type == worktree.TypeLocal {
-			wts[i].Running = running[wts[i].Name]
+
+	if !all_online {
+		services[0].Status = "degraded"
+	}
+
+	if len(services) == 1 {
+		return nil
+	}
+
+	return services
+}
+
+// docker_host_port returns the host port mapped to a container's internal port.
+// Uses `docker port <container> <port>` to get the actual mapping.
+func docker_host_port(container string, internal_port int) int {
+	out, err := exec.Command("docker", "port", container, fmt.Sprintf("%d", internal_port)).Output()
+	if err != nil {
+		return 0
+	}
+	// Output format: "0.0.0.0:3048\n[::]:3048\n"
+	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	parts := strings.SplitN(line, ":", 2)
+	if len(parts) == 2 {
+		if p, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
+			return p
+		}
+	}
+	return 0
+}
+
+// mark_local_running checks whether local worktrees are running.
+// Uses the configured runningCheck method: "pm2" (default) or "devTab".
+func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *terminal.Manager) []worktree.Worktree {
+	check := "pm2"
+	if cfg != nil {
+		check = cfg.Dash.Services.RunningCheck
+	}
+
+	switch check {
+	case "devTab":
+		for i := range wts {
+			if wts[i].Type == worktree.TypeLocal && term_mgr != nil {
+				dev_label := fmt.Sprintf("Dev — %s", wts[i].Alias)
+				create_label := fmt.Sprintf("Create — %s", wts[i].Alias)
+				wts[i].Running = term_mgr.IsLabelAlive(dev_label) ||
+					term_mgr.IsLabelAlive(create_label) ||
+					term_mgr.IsLabelAlive("Create")
+			}
+		}
+	default: // "pm2"
+		local_paths := make(map[string]string)
+		for _, wt := range wts {
+			if wt.Type == worktree.TypeLocal {
+				local_paths[wt.Path] = wt.Name
+			}
+		}
+		if len(local_paths) == 0 {
+			return wts
+		}
+
+		running := pm2.FetchRunningWorktrees(local_paths)
+		if len(running) == 0 {
+			for i := range wts {
+				if wts[i].Type == worktree.TypeLocal {
+					wts[i].Running = false
+				}
+			}
+			return wts
+		}
+		for i := range wts {
+			if wts[i].Type == worktree.TypeLocal {
+				wts[i].Running = running[wts[i].Name]
+			}
 		}
 	}
 	return wts

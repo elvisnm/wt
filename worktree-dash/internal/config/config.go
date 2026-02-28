@@ -145,11 +145,28 @@ type AdminConfig struct {
 type DashConfig struct {
 	Commands        map[string]DashCommand `json:"commands"`
 	LocalDevCommand string                 `json:"localDevCommand"`
+	Services        DashServicesConfig     `json:"services"`
 }
 
 type DashCommand struct {
 	Label string `json:"label"`
 	Cmd   string `json:"cmd"`
+}
+
+type DashServicesConfig struct {
+	Manager      string             `json:"manager"`      // "pm2" | "static"
+	List         []DashServiceEntry `json:"list"`
+	RunningCheck string             `json:"runningCheck"` // "pm2" | "devTab"
+	Docker       *DashDockerSvc     `json:"docker"`
+}
+
+type DashServiceEntry struct {
+	Name string `json:"name"`
+	Port int    `json:"port"`
+}
+
+type DashDockerSvc struct {
+	Manager string `json:"manager"`
 }
 
 type PathsConfig struct {
@@ -277,6 +294,14 @@ func (c *Config) applyDefaults() {
 	// database prefix
 	if c.Database != nil && c.Database.DbNamePrefix == "" {
 		c.Database.DbNamePrefix = "db_"
+	}
+
+	// dash.services defaults
+	if c.Dash.Services.Manager == "" {
+		c.Dash.Services.Manager = "pm2"
+	}
+	if c.Dash.Services.RunningCheck == "" {
+		c.Dash.Services.RunningCheck = "pm2"
 	}
 
 	// proxy defaults
@@ -438,6 +463,20 @@ func (c *Config) WorktreeVar(key string) string {
 		return v
 	}
 	return ""
+}
+
+// ServiceManager returns the effective service manager for local worktrees.
+func (c *Config) ServiceManager() string {
+	return c.Dash.Services.Manager
+}
+
+// DockerServiceManager returns the effective service manager for Docker containers.
+// Falls back to the top-level manager if docker-specific override is not set.
+func (c *Config) DockerServiceManager() string {
+	if c.Dash.Services.Docker != nil && c.Dash.Services.Docker.Manager != "" {
+		return c.Dash.Services.Docker.Manager
+	}
+	return c.Dash.Services.Manager
 }
 
 // ── Utilities ───────────────────────────────────────────────────────────

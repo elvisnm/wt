@@ -5,12 +5,13 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/worktree"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-func RenderWorktreePanel(worktrees []worktree.Worktree, cursor int, width, height int, focused bool) string {
+func RenderWorktreePanel(worktrees []worktree.Worktree, cursor int, width, height int, focused bool, cfg *config.Config) string {
 	title := TitleStyle(focused).Render(" w - Worktrees ")
 	style := PanelStyle(width, height, focused)
 
@@ -19,7 +20,7 @@ func RenderWorktreePanel(worktrees []worktree.Worktree, cursor int, width, heigh
 
 	var lines []string
 	for i, wt := range worktrees {
-		line := format_worktree_line(wt, inner_w, i == cursor, focused)
+		line := format_worktree_line(wt, inner_w, i == cursor, focused, cfg)
 		lines = append(lines, line)
 	}
 
@@ -36,17 +37,20 @@ func RenderWorktreePanel(worktrees []worktree.Worktree, cursor int, width, heigh
 	return styled
 }
 
-func format_worktree_line(wt worktree.Worktree, width int, selected bool, panel_focused bool) string {
+func format_worktree_line(wt worktree.Worktree, width int, selected bool, panel_focused bool, cfg *config.Config) string {
 	name := wt.Alias
 	if name == "" {
 		name = wt.Name
 	}
 
 	var right string
-	if strings.HasSuffix(wt.Health, "...") {
-		right = wt.Health
+	if strings.HasSuffix(wt.Health, "...") && !wt.Running {
+		right = strings.TrimSuffix(wt.Health, "...")
 	} else if wt.Running && wt.Type == worktree.TypeLocal {
-		right = "pm2"
+		right = "dev"
+		if cfg != nil && cfg.ServiceManager() == "pm2" {
+			right = "pm2"
+		}
 	} else if wt.Running && wt.HostBuild {
 		right = fmt.Sprintf("hb %s %s", wt.CPU, wt.Mem)
 	} else if wt.Running {

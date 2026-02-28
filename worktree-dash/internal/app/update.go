@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
@@ -110,6 +111,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MsgActionStarted:
+		if m.actions_pending == nil {
+			m.actions_pending = make(map[string]bool)
+		}
+		m.actions_pending[msg.WtName] = true
 		for i := range m.worktrees {
 			if m.worktrees[i].Name == msg.WtName {
 				m.worktrees[i].Health = msg.Status
@@ -121,6 +126,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick_after(80*time.Millisecond, "spin")
 
 	case MsgActionOutput:
+		m.actions_pending = nil
 		m.activity = ""
 		if msg.Err != nil {
 			if msg.Output != "" {
@@ -147,7 +153,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "status":
 			wts := make([]worktree.Worktree, len(m.worktrees))
 			copy(wts, m.worktrees)
-			return m, cmd_fetch_status(m.worktrees_dir, wts, m.cfg)
+			return m, cmd_fetch_status(m.worktrees_dir, wts, m.cfg, m.term_mgr)
 		case "stats":
 			wts := make([]worktree.Worktree, len(m.worktrees))
 			copy(wts, m.worktrees)
@@ -164,17 +170,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "render":
-			// Check if a "Create —" tab finished for a host-build worktree
-			for _, wt := range m.worktrees {
-				create_label := fmt.Sprintf("Create — %s", wt.Alias)
-				if m.term_mgr.HasLabel(create_label) && !m.term_mgr.IsLabelAlive(create_label) {
-					exit_code := m.term_mgr.ExitCodeForLabel(create_label)
-					m.term_mgr.CloseByLabel(create_label)
-					if exit_code == 0 && wt.HostBuild && wt.Running {
-						m, _ = m.open_esbuild_watch(wt)
+			// Check if dc-create finished (via sentinel file)
+			if m.term_mgr.HasLabel("Create") || m.has_create_alias_tab() {
+				sentinel := filepath.Join(os.TempDir(), "wt-create-done")
+				if data, err := os.ReadFile(sentinel); err == nil {
+					os.Remove(sentinel)
+					lines := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)
+					exit_code := -1
+					fmt.Sscanf(lines[0], "%d", &exit_code)
+					created_alias := ""
+					if len(lines) > 1 {
+						created_alias = strings.TrimSpace(lines[1])
 					}
+
+					// Close all Create tabs
+					m.term_mgr.CloseByLabel("Create")
+					for _, wt := range m.worktrees {
+						m.term_mgr.CloseByLabel(fmt.Sprintf("Create — %s", wt.Alias))
+					}
+
+					// For host-build worktrees, open esbuild watch after creation
+					if exit_code == 0 && created_alias != "" {
+						for _, wt := range m.worktrees {
+							if wt.Alias == created_alias && wt.HostBuild && wt.Running {
+								m, _ = m.open_esbuild_watch(wt)
+								break
+							}
+						}
+					}
+
 					if m.term_mgr.Count() == 0 {
 						m.focus = PanelWorktrees
+						if m.pane_layout != nil {
+							m.pane_layout.FocusLeft()
+						}
 					}
 					return m, tea.Batch(
 						tick_after(100*time.Millisecond, "render"),
@@ -281,6 +310,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					if m.term_mgr.Count() == 0 {
 						m.focus = PanelWorktrees
+					}
+				}
+			}
+			// Auto-close dead Logs tabs
+			if m.term_mgr != nil && m.term_mgr.CloseDeadLogs() {
+				if m.term_mgr.Count() == 0 {
+					m.focus = PanelWorktrees
+					if m.pane_layout != nil {
+						m.pane_layout.FocusLeft()
 					}
 				}
 			}
@@ -394,6 +432,39 @@ func (m *Model) update_worktrees(wts []worktree.Worktree) {
 	var selected_name string
 	if m.cursor >= 0 && m.cursor < len(m.worktrees) {
 		selected_name = m.worktrees[m.cursor].Name
+	}
+
+	// Worktrees with pending actions (removing, starting, etc.) are kept
+	// from the current state. Periodic discovery can re-find a directory
+	// before it's fully deleted — filtering it out prevents flicker.
+	if len(m.actions_pending) > 0 {
+		filtered := make([]worktree.Worktree, 0, len(wts))
+		for _, wt := range wts {
+			if !m.actions_pending[wt.Name] {
+				filtered = append(filtered, wt)
+			}
+		}
+		for _, wt := range m.worktrees {
+			if m.actions_pending[wt.Name] {
+				filtered = append(filtered, wt)
+			}
+		}
+		wts = filtered
+	}
+
+	// Mark worktrees as "creating..." when a Create tab exists and hasn't
+	// finished yet (no sentinel file). This handles the gap between dc-create
+	// writing the env file (worktree discovered) and docker compose up finishing.
+	if m.term_mgr != nil && (m.term_mgr.HasLabel("Create") || m.has_create_alias_tab()) {
+		sentinel := filepath.Join(os.TempDir(), "wt-create-done")
+		if _, err := os.Stat(sentinel); err != nil {
+			// Sentinel doesn't exist — creation still in progress
+			for i := range wts {
+				if wts[i].Type == worktree.TypeDocker && !wts[i].ContainerExists {
+					wts[i].Health = "creating..."
+				}
+			}
+		}
 	}
 
 	m.worktrees = wts
@@ -619,6 +690,11 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// "n" works even with an empty worktree list
+	if msg.String() == "n" {
+		return m.open_create(m.selected_worktree())
+	}
+
 	// Quick action keys
 	wt := m.selected_worktree()
 	if wt == nil {
@@ -634,8 +710,6 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.open_local_shell(*wt)
 	case "l":
 		return m.open_logs(*wt)
-	case "n":
-		return m.open_create(*wt)
 	case "i":
 		return m.open_worktree_info()
 	case "e":
@@ -671,6 +745,8 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, cmd_docker_action("start", *wt, m.repo_root, m.cfg)
 			}
 		}
+	case "x":
+		return m.remove_worktree(*wt)
 	}
 
 	return m, nil
@@ -766,6 +842,10 @@ func (m Model) handle_services_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, Keys.Enter):
 		if wt != nil && wt.Running && m.service_cursor >= 0 && m.service_cursor < len(m.services) {
 			svc := m.services[m.service_cursor]
+			// Static manager: Enter focuses the dev tab (no per-service preview)
+			if m.is_static_local(*wt) {
+				return m.open_service_logs(*wt, svc)
+			}
 			if m.preview_session != nil && m.preview_svc_name == svc.Name {
 				// Already previewing this service — promote to full log tab
 				m.close_preview()
@@ -788,10 +868,13 @@ func (m Model) handle_services_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.open_service_logs(*wt, svc)
 		}
 	case "r":
+		if m.is_static_local(*wt) {
+			return m, m.show_result("Per-service restart not available")
+		}
 		if m.service_cursor >= 0 && m.service_cursor < len(m.services) {
 			svc := m.services[m.service_cursor]
 			m.activity = fmt.Sprintf("Restarting %s...", svc.DisplayName)
-			return m, cmd_service_action("restart", *wt, svc)
+			return m, cmd_service_action("restart", *wt, svc, m.cfg)
 		}
 	}
 
@@ -921,7 +1004,7 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 	case "l":
 		return m.open_logs(*wt)
 	case "n":
-		return m.open_create(*wt)
+		return m.open_create(wt)
 	case "e":
 		if wt.HostBuild {
 			return m.open_esbuild_watch(*wt)
@@ -931,7 +1014,7 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 			return m.restart_local_services(*wt)
 		}
 		return m, cmd_docker_action("restart", *wt, m.repo_root, m.cfg)
-	case "d":
+	case "t":
 		if wt.Type == worktree.TypeLocal {
 			return m.stop_dev_server(*wt)
 		}
@@ -949,7 +1032,7 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 		return m, cmd_docker_action("start", *wt, m.repo_root, m.cfg)
 	case "i":
 		return m.open_worktree_info()
-	case "D":
+	case "x":
 		return m.remove_worktree(*wt)
 	}
 
@@ -1053,12 +1136,31 @@ func (m Model) open_local_shell(wt worktree.Worktree) (Model, tea.Cmd) {
 	return m, tick_after(100*time.Millisecond, "render")
 }
 
-// open_logs opens PM2 logs for the container or local worktree
+// open_logs opens logs for the container or local worktree.
+// For static manager on local worktrees, focuses the Dev tab instead.
 func (m Model) open_logs(wt worktree.Worktree) (Model, tea.Cmd) {
 	if !wt.Running {
 		m.terminal_output = "Logs only available for running worktrees"
 		m.prev_focus = m.focus; m.focus = PanelTerminal
 		return m, nil
+	}
+
+	// For static manager on local worktrees, focus the Dev tab
+	manager := "pm2"
+	if m.cfg != nil {
+		if wt.Type == worktree.TypeDocker {
+			manager = m.cfg.DockerServiceManager()
+		} else {
+			manager = m.cfg.ServiceManager()
+		}
+	}
+	if manager == "static" && wt.Type == worktree.TypeLocal {
+		if label := find_dev_tab(m, wt); label != "" {
+			m.term_mgr.FocusByLabel(label)
+			m.prev_focus = m.focus; m.focus = PanelTerminal
+			return m, nil
+		}
+		return m, m.show_result("No dev tab open")
 	}
 
 	w, h := m.right_pane_dimensions()
@@ -1091,14 +1193,20 @@ func (m Model) open_logs(wt worktree.Worktree) (Model, tea.Cmd) {
 }
 
 // open_create runs the interactive dc-create.js script to create a new container
-func (m Model) open_create(wt worktree.Worktree) (Model, tea.Cmd) {
+func (m Model) open_create(wt *worktree.Worktree) (Model, tea.Cmd) {
 	// Reload AWS credentials so the spawned process inherits the latest keys
 	reload_aws_credentials()
 
 	w, h := m.right_pane_dimensions()
 
+	// Remove stale sentinel before opening
+	os.Remove(filepath.Join(os.TempDir(), "wt-create-done"))
+
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-create.js")
-	label := fmt.Sprintf("Create — %s", wt.Alias)
+	label := "Create"
+	if wt != nil {
+		label = fmt.Sprintf("Create — %s", wt.Alias)
+	}
 
 	_, err := m.term_mgr.Open(label, "node", []string{script}, w, h, m.repo_root)
 	if err != nil {
@@ -1117,6 +1225,24 @@ func (m Model) open_create(wt worktree.Worktree) (Model, tea.Cmd) {
 }
 
 func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Model, tea.Cmd) {
+	// For static manager, focus the Dev tab (local) or use docker logs (Docker)
+	manager := "pm2"
+	if m.cfg != nil {
+		if wt.Type == worktree.TypeDocker {
+			manager = m.cfg.DockerServiceManager()
+		} else {
+			manager = m.cfg.ServiceManager()
+		}
+	}
+	if manager == "static" && wt.Type == worktree.TypeLocal {
+		if label := find_dev_tab(m, wt); label != "" {
+			m.term_mgr.FocusByLabel(label)
+			m.prev_focus = m.focus; m.focus = PanelTerminal
+			return m, nil
+		}
+		return m, m.show_result("No dev tab open")
+	}
+
 	w, h := m.right_pane_dimensions()
 
 	var cmd_name string
@@ -1124,7 +1250,18 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 	var label string
 	var dir string
 
-	if wt.Type == worktree.TypeDocker {
+	if wt.Type == worktree.TypeDocker && manager == "static" {
+		// Static Docker: use docker logs (no pm2 inside containers)
+		cmd_name = "docker"
+		if svc.Name == "__all" {
+			args = []string{"logs", "-f", "--tail", "80", wt.Container}
+			label = fmt.Sprintf("Logs — %s", wt.Alias)
+		} else {
+			container := container_for_service(wt, svc.Name, m.cfg)
+			args = []string{"logs", "-f", "--tail", "80", container}
+			label = fmt.Sprintf("Logs — %s", svc.DisplayName)
+		}
+	} else if wt.Type == worktree.TypeDocker {
 		cmd_name = "docker"
 		if svc.Name == "__all" {
 			args = []string{"exec", "-it", wt.Container, "pm2", "logs", "--lines", "80"}
@@ -1158,7 +1295,24 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 	return m, tick_after(100*time.Millisecond, "render")
 }
 
-func cmd_service_action(action string, wt worktree.Worktree, svc worktree.Service) tea.Cmd {
+func cmd_service_action(action string, wt worktree.Worktree, svc worktree.Service, cfg *config.Config) tea.Cmd {
+	// Determine the effective manager for this worktree type
+	manager := "pm2"
+	if cfg != nil {
+		if wt.Type == worktree.TypeDocker {
+			manager = cfg.DockerServiceManager()
+		} else {
+			manager = cfg.ServiceManager()
+		}
+	}
+
+	if manager != "pm2" {
+		// Static manager doesn't support per-service actions
+		return func() tea.Msg {
+			return MsgActionOutput{Output: "Per-service actions not available for static services"}
+		}
+	}
+
 	return func() tea.Msg {
 		pm2_target := svc.Name
 		if pm2_target == "__all" {
@@ -1202,9 +1356,9 @@ func (m Model) refresh_services() tea.Cmd {
 		return nil
 	}
 	if wt.Type == worktree.TypeDocker {
-		return cmd_fetch_services(wt.Container, wt.Name)
+		return cmd_fetch_services(*wt, m.cfg)
 	}
-	return cmd_fetch_local_services(wt.Path)
+	return cmd_fetch_local_services(*wt, m.cfg)
 }
 
 func tick_after(d time.Duration, kind string) tea.Cmd {
@@ -1238,6 +1392,20 @@ func (m *Model) open_preview_logs(wt worktree.Worktree, svc worktree.Service) te
 		return nil
 	}
 
+	// For static manager on local worktrees, preview is not available
+	// (all output goes to the Dev tab)
+	manager := "pm2"
+	if m.cfg != nil {
+		if wt.Type == worktree.TypeDocker {
+			manager = m.cfg.DockerServiceManager()
+		} else {
+			manager = m.cfg.ServiceManager()
+		}
+	}
+	if manager == "static" && wt.Type == worktree.TypeLocal {
+		return nil
+	}
+
 	m.close_preview()
 
 	w, h := m.right_pane_dimensions()
@@ -1246,7 +1414,15 @@ func (m *Model) open_preview_logs(wt worktree.Worktree, svc worktree.Service) te
 	var args []string
 	var dir string
 
-	if wt.Type == worktree.TypeDocker {
+	if wt.Type == worktree.TypeDocker && manager == "static" {
+		cmd_name = "docker"
+		if svc.Name == "__all" {
+			args = []string{"logs", "-f", "--tail", "80", wt.Container}
+		} else {
+			container := container_for_service(wt, svc.Name, m.cfg)
+			args = []string{"logs", "-f", "--tail", "80", container}
+		}
+	} else if wt.Type == worktree.TypeDocker {
 		cmd_name = "docker"
 		if svc.Name == "__all" {
 			args = []string{"exec", "-it", wt.Container, "pm2", "logs", "--lines", "80"}
@@ -1462,18 +1638,39 @@ func (m Model) stop_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 }
 
 func (m Model) run_stop_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
-	svc_names := make([]string, 0, len(m.services))
-	for _, svc := range m.services {
-		if svc.Name != "__all" {
-			svc_names = append(svc_names, svc.Name)
-		}
+	manager := "pm2"
+	if m.cfg != nil {
+		manager = m.cfg.ServiceManager()
 	}
 
 	// Close the dev server terminal session if it exists
 	dev_label := fmt.Sprintf("Dev — %s", wt.Alias)
 	m.term_mgr.CloseByLabel(dev_label)
+	create_label := fmt.Sprintf("Create — %s", wt.Alias)
+	m.term_mgr.CloseByLabel(create_label)
+	m.term_mgr.CloseByLabel("Create")
 	if m.term_mgr.Count() == 0 && m.focus == PanelTerminal {
 		m.focus = PanelWorktrees
+	}
+
+	if manager != "pm2" {
+		// For non-pm2 managers, closing the dev tab + killing processes is sufficient
+		return m, tea.Sequence(
+			func() tea.Msg {
+				return MsgActionStarted{WtName: wt.Name, Status: "stopping..."}
+			},
+			func() tea.Msg {
+				kill_local_dev_processes(wt.Path)
+				return MsgActionOutput{}
+			},
+		)
+	}
+
+	svc_names := make([]string, 0, len(m.services))
+	for _, svc := range m.services {
+		if svc.Name != "__all" {
+			svc_names = append(svc_names, svc.Name)
+		}
 	}
 
 	return m, tea.Sequence(
@@ -1511,6 +1708,55 @@ func (m Model) restart_local_services(wt worktree.Worktree) (Model, tea.Cmd) {
 
 	// Start a fresh dev server (reload_aws_credentials is called inside)
 	return m.start_dev_server(wt)
+}
+
+// is_static_local returns true if the worktree uses the static service manager
+// and is a local worktree (not Docker). Used to gate per-service actions.
+func (m Model) is_static_local(wt worktree.Worktree) bool {
+	if m.cfg == nil || wt.Type != worktree.TypeLocal {
+		return false
+	}
+	return m.cfg.ServiceManager() == "static"
+}
+
+// find_dev_tab returns the label of the active dev/create tab for a worktree,
+// or "" if none is found. The dev server may run under "Dev — alias",
+// "Create — alias", or just "Create" (when dc-create starts the dev server inline).
+func find_dev_tab(m Model, wt worktree.Worktree) string {
+	for _, label := range []string{
+		fmt.Sprintf("Dev — %s", wt.Alias),
+		fmt.Sprintf("Create — %s", wt.Alias),
+		"Create",
+	} {
+		if m.term_mgr.HasLabel(label) {
+			return label
+		}
+	}
+	return ""
+}
+
+// has_create_alias_tab checks if any "Create — {alias}" tab exists
+func (m Model) has_create_alias_tab() bool {
+	for _, s := range m.term_mgr.Sessions() {
+		if strings.HasPrefix(s.Label, "Create — ") {
+			return true
+		}
+	}
+	return false
+}
+
+// container_for_service returns the Docker container name for a specific service.
+// For shared compose, each service runs in its own container: {name}-{slug}-{service}.
+// The worktree's Container field stores the primary service container; we swap the suffix.
+func container_for_service(wt worktree.Worktree, svc_name string, cfg *config.Config) string {
+	if cfg == nil || cfg.Services.Primary == "" {
+		return wt.Container
+	}
+	primary := cfg.Services.Primary
+	if strings.HasSuffix(wt.Container, "-"+primary) {
+		return strings.TrimSuffix(wt.Container, primary) + svc_name
+	}
+	return wt.Container
 }
 
 // toggle_admin toggles admin access for the selected worktree (with confirmation)

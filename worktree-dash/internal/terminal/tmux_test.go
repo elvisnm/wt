@@ -59,7 +59,7 @@ func TestServerLifecycle(t *testing.T) {
 	}
 
 	// Start server
-	if err := ts.EnsureStarted(); err != nil {
+	if err := ts.EnsureStarted(0, 0); err != nil {
 		t.Fatalf("EnsureStarted failed: %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestServerLifecycle(t *testing.T) {
 	}
 
 	// Second call should be a no-op
-	if err := ts.EnsureStarted(); err != nil {
+	if err := ts.EnsureStarted(0, 0); err != nil {
 		t.Fatalf("second EnsureStarted failed: %v", err)
 	}
 

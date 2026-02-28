@@ -67,9 +67,10 @@ function read_service_mode(worktree_path) {
   try {
     const content = fs.readFileSync(compose_file, 'utf8');
     const match = content.match(/WORKTREE_SERVICES=(\w+)/);
-    return match ? match[1] : 'full';
+    const fallback = config && config.services.defaultMode ? config.services.defaultMode : 'default';
+    return match ? match[1] : fallback;
   } catch {
-    return config && config.services.defaultMode ? config.services.defaultMode : 'full';
+    return config && config.services.defaultMode ? config.services.defaultMode : 'default';
   }
 }
 

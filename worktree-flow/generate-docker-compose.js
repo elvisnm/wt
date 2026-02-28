@@ -127,7 +127,7 @@ function parseArgs(argv) {
     worktree_name: null,
     alias: null,
     port_offset: null,
-    service_mode: 'minimal',
+    service_mode: null,
     lan_domain: null,
     host_build: false,
   };
@@ -208,11 +208,15 @@ function parseArgs(argv) {
 }
 
 function main() {
-  const { VALID_SERVICE_MODES } = require('./service-ports');
+  const { VALID_SERVICE_MODES, DEFAULT_SERVICE_MODE } = require('./service-ports');
   const options = parseArgs(process.argv.slice(2));
   if (!options || !options.worktree_path || !options.worktree_name || options.port_offset === null || Number.isNaN(options.port_offset)) {
-    console.log('Usage: node generate-docker-compose.js --path <worktree_path> --name <name> --offset <n> [--mode <minimal|full>]');
+    console.log(`Usage: node generate-docker-compose.js --path <worktree_path> --name <name> --offset <n> [--mode <${VALID_SERVICE_MODES.join('|')}>]`);
     process.exit(1);
+  }
+
+  if (!options.service_mode) {
+    options.service_mode = DEFAULT_SERVICE_MODE;
   }
 
   if (!VALID_SERVICE_MODES.includes(options.service_mode)) {

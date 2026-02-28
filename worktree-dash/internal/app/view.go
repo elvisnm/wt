@@ -46,6 +46,7 @@ func (m Model) View() string {
 		m.worktrees, m.cursor,
 		m.width, m.layout.WorktreeHeight,
 		m.focus == PanelWorktrees,
+		m.cfg,
 	)
 
 	// 3 - Services panel
@@ -59,7 +60,7 @@ func (m Model) View() string {
 	details_panel := ui.RenderDetailsPanel(
 		selected_wt,
 		m.width, m.layout.DetailsHeight,
-		m.details_scroll,
+		m.details_scroll, m.spin_frame,
 		m.focus == PanelDetails,
 		m.cfg,
 	)
@@ -173,7 +174,7 @@ func (m Model) status_hints() []ui.HintPair {
 		if wt != nil && wt.HostBuild && wt.Running && (m.cfg == nil || m.cfg.FeatureEnabled("hostBuild")) {
 			hints = append(hints, ui.HintPair{Key: "e", Desc: "build"})
 		}
-		if wt != nil && !wt.ContainerExists && wt.Type != worktree.TypeLocal {
+		if wt == nil || (!wt.ContainerExists && wt.Type != worktree.TypeLocal) {
 			hints = append(hints, ui.HintPair{Key: "n", Desc: "create"})
 		}
 		return append(hints, common...)
@@ -183,6 +184,15 @@ func (m Model) status_hints() []ui.HintPair {
 			{Key: "Esc", Desc: "back"},
 		}, common...)
 	case PanelServices:
+		wt := m.selected_worktree()
+		static_local := wt != nil && m.is_static_local(*wt)
+		if static_local {
+			return append([]ui.HintPair{
+				{Key: "j/k", Desc: "navigate"},
+				{Key: "Enter/l", Desc: "logs"},
+				{Key: "Esc", Desc: "back"},
+			}, common...)
+		}
 		if m.preview_session != nil {
 			return append([]ui.HintPair{
 				{Key: "j/k", Desc: "navigate"},

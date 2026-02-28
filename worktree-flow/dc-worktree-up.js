@@ -662,7 +662,21 @@ function main() {
       console.log('Rebuilding native modules...');
       execSync('pnpm rebuild', { cwd: worktree_path, stdio: 'inherit' });
       console.log('Installing dependencies...');
-      execSync('pnpm install --force --dangerously-allow-all-builds', { cwd: worktree_path, stdio: 'inherit' });
+      const pnpm_ver = execSync('pnpm --version', { cwd: worktree_path, encoding: 'utf8' }).trim();
+      const pnpm_major = parseInt(pnpm_ver.split('.')[0], 10);
+      const install_cmd = pnpm_major >= 10
+        ? 'pnpm install --force --dangerously-allow-all-builds'
+        : 'pnpm install --force';
+      execSync(install_cmd, { cwd: worktree_path, stdio: 'inherit' });
+    }
+
+    // Build library packages (e.g. packages/db) so dist/ exists for dev servers
+    if (fs.existsSync(pkg_path)) {
+      try {
+        execSync('pnpm turbo build --filter="./packages/*"', { cwd: worktree_path, stdio: 'inherit' });
+      } catch (e) {
+        // Non-fatal: turbo may not be available or no packages to build
+      }
     }
 
     if (options.open) open_in_cursor(worktree_path);

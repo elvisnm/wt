@@ -52,7 +52,7 @@ func format_service_line(svc worktree.Service, width int, selected bool, panel_f
 	}
 
 	var right string
-	if svc.Status == "online" {
+	if svc.Status == "online" && (svc.CPU > 0 || svc.Memory > 0) {
 		mem_mb := svc.Memory / (1024 * 1024)
 		right = fmt.Sprintf("%.0f%% %dMB", svc.CPU, mem_mb)
 	} else {

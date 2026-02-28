@@ -15,7 +15,7 @@ type Worktree struct {
 	Type      WorktreeType
 	Alias     string
 	Container string
-	Mode      string // "full" or "minimal"
+	Mode      string // service mode from config (e.g. "default", "full", "minimal")
 	Branch    string
 
 	// Docker-specific
