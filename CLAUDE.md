@@ -23,7 +23,8 @@ wt/
 │   ├── service-ports.js            # Port definitions + mode filtering
 │   ├── workflow-init.js            # Interactive config generator
 │   └── [dc-admin, dc-autostop, dc-build, dc-exec, dc-images-fix,
-│        dc-lan, dc-prune, dc-rebuild-base, dc-seed, dc-service].js
+│        dc-lan, dc-prune, dc-rebuild-base, dc-seed, dc-service,
+│        dc-skip-worktree].js
 └── worktree-dash/                  # Go TUI (Bubbletea)
     ├── main.go
     ├── go.mod / go.sum

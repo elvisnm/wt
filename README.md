@@ -30,6 +30,15 @@ Each worktree gets:
 - Its own database (cloned from a source DB)
 - A domain (e.g., `feat-login.localhost`)
 
+## Installation
+
+```bash
+brew tap elvisnm/wt
+brew install wt
+```
+
+Requires Node.js (installed automatically as a dependency).
+
 ## Quick Start
 
 ### 1. Generate a config
@@ -75,13 +84,7 @@ node worktree-flow/dc-worktree-down.js my-feat --remove
 ### 4. Launch the dashboard
 
 ```bash
-cd worktree-dash && go build -o worktree-dash . && ./worktree-dash
-```
-
-Or use the Makefile:
-
-```bash
-cd worktree-dash && make run
+wt
 ```
 
 ## Documentation
