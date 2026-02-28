@@ -78,10 +78,11 @@ function sanitize_name(name) {
 
 function remove_traefik_config(alias) {
   if (!alias) return;
-  const safe_name = sanitize_name(alias);
   const traefik_dir = config && config.docker.proxy._dynamicDirResolved
     ? config.docker.proxy._dynamicDirResolved
     : null;
+  if (!traefik_dir) return;
+  const safe_name = sanitize_name(alias);
   const traefik_file = path.join(traefik_dir, `${safe_name}.yml`);
   if (fs.existsSync(traefik_file)) {
     fs.unlinkSync(traefik_file);
