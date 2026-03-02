@@ -28,6 +28,13 @@ var heiHeiAudio []byte
 
 var version = "dev"
 
+func versionLabel() string {
+	if version == "dev" {
+		return "Version (dev) - by @elvisnm"
+	}
+	return "Version " + version + " - by @elvisnm"
+}
+
 var subcommands = map[string]string{
 	"init":         "workflow-init.js",
 	"create":       "dc-create.js",
@@ -430,6 +437,15 @@ func showSplash() func() {
 		quote_col = 1
 	}
 	fmt.Printf("\033[%d;%dH\033[3;38;5;245m%s\033[0m", quote_row, quote_col, quote)
+
+	// Version below the quote
+	ver_label := versionLabel()
+	ver_row := quote_row + 2
+	ver_col := (w - len(ver_label)) / 2
+	if ver_col < 1 {
+		ver_col = 1
+	}
+	fmt.Printf("\033[%d;%dH\033[38;5;239m%s\033[0m", ver_row, ver_col, ver_label)
 
 	// Animate spinner in a background goroutine
 	stop := make(chan struct{})
@@ -943,6 +959,7 @@ func renderHelp() string {
 	// Footer
 	sections = append(sections, []string{
 		"",
+		guideCenterLine(ansiDim+versionLabel()+ansiReset, w),
 		guideCenterLine(ansiDim+"Press "+ansiReset+guideKey("Esc")+ansiDim+" to close"+ansiReset, w),
 	})
 
