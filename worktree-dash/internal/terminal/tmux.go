@@ -181,6 +181,13 @@ func (ts *TmuxServer) KillControlClient() {
 	}
 }
 
+// SetEnv sets an environment variable on the tmux server.
+// New windows created after this call will inherit the updated value.
+func (ts *TmuxServer) SetEnv(key, value string) error {
+	_, err := ts.Run("set-environment", key, value)
+	return err
+}
+
 // Kill terminates the tmux server and cleans up the control client.
 func (ts *TmuxServer) Kill() {
 	ts.mu.Lock()

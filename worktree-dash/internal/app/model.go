@@ -164,6 +164,16 @@ func (m *Model) SetHeiHeiAudio(data []byte) {
 }
 
 func (m Model) Init() tea.Cmd {
+	debug_init()
+	cfg_name := ""
+	cfg_strategy := ""
+	if m.cfg != nil {
+		cfg_name = m.cfg.Name
+		cfg_strategy = m.cfg.Docker.ComposeStrategy
+	}
+	debug_log("[init] repo_root=%s", m.repo_root)
+	debug_log("[init] worktrees_dir=%s", m.worktrees_dir)
+	debug_log("[init] config name=%q strategy=%q", cfg_name, cfg_strategy)
 	return tea.Batch(
 		m.cmd_discover(),
 	)
@@ -185,18 +195,28 @@ func (m Model) cmd_discover() tea.Cmd {
 	cfg := m.cfg
 	term_mgr := m.term_mgr
 	return func() tea.Msg {
+		debug_log("[discovery] starting discovery in %s", m.worktrees_dir)
 		wts := worktree.Discover(m.worktrees_dir, m.worktrees, cfg)
+		debug_log("[discovery] found %d worktrees", len(wts))
+		for _, wt := range wts {
+			debug_log("[discovery]   %s type=%d alias=%s path=%s", wt.Name, wt.Type, wt.Alias, wt.Path)
+		}
 		wts = worktree.SortWorktrees(wts)
+		debug_log("[discovery] fetching container status")
 		wts = docker.FetchContainerStatus(wts, cfg)
+		debug_log("[discovery] fetching container stats")
 		wts = docker.FetchContainerStats(wts, cfg)
+		debug_log("[discovery] checking local running state")
 		wts = mark_local_running(wts, cfg, term_mgr)
 		wts = worktree.SortWorktrees(wts)
+		debug_log("[discovery] complete: %d worktrees", len(wts))
 		return MsgDiscovered{Worktrees: wts}
 	}
 }
 
 func cmd_fetch_status(wt_dir string, wts []worktree.Worktree, cfg *config.Config, term_mgr *terminal.Manager) tea.Cmd {
 	return func() tea.Msg {
+		debug_log("[tick] fetch_status: %d worktrees", len(wts))
 		fresh := worktree.Discover(wt_dir, wts, cfg)
 		fresh = docker.FetchContainerStatus(fresh, cfg)
 		fresh = mark_local_running(fresh, cfg, term_mgr)
@@ -207,6 +227,7 @@ func cmd_fetch_status(wt_dir string, wts []worktree.Worktree, cfg *config.Config
 
 func cmd_fetch_stats(wts []worktree.Worktree, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
+		debug_log("[tick] fetch_stats: %d worktrees", len(wts))
 		updated := docker.FetchContainerStats(wts, cfg)
 		return MsgStatsUpdated{Worktrees: updated}
 	}
@@ -218,6 +239,7 @@ func cmd_fetch_services(wt worktree.Worktree, cfg *config.Config) tea.Cmd {
 		manager = cfg.DockerServiceManager()
 	}
 	return func() tea.Msg {
+		debug_log("[services] fetch_services: %s manager=%s container=%s", wt.Alias, manager, wt.Container)
 		var svcs []worktree.Service
 		switch manager {
 		case "static":
@@ -225,6 +247,7 @@ func cmd_fetch_services(wt worktree.Worktree, cfg *config.Config) tea.Cmd {
 		default:
 			svcs = docker.FetchServices(wt.Container, wt.Name)
 		}
+		debug_log("[services] fetch_services: %s returned %d services", wt.Alias, len(svcs))
 		return MsgServicesUpdated{Services: svcs}
 	}
 }
@@ -235,13 +258,19 @@ func cmd_fetch_local_services(wt worktree.Worktree, cfg *config.Config) tea.Cmd 
 		manager = cfg.ServiceManager()
 	}
 	return func() tea.Msg {
+		debug_log("[services] fetch_local_services: %s manager=%s path=%s", wt.Alias, manager, wt.Path)
 		var svcs []worktree.Service
 		switch manager {
 		case "static":
 			svcs = build_static_services(cfg, &wt)
+			// Merge PM2 runtime data: mark matching services as online
+			// using config's processes field for name mapping.
+			pm2_svcs := pm2.FetchServices(wt.Path)
+			svcs = merge_pm2_into_static(svcs, pm2_svcs, cfg)
 		default:
 			svcs = pm2.FetchServices(wt.Path)
 		}
+		debug_log("[services] fetch_local_services: %s returned %d services", wt.Alias, len(svcs))
 		return MsgServicesUpdated{Services: svcs}
 	}
 }
@@ -275,18 +304,21 @@ func build_static_services(cfg *config.Config, wt *worktree.Worktree) []worktree
 				port = entry.Port
 			}
 			if port > 0 {
-				addr := fmt.Sprintf("localhost:%d", port)
-				conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+				addr := fmt.Sprintf("127.0.0.1:%d", port)
+				conn, err := net.DialTimeout("tcp4", addr, 500*time.Millisecond)
 				if err == nil {
 					conn.Close()
 					svc.Status = "online"
+					debug_log("[services] port_check: %s port=%d -> online", entry.Name, port)
 				} else {
 					svc.Status = "stopped"
 					all_online = false
+					debug_log("[services] port_check: %s port=%d -> stopped (%v)", entry.Name, port, err)
 				}
 			} else {
 				svc.Status = "stopped"
 				all_online = false
+				debug_log("[services] port_check: %s port=%d -> stopped (no port)", entry.Name, entry.Port)
 			}
 		}
 
@@ -302,6 +334,83 @@ func build_static_services(cfg *config.Config, wt *worktree.Worktree) []worktree
 	}
 
 	return services
+}
+
+// merge_pm2_into_static merges PM2 runtime status into the static service list.
+// Matches PM2 processes to config entries by name or by the processes field.
+// A config entry is marked online if ANY of its mapped PM2 processes is online.
+func merge_pm2_into_static(static_svcs []worktree.Service, pm2_svcs []worktree.Service, cfg *config.Config) []worktree.Service {
+	if len(pm2_svcs) == 0 {
+		return static_svcs
+	}
+
+	// Build lookup of PM2 services by name (skip __all)
+	pm2_map := make(map[string]*worktree.Service)
+	for i := range pm2_svcs {
+		if pm2_svcs[i].Name == "__all" {
+			continue
+		}
+		pm2_map[pm2_svcs[i].Name] = &pm2_svcs[i]
+	}
+
+	// Build mapping: PM2 process name -> config service index
+	// Uses config's "processes" field, falling back to matching by name
+	pm2_to_static := make(map[string]int) // pm2 name -> static_svcs index
+	if cfg != nil {
+		for i, entry := range cfg.Dash.Services.List {
+			static_idx := i + 1 // +1 for __all at index 0
+			if len(entry.Processes) > 0 {
+				for _, proc := range entry.Processes {
+					pm2_to_static[proc] = static_idx
+				}
+			} else {
+				pm2_to_static[entry.Name] = static_idx
+			}
+		}
+	}
+
+	// Update matching static entries with PM2 status
+	for pm2_name, pm2_svc := range pm2_map {
+		idx, ok := pm2_to_static[pm2_name]
+		if !ok {
+			debug_log("[services] merge_pm2: no config match for PM2 process %q", pm2_name)
+			continue
+		}
+		if idx < 0 || idx >= len(static_svcs) {
+			continue
+		}
+		if pm2_svc.Status == "online" && static_svcs[idx].Status != "online" {
+			static_svcs[idx].Status = "online"
+			debug_log("[services] merge_pm2: %s -> %s (via PM2 %s)", static_svcs[idx].Name, "online", pm2_name)
+		}
+		// Accumulate CPU/memory from all mapped PM2 processes
+		static_svcs[idx].CPU += pm2_svc.CPU
+		static_svcs[idx].Memory += pm2_svc.Memory
+		if pm2_svc.RestartCount > static_svcs[idx].RestartCount {
+			static_svcs[idx].RestartCount = pm2_svc.RestartCount
+		}
+	}
+
+	// Recalculate __all status
+	all_online := true
+	for _, svc := range static_svcs {
+		if svc.Name == "__all" {
+			continue
+		}
+		if svc.Status != "online" {
+			all_online = false
+			break
+		}
+	}
+	if len(static_svcs) > 0 && static_svcs[0].Name == "__all" {
+		if all_online {
+			static_svcs[0].Status = "online"
+		} else {
+			static_svcs[0].Status = "degraded"
+		}
+	}
+
+	return static_svcs
 }
 
 // docker_host_port returns the host port mapped to a container's internal port.
@@ -329,6 +438,7 @@ func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *t
 	if cfg != nil {
 		check = cfg.Dash.Services.RunningCheck
 	}
+	debug_log("[discovery] mark_local_running: method=%s", check)
 
 	switch check {
 	case "devTab":
@@ -339,6 +449,7 @@ func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *t
 				wts[i].Running = term_mgr.IsLabelAlive(dev_label) ||
 					term_mgr.IsLabelAlive(create_label) ||
 					term_mgr.IsLabelAlive("Create")
+				debug_log("[discovery]   %s running=%v (devTab)", wts[i].Alias, wts[i].Running)
 			}
 		}
 	default: // "pm2"

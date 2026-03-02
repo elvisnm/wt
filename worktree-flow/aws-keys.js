@@ -4,6 +4,13 @@ const os = require('os');
 const readline = require('readline');
 
 const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-aws-keys-done');
+const DEBUG_LOG = path.join(os.tmpdir(), 'wt-debug.log');
+
+function debug(msg) {
+  if (process.env.WT_DEBUG !== '1') return;
+  const ts = new Date().toTimeString().slice(0, 12);
+  try { fs.appendFileSync(DEBUG_LOG, `[${ts}] [aws-keys.js] ${msg}\n`); } catch {}
+}
 
 function detect_shell() {
   const shell = process.env.SHELL || '';
@@ -158,28 +165,36 @@ async function read_input_lines() {
 }
 
 async function main() {
+  debug('main: started, SENTINEL_PATH=' + SENTINEL_PATH);
   const lines = await read_input_lines();
+  debug('main: got ' + lines.length + ' lines');
 
   // Clean up any stale sentinel from a previous run
   try { fs.unlinkSync(SENTINEL_PATH); } catch {}
+  debug('main: cleaned stale sentinel');
 
   if (lines.length < 3) {
+    debug('main: FAIL - only ' + lines.length + ' lines');
     console.error('Expected 3 lines of AWS export commands.');
     fs.writeFileSync(SENTINEL_PATH, '1');
+    debug('main: wrote sentinel=1, exiting');
     process.exit(1);
   }
 
   const keys = parse_aws_keys(lines);
   if (!keys) {
+    debug('main: FAIL - could not parse keys from lines');
     console.error('Failed to parse AWS keys. Make sure you pasted the full export block.');
     console.error('Expected format:');
     console.error('  export AWS_ACCESS_KEY_ID="..."');
     console.error('  export AWS_SECRET_ACCESS_KEY="..."');
     console.error('  export AWS_SESSION_TOKEN="..."');
     fs.writeFileSync(SENTINEL_PATH, '1');
+    debug('main: wrote sentinel=1, exiting');
     process.exit(1);
   }
 
+  debug('main: parsed keys OK, access_key_id=' + keys.access_key_id.slice(0, 8) + '...');
   console.log('');
   console.log(`AWS_ACCESS_KEY_ID=${keys.access_key_id}`);
   console.log('AWS_SECRET_ACCESS_KEY=[hidden]');
@@ -188,16 +203,38 @@ async function main() {
 
   const shell_name = detect_shell();
   const profile_path = resolve_profile_path(shell_name);
+  debug('main: shell=' + shell_name + ' profile=' + profile_path);
 
   console.log(`Detected shell: ${shell_name} (${process.env.SHELL || 'unknown'})`);
 
-  update_shell_profile(keys, shell_name, profile_path);
-  update_aws_credentials(keys);
+  try {
+    update_shell_profile(keys, shell_name, profile_path);
+    debug('main: update_shell_profile done');
+  } catch (e) {
+    debug('main: update_shell_profile ERROR: ' + e.message);
+    console.error('Warning: failed to update shell profile:', e.message);
+  }
+
+  try {
+    update_aws_credentials(keys);
+    debug('main: update_aws_credentials done');
+  } catch (e) {
+    debug('main: update_aws_credentials ERROR: ' + e.message);
+    console.error('Error: failed to write ~/.aws/credentials:', e.message);
+    fs.writeFileSync(SENTINEL_PATH, '1');
+    debug('main: wrote sentinel=1 (credentials write failed), exiting');
+    process.exit(1);
+  }
 
   console.log('');
   console.log('Done. Dashboard will restart services with fresh keys.');
 
+  debug('main: writing sentinel=0');
   fs.writeFileSync(SENTINEL_PATH, '0');
+  debug('main: sentinel written, verifying...');
+  const verify = fs.readFileSync(SENTINEL_PATH, 'utf8');
+  debug('main: sentinel verified: ' + JSON.stringify(verify));
+  debug('main: exiting 0');
   process.exit(0);
 }
 

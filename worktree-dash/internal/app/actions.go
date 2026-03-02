@@ -168,14 +168,20 @@ func kill_local_dev_processes(wt_path string) bool {
 // reload_aws_credentials reads ~/.aws/credentials and sets env vars
 // so child processes (like pnpm dev) inherit the fresh keys.
 func reload_aws_credentials() {
+	debug_log("[aws] reload_aws_credentials: start")
 	home, err := os.UserHomeDir()
 	if err != nil {
+		debug_log("[aws] reload_aws_credentials: UserHomeDir error: %v", err)
 		return
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".aws", "credentials"))
+	creds_path := filepath.Join(home, ".aws", "credentials")
+	data, err := os.ReadFile(creds_path)
 	if err != nil {
+		debug_log("[aws] reload_aws_credentials: ReadFile error: %v", err)
 		return
 	}
+	debug_log("[aws] reload_aws_credentials: read %s (%d bytes)", creds_path, len(data))
+	keys_set := 0
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "[") || line == "" {
@@ -190,12 +196,23 @@ func reload_aws_credentials() {
 		switch key {
 		case "aws_access_key_id":
 			os.Setenv("AWS_ACCESS_KEY_ID", val)
+			safe := val
+			if len(safe) > 8 {
+				safe = safe[:8]
+			}
+			debug_log("[aws] reload_aws_credentials: set AWS_ACCESS_KEY_ID=%s...", safe)
+			keys_set++
 		case "aws_secret_access_key":
 			os.Setenv("AWS_SECRET_ACCESS_KEY", val)
+			debug_log("[aws] reload_aws_credentials: set AWS_SECRET_ACCESS_KEY=[hidden]")
+			keys_set++
 		case "aws_session_token":
 			os.Setenv("AWS_SESSION_TOKEN", val)
+			debug_log("[aws] reload_aws_credentials: set AWS_SESSION_TOKEN=[hidden]")
+			keys_set++
 		}
 	}
+	debug_log("[aws] reload_aws_credentials: done, set %d keys", keys_set)
 }
 
 func run_docker(args ...string) (string, error) {

@@ -40,6 +40,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgDiscovered:
 		first_load := !m.discovered
 		m.discovered = true
+		debug_log("[discovery] MsgDiscovered: count=%d first_load=%v", len(msg.Worktrees), first_load)
 		m.update_worktrees(msg.Worktrees)
 
 		// Signal the outer process that we're ready (unblocks tmux attach).
@@ -62,9 +63,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case MsgStatusUpdated:
+		debug_log("[tick] MsgStatusUpdated: count=%d", len(msg.Worktrees))
 		m.update_worktrees(msg.Worktrees)
 		cmds := []tea.Cmd{tick_after(5*time.Second, "status")}
 		wt := m.selected_worktree()
+		if wt != nil {
+			debug_log("[tick] selected: %s type=%d running=%v svcs=%d cursor=%d", wt.Alias, wt.Type, wt.Running, len(m.services), m.cursor)
+		} else {
+			debug_log("[tick] selected: nil cursor=%d len=%d", m.cursor, len(m.worktrees))
+		}
 		if wt != nil && wt.Running && len(m.services) == 0 {
 			cmds = append(cmds, m.refresh_services())
 			if m.activity != "" {
@@ -79,10 +86,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case MsgStatsUpdated:
-		m.update_worktrees(msg.Worktrees)
+		debug_log("[tick] MsgStatsUpdated: count=%d", len(msg.Worktrees))
+		// Merge stats (CPU, Mem, MemPct) into existing worktrees.
+		// Do NOT replace the list — the stats snapshot may be stale
+		// (captured before new worktrees were discovered).
+		stats_map := make(map[string]*worktree.Worktree)
+		for i := range msg.Worktrees {
+			stats_map[msg.Worktrees[i].Path] = &msg.Worktrees[i]
+		}
+		for i := range m.worktrees {
+			if s, ok := stats_map[m.worktrees[i].Path]; ok {
+				m.worktrees[i].CPU = s.CPU
+				m.worktrees[i].Mem = s.Mem
+				m.worktrees[i].MemPct = s.MemPct
+			}
+		}
 		return m, tick_after(3*time.Second, "stats")
 
 	case MsgServicesUpdated:
+		sel := m.selected_worktree()
+		sel_name := "<nil>"
+		if sel != nil {
+			sel_name = sel.Alias
+		}
+		debug_log("[services] MsgServicesUpdated: count=%d for=%s svc_cursor=%d", len(msg.Services), sel_name, m.service_cursor)
 		m.services = msg.Services
 		if m.service_cursor >= len(m.services) {
 			m.service_cursor = 0
@@ -182,6 +209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if len(lines) > 1 {
 						created_alias = strings.TrimSpace(lines[1])
 					}
+					debug_log("[create] sentinel found: exit_code=%d alias=%q", exit_code, created_alias)
 
 					// Close all Create tabs
 					m.term_mgr.CloseByLabel("Create")
@@ -246,39 +274,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.aws_keys_running {
 				sentinel := filepath.Join(os.TempDir(), "wt-aws-keys-done")
 				if data, err := os.ReadFile(sentinel); err == nil {
+					debug_log("[aws] sentinel found: raw=%q len=%d", string(data), len(data))
 					os.Remove(sentinel)
 					exit_code := -1
-					fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &exit_code)
+					n, scan_err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &exit_code)
+					debug_log("[aws] parsed exit_code=%d (n=%d, scan_err=%v)", exit_code, n, scan_err)
 					m.aws_keys_running = false
 					m.term_mgr.CloseByLabel("AWS Keys")
 					if m.pane_layout != nil {
 						m.pane_layout.FocusLeft()
 					}
 					if exit_code != 0 {
+						debug_log("[aws] FAILED: exit_code=%d", exit_code)
 						m.activity = "AWS keys update failed"
 						if m.term_mgr.Count() == 0 {
 							m.focus = PanelWorktrees
 						}
 						return m, tick_after(100*time.Millisecond, "render")
 					}
+					debug_log("[aws] SUCCESS: reloading credentials and restarting services")
 					reload_aws_credentials()
+					// Propagate AWS env vars to tmux server so new windows inherit them
+					if server := m.term_mgr.Server(); server != nil {
+						for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+							if val := os.Getenv(key); val != "" {
+								server.SetEnv(key, val)
+							}
+						}
+						debug_log("[aws] propagated AWS keys to tmux server")
+					}
 					m.activity = "AWS keys updated — restarting services..."
 					cmds := []tea.Cmd{
 						tick_after(100*time.Millisecond, "render"),
 						tick_after(3*time.Second, "status"),
 					}
+					debug_log("[aws] worktrees to check: %d", len(m.worktrees))
 					for _, wt := range m.worktrees {
 						if !wt.Running {
+							debug_log("[aws]   skip %s (not running)", wt.Alias)
 							continue
 						}
 						switch wt.Type {
 						case worktree.TypeLocal:
+							debug_log("[aws]   restart local: %s", wt.Alias)
 							var cmd tea.Cmd
 							m, cmd = m.restart_local_services(wt)
 							if cmd != nil {
 								cmds = append(cmds, cmd)
 							}
 						case worktree.TypeDocker:
+							debug_log("[aws]   restart docker: %s (container=%s)", wt.Alias, wt.Container)
 							wt := wt
 							cmds = append(cmds, tea.Sequence(
 								func() tea.Msg {
@@ -473,12 +518,20 @@ func (m *Model) update_worktrees(wts []worktree.Worktree) {
 		for i, wt := range m.worktrees {
 			if wt.Name == selected_name {
 				m.cursor = i
+				debug_log("[update_wt] stored %d worktrees, cursor=%d (%s)", len(wts), m.cursor, selected_name)
+				for j, w := range m.worktrees {
+					debug_log("[update_wt]   [%d] %s type=%d running=%v", j, w.Alias, w.Type, w.Running)
+				}
 				return
 			}
 		}
 	}
 
 	m.clamp_cursor()
+	debug_log("[update_wt] stored %d worktrees, cursor=%d (clamped, prev=%q)", len(wts), m.cursor, selected_name)
+	for j, w := range m.worktrees {
+		debug_log("[update_wt]   [%d] %s type=%d running=%v", j, w.Alias, w.Type, w.Running)
+	}
 }
 
 func (m Model) selected_worktree() *worktree.Worktree {
@@ -490,6 +543,7 @@ func (m Model) selected_worktree() *worktree.Worktree {
 }
 
 func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	debug_log("[keys] key=%q focus=%d", msg.String(), m.focus)
 	switch {
 	case key.Matches(msg, Keys.Quit), key.Matches(msg, Keys.CtrlC):
 		m.confirm_open = true
@@ -583,6 +637,7 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "A":
 		if m.cfg == nil || m.cfg.FeatureEnabled("awsCredentials") {
+			debug_log("[aws] Shift+A pressed: opening aws-keys")
 			return m.open_aws_keys()
 		}
 	case "D":
@@ -621,11 +676,16 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, Keys.Up):
 		if m.cursor > 0 {
+			prev := m.cursor
 			m.cursor--
 			m.details_scroll = 0
 			m.close_preview()
 			m.services = nil
 			m.service_cursor = 0
+			wt := m.selected_worktree()
+			if wt != nil {
+				debug_log("[keys] worktree up: cursor %d->%d now=%s running=%v", prev, m.cursor, wt.Alias, wt.Running)
+			}
 			return m, m.refresh_services()
 		}
 		return m, nil
@@ -692,6 +752,7 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// "n" works even with an empty worktree list
 	if msg.String() == "n" {
+		debug_log("[create] 'n' pressed: opening create wizard")
 		return m.open_create(m.selected_worktree())
 	}
 
@@ -1197,23 +1258,34 @@ func (m Model) open_create(wt *worktree.Worktree) (Model, tea.Cmd) {
 	// Reload AWS credentials so the spawned process inherits the latest keys
 	reload_aws_credentials()
 
+	// Propagate AWS env vars to the tmux server so new windows inherit them
+	if server := m.term_mgr.Server(); server != nil {
+		for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+			if val := os.Getenv(key); val != "" {
+				server.SetEnv(key, val)
+			}
+		}
+	}
+
 	w, h := m.right_pane_dimensions()
 
 	// Remove stale sentinel before opening
 	os.Remove(filepath.Join(os.TempDir(), "wt-create-done"))
 
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-create.js")
+	debug_log("[create] open_create: script=%s", script)
+	// Always use "Create" — the selected worktree's alias doesn't match the
+	// NEW worktree being created, which breaks mark_local_running's devTab check.
 	label := "Create"
-	if wt != nil {
-		label = fmt.Sprintf("Create — %s", wt.Alias)
-	}
 
 	_, err := m.term_mgr.Open(label, "node", []string{script}, w, h, m.repo_root)
 	if err != nil {
+		debug_log("[create] open_create: FAILED to open terminal: %v", err)
 		m.terminal_output = fmt.Sprintf("Failed to open create: %v", err)
 		m.prev_focus = m.focus; m.focus = PanelTerminal
 		return m, nil
 	}
+	debug_log("[create] open_create: terminal opened label=%q", label)
 
 	m.terminal_output = ""
 	m.prev_focus = m.focus; m.focus = PanelTerminal
@@ -1352,9 +1424,15 @@ func last_line(s string) string {
 
 func (m Model) refresh_services() tea.Cmd {
 	wt := m.selected_worktree()
-	if wt == nil || !wt.Running {
+	if wt == nil {
+		debug_log("[services] refresh_services: no selected worktree (cursor=%d, len=%d)", m.cursor, len(m.worktrees))
 		return nil
 	}
+	if !wt.Running {
+		debug_log("[services] refresh_services: %s not running (type=%d)", wt.Alias, wt.Type)
+		return nil
+	}
+	debug_log("[services] refresh_services: %s type=%d running=%v", wt.Alias, wt.Type, wt.Running)
 	if wt.Type == worktree.TypeDocker {
 		return cmd_fetch_services(*wt, m.cfg)
 	}
@@ -1588,8 +1666,19 @@ func (m Model) open_worktree_info() (Model, tea.Cmd) {
 
 // start_dev_server opens a terminal tab running pnpm dev for a local worktree
 func (m Model) start_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
+	debug_log("[services] start_dev_server: alias=%s path=%s", wt.Alias, wt.Path)
 	// Reload AWS credentials so the spawned process inherits the latest keys
 	reload_aws_credentials()
+
+	// Propagate AWS env vars to the tmux server so new windows inherit them
+	if server := m.term_mgr.Server(); server != nil {
+		for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+			if val := os.Getenv(key); val != "" {
+				server.SetEnv(key, val)
+			}
+		}
+		debug_log("[services] start_dev_server: propagated AWS keys to tmux server")
+	}
 
 	w, h := m.right_pane_dimensions()
 
@@ -1605,13 +1694,16 @@ func (m Model) start_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 	}
 	shell_cmd := fmt.Sprintf("%s=%s %s", path_env, wt.Path, dev_cmd)
 	label := fmt.Sprintf("Dev — %s", wt.Alias)
+	debug_log("[services] start_dev_server: cmd=%q label=%q", shell_cmd, label)
 
 	_, err := m.term_mgr.Open(label, "bash", []string{"-c", shell_cmd}, w, h, wt.Path)
 	if err != nil {
+		debug_log("[services] start_dev_server: FAILED: %v", err)
 		m.terminal_output = fmt.Sprintf("Failed to start dev server: %v", err)
 		m.prev_focus = m.focus; m.focus = PanelTerminal
 		return m, nil
 	}
+	debug_log("[services] start_dev_server: terminal opened")
 
 	m.terminal_output = ""
 	m.activity = fmt.Sprintf("starting... %s", wt.Alias)
@@ -1642,6 +1734,7 @@ func (m Model) run_stop_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 	if m.cfg != nil {
 		manager = m.cfg.ServiceManager()
 	}
+	debug_log("[services] run_stop_dev_server: alias=%s manager=%s", wt.Alias, manager)
 
 	// Close the dev server terminal session if it exists
 	dev_label := fmt.Sprintf("Dev — %s", wt.Alias)
@@ -1695,9 +1788,11 @@ func (m Model) run_stop_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 // restart_local_services kills and restarts a local worktree's dev server
 // so it picks up fresh environment (e.g. updated AWS keys).
 func (m Model) restart_local_services(wt worktree.Worktree) (Model, tea.Cmd) {
+	debug_log("[aws] restart_local_services: %s (path=%s)", wt.Alias, wt.Path)
 	m.activity = fmt.Sprintf("Restarting %s...", wt.Alias)
 
 	// Kill OS-level node processes for this worktree
+	debug_log("[aws] restart_local_services: killing dev processes")
 	kill_local_dev_processes(wt.Path)
 
 	// Close any existing terminal tabs for this worktree
@@ -1705,6 +1800,7 @@ func (m Model) restart_local_services(wt worktree.Worktree) (Model, tea.Cmd) {
 	m.term_mgr.CloseByLabel(dev_label)
 	create_label := fmt.Sprintf("Create — %s", wt.Alias)
 	m.term_mgr.CloseByLabel(create_label)
+	m.term_mgr.CloseByLabel("Create")
 
 	// Start a fresh dev server (reload_aws_credentials is called inside)
 	return m.start_dev_server(wt)
@@ -1993,13 +2089,21 @@ func (m Model) open_aws_keys() (tea.Model, tea.Cmd) {
 	w, h := m.right_pane_dimensions()
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "aws-keys.js")
 
+	// Remove stale sentinel before opening
+	sentinel := filepath.Join(os.TempDir(), "wt-aws-keys-done")
+	os.Remove(sentinel)
+	debug_log("[aws] open_aws_keys: removed stale sentinel %s", sentinel)
+	debug_log("[aws] open_aws_keys: script=%s pane=%dx%d", script, w, h)
+
 	label := "AWS Keys"
 	_, err := m.term_mgr.Open(label, "node", []string{script}, w, h, m.repo_root)
 	if err != nil {
+		debug_log("[aws] open_aws_keys: FAILED to open terminal: %v", err)
 		m.activity = fmt.Sprintf("Failed to open AWS keys: %v", err)
 		return m, nil
 	}
 
+	debug_log("[aws] open_aws_keys: terminal opened, setting aws_keys_running=true")
 	m.aws_keys_running = true
 	m.terminal_output = ""
 	m.prev_focus = m.focus

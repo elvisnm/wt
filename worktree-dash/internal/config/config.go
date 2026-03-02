@@ -161,8 +161,9 @@ type DashServicesConfig struct {
 }
 
 type DashServiceEntry struct {
-	Name string `json:"name"`
-	Port int    `json:"port"`
+	Name      string   `json:"name"`
+	Port      int      `json:"port"`
+	Processes []string `json:"processes"` // PM2 process names when different from Name
 }
 
 type DashDockerSvc struct {

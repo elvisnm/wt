@@ -7,6 +7,13 @@ const os = require('os');
 const config = config_mod.load_config({ required: false }) || null;
 
 const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-create-done');
+const DEBUG_LOG = path.join(os.tmpdir(), 'wt-debug.log');
+
+function debug(msg) {
+  if (process.env.WT_DEBUG !== '1') return;
+  const ts = new Date().toTimeString().slice(0, 12);
+  try { fs.appendFileSync(DEBUG_LOG, `[${ts}] [dc-create.js] ${msg}\n`); } catch {}
+}
 
 process.on('SIGINT', () => process.exit(0));
 
@@ -175,12 +182,14 @@ function get_extra_options() {
 // ── Main flow ───────────────────────────────────────────────────────────
 
 async function main() {
+  debug('main: started');
   const p = await import('@clack/prompts');
 
   // Remove stale sentinel
   try { fs.unlinkSync(SENTINEL_PATH); } catch {}
 
   const repo_root = check_repo();
+  debug('main: repo_root=' + repo_root);
   const worktrees_dir = config && config.repo._worktreesDirResolved
     ? config.repo._worktreesDirResolved
     : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
@@ -188,6 +197,7 @@ async function main() {
   p.intro('Create a worktree');
 
   const existing = find_existing_worktrees(worktrees_dir);
+  debug('main: found ' + existing.length + ' existing worktrees in ' + worktrees_dir);
   const alias_var = config ? (config.env.worktreeVars.alias || 'WORKTREE_ALIAS') : 'WORKTREE_ALIAS';
   const existing_aliases = existing.map((wt) => read_env(wt, alias_var)).filter(Boolean);
   const existing_info = existing.map((wt) => {
@@ -217,6 +227,7 @@ async function main() {
     options: action_options,
   });
   if (p.isCancel(action)) { p.cancel('Cancelled.'); process.exit(0); }
+  debug('main: action=' + action);
 
   // Restart path
   if (action === 'restart') {
@@ -331,6 +342,7 @@ async function main() {
     ],
   });
   if (p.isCancel(env_choice)) { p.cancel('Cancelled.'); process.exit(0); }
+  debug('main: env_choice=' + env_choice);
 
   const is_host_build = env_choice === 'host_build';
   const use_docker = env_choice !== 'local';
@@ -450,10 +462,13 @@ async function main() {
 
     const up_script = path.join(scripts_dir, 'dc-worktree-up.js');
     const args = [branch_name, ...flags];
+    debug('main: alias=' + final_alias + ' branch=' + branch_name);
+    debug('main: calling dc-worktree-up: node ' + up_script + ' ' + args.join(' '));
     execSync(`node "${up_script}" ${args.map((a) => `"${a}"`).join(' ')}`, {
       stdio: 'inherit',
       cwd: repo_root,
     });
+    debug('main: dc-worktree-up completed (docker)');
   } else {
     const summary_lines = [
       `Branch:   ${branch_name}`,
@@ -477,7 +492,9 @@ async function main() {
       });
     } catch (e) {
       if (e.signal === 'SIGINT') {
-        // Dev server stopped by user — normal exit
+        // Dev server stopped by user — write sentinel so dashboard closes the Create tab
+        debug('main: SIGINT received, writing sentinel=1');
+        fs.writeFileSync(SENTINEL_PATH, '1');
         process.exit(0);
       }
       throw e;
@@ -485,11 +502,13 @@ async function main() {
   }
 
   // Signal dashboard that creation finished (alias on second line)
+  debug('main: writing sentinel=0 alias=' + (final_alias || ''));
   fs.writeFileSync(SENTINEL_PATH, `0\n${final_alias || ''}`);
   p.outro('Worktree created!');
 }
 
 main().catch((err) => {
+  debug('main: ERROR: ' + err.message);
   console.error(err);
   fs.writeFileSync(SENTINEL_PATH, '1');
   process.exit(1);

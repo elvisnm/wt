@@ -60,6 +60,17 @@ var subcommands = map[string]string{
 }
 
 func main() {
+	// Strip --debug flag before subcommand dispatch
+	filtered := make([]string, 0, len(os.Args))
+	for _, arg := range os.Args {
+		if arg == "--debug" {
+			os.Setenv("WT_DEBUG", "1")
+		} else {
+			filtered = append(filtered, arg)
+		}
+	}
+	os.Args = filtered
+
 	if len(os.Args) < 2 {
 		launchDashboard()
 		return
@@ -155,8 +166,12 @@ func launchDashboardOuter() {
 	ts.Run("set-option", "-g", "status", "off")
 
 	// Replace pane 0's shell with the inner process silently (no visible command echo)
+	inner_env := fmt.Sprintf("WT_INNER=1 WT_SOCKET=%s", ts.Socket())
+	if os.Getenv("WT_DEBUG") == "1" {
+		inner_env += " WT_DEBUG=1"
+	}
 	ts.Run("respawn-pane", "-t", "wt:0.0", "-k",
-		fmt.Sprintf("WT_INNER=1 WT_SOCKET=%s exec %s", ts.Socket(), exe_path),
+		fmt.Sprintf("%s exec %s", inner_env, exe_path),
 	)
 
 	// Block until the inner process signals that discovery is complete.
@@ -1041,5 +1056,6 @@ Commands:
 Options:
   help, --help, -h      Show this help
   version, --version    Show version
+  --debug               Write debug log to $TMPDIR/wt-debug.log
 `, version)
 }
