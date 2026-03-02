@@ -249,8 +249,42 @@ dash: {
 |---|---|---|
 | `commands` | shell + claude | Terminal tab commands. `cmd: null` = built-in handler |
 | `localDevCommand` | `'pnpm dev'` | Dev command for non-Docker worktrees |
+| `services` | `undefined` | Service management config (see below) |
 
 See [Dashboard — Custom Commands](dashboard.md#custom-commands) for details on adding commands.
+
+#### dash.services
+
+Controls how the dashboard discovers and manages services. Omit entirely if your project uses PM2 everywhere (the default).
+
+```js
+dash: {
+  services: {
+    manager: 'static',
+    list: [
+      { name: 'web', port: 3000 },
+      { name: 'api', port: 4000 },
+    ],
+    runningCheck: 'devTab',
+    docker: { manager: 'pm2' },
+  },
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `manager` | `'pm2'` | `'pm2'` or `'static'`. Use `'static'` when services don't run under PM2 (e.g. turbo, vite) |
+| `list` | `[]` | Service entries with `name` and `port`. Should mirror `services.ports` |
+| `runningCheck` | `'pm2'` | `'pm2'` or `'devTab'`. How the dashboard checks if local services are running |
+| `docker` | `undefined` | Override for Docker containers. Set `{ manager: 'pm2' }` when Docker uses PM2 but local doesn't |
+
+**When to use:**
+
+| Setup | What to set |
+|---|---|
+| PM2 everywhere (generate strategy, monolith container) | Omit `dash.services` entirely |
+| Shared compose (separate containers, no PM2) | `manager: 'static'`, `runningCheck: 'devTab'` |
+| Local: turbo/vite, Docker: PM2 inside container | `manager: 'static'`, `runningCheck: 'devTab'`, `docker: { manager: 'pm2' }` |
 
 ### paths
 

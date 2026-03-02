@@ -4,16 +4,10 @@ A terminal UI built with [Bubbletea](https://github.com/charmbracelet/bubbletea)
 
 ## Running
 
-```bash
-cd worktree-dash
-go build -o worktree-dash .
-./worktree-dash
-```
-
-Or with the Makefile:
+From your project directory (where `workflow.config.js` lives):
 
 ```bash
-cd worktree-dash && make run
+wt
 ```
 
 The dashboard discovers worktrees by reading `workflow.config.js` from the repo root (found by walking up from CWD).

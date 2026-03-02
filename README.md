@@ -39,6 +39,12 @@ brew install wt
 
 Requires Node.js (installed automatically as a dependency).
 
+## Updating
+
+```bash
+brew update && brew upgrade wt
+```
+
 ## Quick Start
 
 ### 1. Generate a config
