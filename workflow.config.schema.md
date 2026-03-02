@@ -305,9 +305,12 @@ module.exports = {
 
       // For "static" manager: explicit service definitions.
       // Each entry has a name and a base port (offset is added automatically).
+      // Optional `processes` maps PM2 process names when they differ from `name`.
       list: [
         // { name: "web", port: 3000 },
         // { name: "api", port: 4000 },
+        // { name: "sync", port: 5000, processes: ["combined_sync", "listings_sync"] },
+        // { name: "ship_server", port: 5001, processes: ["serviceHostServer"] },
       ],
 
       // How to detect if a local worktree is running:

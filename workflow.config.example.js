@@ -139,6 +139,8 @@ module.exports = {
     //   list: [
     //     { name: 'web', port: 3000 },
     //     { name: 'api', port: 4000 },
+    //     // Use `processes` when PM2 process names differ from config names:
+    //     // { name: 'sync', port: 5000, processes: ['combined_sync', 'listings_sync'] },
     //   ],
     //   runningCheck: 'devTab',
     //   docker: { manager: 'pm2' },  // override for Docker containers

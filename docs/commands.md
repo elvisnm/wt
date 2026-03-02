@@ -1,6 +1,32 @@
 # CLI Commands
 
-All commands are Node.js scripts in `worktree-flow/`. Run them directly with `node` or via package.json scripts.
+## Dashboard
+
+### `wt` — TUI dashboard
+
+```bash
+wt [--debug]
+```
+
+Launches the interactive terminal dashboard with a tmux 2-pane layout: control panel (left) and terminal sessions (right).
+
+| Option | Description |
+|---|---|
+| `--debug` | Write timestamped debug logs to `$TMPDIR/wt-debug.log` |
+
+The `--debug` flag instruments the entire app flow: discovery, services, AWS keys, worktree creation, key events, and tick refreshes. Both the Go dashboard and Node.js scripts (dc-create.js, aws-keys.js) log to the same file when `WT_DEBUG=1` is set.
+
+```bash
+# In one terminal, run with debug:
+wt --debug
+
+# In another terminal, tail the log:
+tail -f $TMPDIR/wt-debug.log
+```
+
+## Node.js Scripts
+
+All scripts are in `worktree-flow/`. Run them directly with `node` or via package.json scripts.
 
 ## Worktree Lifecycle
 

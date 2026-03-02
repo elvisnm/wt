@@ -264,6 +264,7 @@ dash: {
     list: [
       { name: 'web', port: 3000 },
       { name: 'api', port: 4000 },
+      { name: 'sync', port: 5000, processes: ['combined_sync', 'listings_sync'] },
     ],
     runningCheck: 'devTab',
     docker: { manager: 'pm2' },
@@ -274,7 +275,8 @@ dash: {
 | Field | Default | Description |
 |---|---|---|
 | `manager` | `'pm2'` | `'pm2'` or `'static'`. Use `'static'` when services don't run under PM2 (e.g. turbo, vite) |
-| `list` | `[]` | Service entries with `name` and `port`. Should mirror `services.ports` |
+| `list` | `[]` | Service entries with `name`, `port`, and optional `processes`. Should mirror `services.ports` |
+| `list[].processes` | `undefined` | Array of PM2 process names when they differ from `name`. Status is online if any listed process is running |
 | `runningCheck` | `'pm2'` | `'pm2'` or `'devTab'`. How the dashboard checks if local services are running |
 | `docker` | `undefined` | Override for Docker containers. Set `{ manager: 'pm2' }` when Docker uses PM2 but local doesn't |
 
