@@ -846,6 +846,7 @@ func renderGuide() string {
 	// Footer
 	sections = append(sections, []string{
 		"",
+		guideCenterLine(ansiDim+"Version "+version+" - @elvisnm"+ansiReset, w),
 		guideCenterLine(ansiDim+"Press "+ansiReset+guideKey("?")+ansiDim+" for all keybindings"+ansiReset, w),
 	})
 
