@@ -234,6 +234,8 @@ function copy_env_files(repo_root, worktree_path) {
     if (fs.existsSync(src)) {
       fs.mkdirSync(path.dirname(dst), { recursive: true });
       fs.copyFileSync(src, dst);
+    } else {
+      console.warn(`Warning: env file not found: ${rel}`);
     }
   }
 }
