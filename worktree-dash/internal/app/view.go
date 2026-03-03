@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
 
@@ -23,9 +24,9 @@ func (m Model) View() string {
 	// The right pane (terminal) is managed natively by tmux.
 
 	// 1 - Active Tabs panel
-	labels := m.term_mgr.TabLabels()
-	tab_infos := make([]ui.TabInfo, len(labels))
-	for i, l := range labels {
+	tab_labels := m.term_mgr.TabLabels()
+	tab_infos := make([]ui.TabInfo, len(tab_labels))
+	for i, l := range tab_labels {
 		tab_infos[i] = ui.TabInfo{
 			Index:  l.Index,
 			Label:  l.Label,
@@ -71,21 +72,21 @@ func (m Model) View() string {
 		var picker_title string
 		switch m.picker_context {
 		case pickerDB:
-			picker_title = LabelDatabase
+			picker_title = labels.Database
 			if selected_wt != nil {
-				picker_title = tab_label(LabelDatabase, selected_wt.Alias)
+				picker_title = labels.Tab(labels.Database, selected_wt.Alias)
 			}
 		case pickerMaintenance:
-			picker_title = LabelMaintenance
+			picker_title = labels.Maintenance
 		case pickerRemove:
-			picker_title = LabelRemove
+			picker_title = labels.Remove
 			if selected_wt != nil {
-				picker_title = tab_label(LabelRemove, selected_wt.Alias)
+				picker_title = labels.Tab(labels.Remove, selected_wt.Alias)
 			}
 		default:
-			picker_title = LabelActions
+			picker_title = labels.Actions
 			if selected_wt != nil {
-				picker_title = tab_label(LabelActions, selected_wt.Alias)
+				picker_title = labels.Tab(labels.Actions, selected_wt.Alias)
 			}
 		}
 		picker_h := len(m.picker_actions) + 2

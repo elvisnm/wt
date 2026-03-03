@@ -10,6 +10,7 @@ import (
 
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/docker"
+	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/pm2"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/ui"
@@ -417,11 +418,11 @@ func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *t
 	case "devTab":
 		for i := range wts {
 			if wts[i].Type == worktree.TypeLocal && term_mgr != nil {
-				dev_label := tab_label(LabelDev, wts[i].Alias)
-				create_label := tab_label(LabelCreate, wts[i].Alias)
+				dev_label := labels.Tab(labels.Dev, wts[i].Alias)
+				create_label := labels.Tab(labels.Create, wts[i].Alias)
 				wts[i].Running = term_mgr.IsLabelAlive(dev_label) ||
 					term_mgr.IsLabelAlive(create_label) ||
-					term_mgr.IsLabelAlive(LabelCreate)
+					term_mgr.IsLabelAlive(labels.Create)
 				debug_log("[discovery]   %s running=%v (devTab)", wts[i].Alias, wts[i].Running)
 			}
 		}

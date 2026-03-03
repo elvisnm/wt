@@ -162,7 +162,6 @@ async function main() {
   const existing = find_existing_worktrees(worktrees_dir);
   debug('main: found ' + existing.length + ' existing worktrees in ' + worktrees_dir);
   const alias_var = config ? (config.env.worktreeVars.alias || 'WORKTREE_ALIAS') : 'WORKTREE_ALIAS';
-  const existing_aliases = existing.map((wt) => read_env(wt, alias_var)).filter(Boolean);
   const existing_info = existing.map((wt) => {
     const alias = read_env(wt, alias_var);
     const name = path.basename(wt);
@@ -170,6 +169,7 @@ async function main() {
     const status = container ? get_container_status(container) : 'unknown';
     return { path: wt, name, alias, container, status };
   });
+  const existing_aliases = existing_info.map((w) => w.alias).filter(Boolean);
 
   // Step 1: What do you want to do?
   const stopped = existing_info.filter((w) => w.status === 'exited' || w.status === 'created');

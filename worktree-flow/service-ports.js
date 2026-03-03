@@ -111,44 +111,6 @@ function find_free_offset(initial_offset) {
   return initial_offset;
 }
 
-/**
- * Config-aware getter for service ports.
- * @param {object|null} cfg - Config object (if null, returns hardcoded SERVICE_PORTS)
- */
-function get_service_ports(cfg) {
-  return cfg ? cfg.services.ports : SERVICE_PORTS;
-}
-
-/**
- * Config-aware getter for minimal services list.
- * @param {object|null} cfg - Config object
- */
-function get_minimal_services(cfg) {
-  return cfg && cfg.services.modes && cfg.services.modes.minimal
-    ? cfg.services.modes.minimal
-    : MINIMAL_SERVICES;
-}
-
-/**
- * Config-aware getter for valid service modes.
- * @param {object|null} cfg - Config object
- */
-function get_valid_service_modes(cfg) {
-  return cfg && cfg.services.modes
-    ? Object.keys(cfg.services.modes)
-    : VALID_SERVICE_MODES;
-}
-
-/**
- * Config-aware getter for service mode filters.
- * @param {object|null} cfg - Config object
- */
-function get_service_mode_filters(cfg) {
-  return cfg && cfg.services.modes
-    ? cfg.services.modes
-    : SERVICE_MODE_FILTERS;
-}
-
 module.exports = {
   SERVICE_PORTS,
   SERVICE_MODE_FILTERS,
@@ -158,8 +120,4 @@ module.exports = {
   compute_ports,
   format_port_table,
   find_free_offset,
-  get_service_ports,
-  get_minimal_services,
-  get_valid_service_modes,
-  get_service_mode_filters,
 };

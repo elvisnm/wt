@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   config, config_mod, run, resolve_worktrees_dir, find_docker_worktrees,
-  read_env, read_container_name, read_service_mode,
+  read_env_multi, read_container_name, read_service_mode,
 } = require('./lib/utils');
 
 function get_container_stats() {
@@ -180,24 +180,25 @@ function main() {
     const name_prefix = config ? config.name + '-' : '';
     const shared = config ? config_mod.get_compose_info(config, wt_path) : null;
 
+    const env = read_env_multi(wt_path, ['WORKTREE_ALIAS', 'WORKTREE_HOST_PORT_OFFSET', 'WORKTREE_PORT_OFFSET']);
     let alias, info, stats_data;
 
     if (shared) {
       // Shared compose strategy: multiple containers per worktree
-      alias = read_env(wt_path, 'WORKTREE_ALIAS') || shared.slug;
+      alias = env.WORKTREE_ALIAS || shared.slug;
       info = get_project_container_info(shared);
       const agg = aggregate_project_stats(container_stats, `${shared.project}-`);
       stats_data = agg ? { mem: agg.mem, cpu: agg.cpu } : null;
     } else {
       // Generate strategy: single container per worktree
       const container_name = read_container_name(wt_path) || `${name_prefix}${path.basename(wt_path)}`;
-      alias = read_env(wt_path, 'WORKTREE_ALIAS') || container_name.replace(new RegExp(`^${name_prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), '');
+      alias = env.WORKTREE_ALIAS || container_name.replace(new RegExp(`^${name_prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), '');
       info = get_container_info(container_name);
       const raw_stats = container_stats.get(container_name);
       stats_data = raw_stats ? { mem: raw_stats.mem.split('/')[0].trim(), cpu: raw_stats.cpu } : null;
     }
 
-    const offset = read_env(wt_path, 'WORKTREE_HOST_PORT_OFFSET') || read_env(wt_path, 'WORKTREE_PORT_OFFSET') || '?';
+    const offset = env.WORKTREE_HOST_PORT_OFFSET || env.WORKTREE_PORT_OFFSET || '?';
     const mode = read_service_mode(wt_path);
 
     let status;

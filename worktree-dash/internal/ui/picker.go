@@ -17,20 +17,32 @@ type PickerAction struct {
 	Desc  string
 }
 
+// Shared actions reused across multiple picker slices.
+var (
+	actionClaude           = PickerAction{Key: "c", Label: labels.Claude, Desc: "Claude Code"}
+	actionRemove           = PickerAction{Key: "x", Label: labels.Remove, Desc: "Remove worktree"}
+	actionZsh              = PickerAction{Key: "z", Label: labels.Zsh, Desc: "Host shell"}
+	actionContainerShell   = PickerAction{Key: "b", Label: labels.Shell, Desc: "Container shell"}
+	actionLocalShell       = PickerAction{Key: "b", Label: labels.Shell, Desc: "Worktree shell"}
+	actionContainerRestart = PickerAction{Key: "r", Label: "Restart", Desc: "Restart container"}
+	actionContainerStop    = PickerAction{Key: "t", Label: "Stop", Desc: "Stop container"}
+	actionInfo             = PickerAction{Key: "i", Label: "Info", Desc: "Worktree info"}
+)
+
 var WorktreeActions = []PickerAction{
-	{Key: "b", Label: labels.Shell, Desc: "Container shell"},
-	{Key: "z", Label: labels.Zsh, Desc: "Host shell"},
-	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
-	{Key: "r", Label: "Restart", Desc: "Restart container"},
-	{Key: "t", Label: "Stop", Desc: "Stop container"},
-	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
+	actionContainerShell,
+	actionZsh,
+	actionClaude,
+	actionContainerRestart,
+	actionContainerStop,
+	actionRemove,
 }
 
 var StoppedActions = []PickerAction{
 	{Key: "u", Label: "Start", Desc: "Start container"},
-	{Key: "z", Label: labels.Zsh, Desc: "Host shell"},
-	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
-	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
+	actionZsh,
+	actionClaude,
+	actionRemove,
 }
 
 var DatabaseActions = []PickerAction{
@@ -48,28 +60,28 @@ var MaintenanceActions = []PickerAction{
 
 var LocalActions = []PickerAction{
 	{Key: "u", Label: "Start", Desc: "Start dev server"},
-	{Key: "b", Label: labels.Shell, Desc: "Worktree shell"},
-	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
+	actionLocalShell,
+	actionClaude,
 	{Key: "n", Label: labels.Create, Desc: "Create container"},
-	{Key: "i", Label: "Info", Desc: "Worktree info"},
-	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
+	actionInfo,
+	actionRemove,
 }
 
 var HostBuildRunningActions = []PickerAction{
 	{Key: "e", Label: labels.Build, Desc: "Esbuild watch"},
-	{Key: "b", Label: labels.Shell, Desc: "Container shell"},
-	{Key: "z", Label: labels.Zsh, Desc: "Host shell"},
-	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
-	{Key: "r", Label: "Restart", Desc: "Restart container"},
-	{Key: "t", Label: "Stop", Desc: "Stop container"},
-	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
+	actionContainerShell,
+	actionZsh,
+	actionClaude,
+	actionContainerRestart,
+	actionContainerStop,
+	actionRemove,
 }
 
 var HostBuildStoppedActions = []PickerAction{
 	{Key: "u", Label: "Start + Build", Desc: "Container + esbuild"},
-	{Key: "z", Label: labels.Zsh, Desc: "Host shell"},
-	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
-	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
+	actionZsh,
+	actionClaude,
+	actionRemove,
 }
 
 var RemoveActions = []PickerAction{
@@ -78,14 +90,14 @@ var RemoveActions = []PickerAction{
 }
 
 var LocalRunningActions = []PickerAction{
-	{Key: "b", Label: labels.Shell, Desc: "Worktree shell"},
-	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
+	actionLocalShell,
+	actionClaude,
 	{Key: "l", Label: labels.Logs, Desc: "Dev logs"},
 	{Key: "r", Label: "Restart", Desc: "Restart services"},
 	{Key: "s", Label: "Services", Desc: "Manage services"},
-	{Key: "i", Label: "Info", Desc: "Worktree info"},
+	actionInfo,
 	{Key: "t", Label: "Stop", Desc: "Stop dev server"},
-	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
+	actionRemove,
 }
 
 // FilterDatabaseActions returns DatabaseActions filtered by config feature flags.

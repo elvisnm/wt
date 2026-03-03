@@ -2,7 +2,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const {
-  config, config_mod, run, resolve_worktree_path, read_env, read_container_name, sanitize_name,
+  config, config_mod, run, resolve_worktree_path, read_env_multi, read_container_name, sanitize_name,
 } = require('./lib/utils');
 const { get_lan_ip, build_lan_domain } = require('./lan-ip');
 const { generate_traefik_config, find_traefik_dir } = require('./generate-docker-compose');
@@ -53,9 +53,10 @@ function main() {
   }
 
   const container_prefix = config ? config.name + '-' : '';
-  const alias = read_env(worktree_path, 'WORKTREE_ALIAS') || read_container_name(worktree_path)?.replace(new RegExp(`^${container_prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), '') || path.basename(worktree_path);
+  const env = read_env_multi(worktree_path, ['WORKTREE_ALIAS', 'WORKTREE_HOST_PORT_OFFSET', 'WORKTREE_PORT_OFFSET']);
+  const alias = env.WORKTREE_ALIAS || read_container_name(worktree_path)?.replace(new RegExp(`^${container_prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), '') || path.basename(worktree_path);
   const safe_name = sanitize_name(alias);
-  const offset_str = read_env(worktree_path, 'WORKTREE_HOST_PORT_OFFSET') || read_env(worktree_path, 'WORKTREE_PORT_OFFSET');
+  const offset_str = env.WORKTREE_HOST_PORT_OFFSET || env.WORKTREE_PORT_OFFSET;
   const port_offset = offset_str ? Number.parseInt(offset_str, 10) : 0;
   const container_name = config ? config_mod.container_name(config, safe_name) : safe_name;
   const localhost_domain = config ? config_mod.domain_for(config, safe_name) : `${safe_name}.localhost`;

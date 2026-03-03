@@ -4,8 +4,7 @@
  *
  * Covers: SERVICE_PORTS, SERVICE_MODE_FILTERS, MINIMAL_SERVICES,
  * VALID_SERVICE_MODES, DEFAULT_SERVICE_MODE, compute_ports, format_port_table,
- * find_free_offset, get_service_ports, get_minimal_services,
- * get_valid_service_modes, get_service_mode_filters.
+ * find_free_offset.
  */
 
 /**
@@ -439,132 +438,6 @@ describe('find_free_offset', () => {
   });
 });
 
-// ── Config-aware getters ─────────────────────────────────────────────────
-
-describe('get_service_ports', () => {
-  test('returns SERVICE_PORTS when cfg is null', () => {
-    const result = sp.get_service_ports(null);
-    expect(result).toEqual(sp.SERVICE_PORTS);
-  });
-
-  test('returns config ports when cfg is provided', () => {
-    const cfg = {
-      services: {
-        ports: { web: 3000, api: 4000, worker: 5000 },
-      },
-    };
-    const result = sp.get_service_ports(cfg);
-    expect(result).toEqual({ web: 3000, api: 4000, worker: 5000 });
-  });
-
-  test('returns empty object from config with empty ports', () => {
-    const cfg = { services: { ports: {} } };
-    const result = sp.get_service_ports(cfg);
-    expect(result).toEqual({});
-  });
-});
-
-describe('get_minimal_services', () => {
-  test('returns MINIMAL_SERVICES when cfg is null', () => {
-    const result = sp.get_minimal_services(null);
-    expect(result).toEqual(sp.MINIMAL_SERVICES);
-  });
-
-  test('returns config minimal list when cfg has modes.minimal', () => {
-    const cfg = {
-      services: {
-        modes: { minimal: ['web', 'api'] },
-      },
-    };
-    const result = sp.get_minimal_services(cfg);
-    expect(result).toEqual(['web', 'api']);
-  });
-
-  test('returns default MINIMAL_SERVICES when cfg has no modes', () => {
-    const cfg = { services: {} };
-    const result = sp.get_minimal_services(cfg);
-    expect(result).toEqual(sp.MINIMAL_SERVICES);
-  });
-
-  test('returns default MINIMAL_SERVICES when cfg modes has no minimal key', () => {
-    const cfg = {
-      services: {
-        modes: { full: null, custom: ['svc1'] },
-      },
-    };
-    const result = sp.get_minimal_services(cfg);
-    expect(result).toEqual(sp.MINIMAL_SERVICES);
-  });
-});
-
-describe('get_valid_service_modes', () => {
-  test('returns VALID_SERVICE_MODES when cfg is null', () => {
-    const result = sp.get_valid_service_modes(null);
-    expect(result).toEqual(sp.VALID_SERVICE_MODES);
-  });
-
-  test('returns mode keys from config when cfg has modes', () => {
-    const cfg = {
-      services: {
-        modes: { minimal: ['web'], full: null, debug: ['web', 'api'] },
-      },
-    };
-    const result = sp.get_valid_service_modes(cfg);
-    expect(result).toEqual(['minimal', 'full', 'debug']);
-  });
-
-  test('returns default modes when cfg has no modes property', () => {
-    const cfg = { services: {} };
-    const result = sp.get_valid_service_modes(cfg);
-    expect(result).toEqual(sp.VALID_SERVICE_MODES);
-  });
-
-  test('returns empty array when cfg modes is empty', () => {
-    const cfg = {
-      services: { modes: {} },
-    };
-    const result = sp.get_valid_service_modes(cfg);
-    expect(result).toEqual([]);
-  });
-});
-
-describe('get_service_mode_filters', () => {
-  test('returns SERVICE_MODE_FILTERS when cfg is null', () => {
-    const result = sp.get_service_mode_filters(null);
-    expect(result).toEqual(sp.SERVICE_MODE_FILTERS);
-  });
-
-  test('returns config modes when cfg has modes', () => {
-    const cfg = {
-      services: {
-        modes: {
-          minimal: ['web', 'api'],
-          full: null,
-        },
-      },
-    };
-    const result = sp.get_service_mode_filters(cfg);
-    expect(result).toEqual({
-      minimal: ['web', 'api'],
-      full: null,
-    });
-  });
-
-  test('returns default filters when cfg has no modes property', () => {
-    const cfg = { services: {} };
-    const result = sp.get_service_mode_filters(cfg);
-    expect(result).toEqual(sp.SERVICE_MODE_FILTERS);
-  });
-
-  test('returns config modes even if empty object', () => {
-    const cfg = {
-      services: { modes: {} },
-    };
-    const result = sp.get_service_mode_filters(cfg);
-    expect(result).toEqual({});
-  });
-});
-
 // ── Cross-function integration ───────────────────────────────────────────
 
 describe('integration', () => {
@@ -580,38 +453,12 @@ describe('integration', () => {
   });
 
   test('MINIMAL_SERVICES aligns with SERVICE_MODE_FILTERS.minimal', () => {
-    expect(sp.get_minimal_services(null)).toEqual(
-      sp.get_service_mode_filters(null).minimal
-    );
+    expect(sp.MINIMAL_SERVICES).toEqual(sp.SERVICE_MODE_FILTERS.minimal);
   });
 
-  test('VALID_SERVICE_MODES matches get_service_mode_filters keys', () => {
-    const filters = sp.get_service_mode_filters(null);
-    expect([...sp.get_valid_service_modes(null)].sort()).toEqual(
-      Object.keys(filters).sort()
+  test('VALID_SERVICE_MODES matches SERVICE_MODE_FILTERS keys', () => {
+    expect([...sp.VALID_SERVICE_MODES].sort()).toEqual(
+      Object.keys(sp.SERVICE_MODE_FILTERS).sort()
     );
-  });
-
-  test('config-aware getters are consistent with each other', () => {
-    const cfg = {
-      services: {
-        ports: { web: 8080, api: 9090 },
-        modes: {
-          lite: ['web'],
-          full: null,
-        },
-      },
-    };
-
-    const ports = sp.get_service_ports(cfg);
-    expect(ports).toEqual({ web: 8080, api: 9090 });
-
-    const modes = sp.get_valid_service_modes(cfg);
-    expect(modes).toEqual(['lite', 'full']);
-
-    const filters = sp.get_service_mode_filters(cfg);
-    expect(Object.keys(filters).sort()).toEqual([...modes].sort());
-    expect(filters.lite).toEqual(['web']);
-    expect(filters.full).toBeNull();
   });
 });

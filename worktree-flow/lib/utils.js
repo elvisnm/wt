@@ -107,6 +107,26 @@ function read_env(worktree_path, key) {
   }
 }
 
+/**
+ * Read multiple keys from a worktree env file in a single read.
+ * Returns an object mapping each key to its value (or null if not found).
+ */
+function read_env_multi(worktree_path, keys) {
+  const env_path = path.join(worktree_path, get_env_filename());
+  const result = {};
+  for (const k of keys) result[k] = null;
+  try {
+    const content = fs.readFileSync(env_path, 'utf8');
+    for (const key of keys) {
+      const match = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
+      if (match) result[key] = match[1].trim();
+    }
+  } catch {
+    // file missing or unreadable — all keys stay null
+  }
+  return result;
+}
+
 // ── Port offset calculation ──────────────────────────────────────────────
 
 /**
@@ -288,6 +308,7 @@ module.exports = {
   resolve_worktree_path,
   find_docker_worktrees,
   read_env,
+  read_env_multi,
   compute_auto_offset,
   read_offset,
   get_container_name,

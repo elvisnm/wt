@@ -1,7 +1,5 @@
 package labels
 
-import "fmt"
-
 // Terminal session label constants.
 // Used by app, ui, and terminal packages.
 const (
@@ -36,5 +34,5 @@ const (
 
 // Tab formats a label with an alias suffix: "Prefix — alias".
 func Tab(prefix, alias string) string {
-	return fmt.Sprintf("%s%s%s", prefix, Sep, alias)
+	return prefix + Sep + alias
 }

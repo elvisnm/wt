@@ -2,7 +2,7 @@ const { execSync } = require('child_process');
 const path = require('path');
 const {
   config, config_mod, run, find_docker_worktrees,
-  read_env, read_container_name, resolve_worktrees_dir,
+  read_env_multi, read_container_name, resolve_worktrees_dir,
 } = require('./lib/utils');
 
 process.on('SIGINT', () => process.exit(0));
@@ -41,9 +41,14 @@ function get_shared_compose_status(shared_info) {
 }
 
 function get_worktree_list(worktrees_dir) {
+  const lan_domain_key = config ? config_mod.env_var(config, 'lanDomain') : 'LAN_DOMAIN';
+  const env_keys = ['WORKTREE_ALIAS', 'WORKTREE_HOST_BUILD'];
+  if (lan_domain_key) env_keys.push(lan_domain_key);
+
   return find_docker_worktrees(worktrees_dir).map((entry) => {
     const wt = entry.path;
-    const alias = read_env(wt, 'WORKTREE_ALIAS');
+    const env = read_env_multi(wt, env_keys);
+    const alias = env.WORKTREE_ALIAS;
     const name = entry.name;
     const shared = config ? config_mod.get_compose_info(config, wt) : null;
 
@@ -60,9 +65,8 @@ function get_worktree_list(worktrees_dir) {
       status = container ? get_container_status(container) : null;
     }
 
-    const host_build = read_env(wt, 'WORKTREE_HOST_BUILD') === 'true';
-    const lan_domain_key = config ? config_mod.env_var(config, 'lanDomain') : 'LAN_DOMAIN';
-    const lan_domain = lan_domain_key ? read_env(wt, lan_domain_key) : null;
+    const host_build = env.WORKTREE_HOST_BUILD === 'true';
+    const lan_domain = lan_domain_key ? env[lan_domain_key] : null;
     return { path: wt, name, alias, container, status, host_build, lan_domain };
   });
 }
