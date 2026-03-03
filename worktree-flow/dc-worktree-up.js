@@ -4,7 +4,8 @@ const path = require('path');
 const { SERVICE_PORTS, compute_ports, format_port_table, find_free_offset, VALID_SERVICE_MODES } = require('./service-ports');
 const { get_lan_ip, build_lan_domain } = require('./lan-ip');
 const {
-  config, config_mod, run, auto_alias, has_ref, compute_auto_offset, resolve_worktrees_dir,
+  config, config_mod, run, auto_alias, has_ref, compute_auto_offset,
+  resolve_worktrees_dir, update_env_key, remove_env_key,
 } = require('./lib/utils');
 
 const scripts_dir = __dirname;
@@ -406,25 +407,13 @@ function ensure_env_defaults(env_file, alias) {
 
 function ensure_env_offset(env_file, offset) {
   const offset_var = config ? config_mod.worktree_var(config, 'hostPortOffset') : 'WORKTREE_HOST_PORT_OFFSET';
-  let content = fs.readFileSync(env_file, 'utf8');
-  if (content.includes(`${offset_var}=`)) {
-    content = content.replace(new RegExp(`^${offset_var}=.+$`, 'm'), `${offset_var}=${offset}`);
-  } else {
-    content = content.trimEnd() + `\n${offset_var}=${offset}\n`;
-  }
-  fs.writeFileSync(env_file, content, 'utf8');
+  update_env_key(env_file, offset_var, offset);
 }
 
 function ensure_host_build(env_file, worktree_path, repo_root, enable) {
   const host_build_var = config ? config_mod.worktree_var(config, 'hostBuild') : 'WORKTREE_HOST_BUILD';
-  let content = fs.readFileSync(env_file, 'utf8');
   if (enable) {
-    if (!content.includes(`${host_build_var}=`)) {
-      content = content.trimEnd() + `\n${host_build_var}=true\n`;
-    } else {
-      content = content.replace(new RegExp(`^${host_build_var}=.+$`, 'm'), `${host_build_var}=true`);
-    }
-    fs.writeFileSync(env_file, content, 'utf8');
+    update_env_key(env_file, host_build_var, 'true');
 
     const nm_link = path.join(worktree_path, 'node_modules');
     const nm_target = path.join(repo_root, 'node_modules');
@@ -443,11 +432,8 @@ function ensure_host_build(env_file, worktree_path, repo_root, enable) {
       console.log(`Symlinked node_modules -> ${nm_target}`);
     }
   } else {
-    if (content.includes(`${host_build_var}=`)) {
-      content = content.replace(new RegExp(`^${host_build_var}=.+\\n?`, 'm'), '');
-      fs.writeFileSync(env_file, content, 'utf8');
-      console.log('Disabled host-build mode.');
-    }
+    remove_env_key(env_file, host_build_var);
+    console.log('Disabled host-build mode.');
     const nm_link = path.join(worktree_path, 'node_modules');
     try {
       const stat = fs.lstatSync(nm_link);

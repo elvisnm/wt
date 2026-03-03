@@ -131,8 +131,8 @@ function format_env_lines(options) {
     const db_container_host = config ? config.database.containerHost : 'mongo';
     const db_port = config ? config.database.port : 27017;
     const replica_set = config ? config.database.replicaSet : 'rl0';
-    const redis_host = config ? config.redis.containerHost : 'redis';
-    const redis_port = config ? config.redis.port : 6379;
+    const redis_host = config && config.redis ? config.redis.containerHost : 'redis';
+    const redis_port = config && config.redis ? config.redis.port : 6379;
     const dev_heap = config ? config.features.devHeap : 2048;
 
     const lines = [

@@ -4,17 +4,9 @@ const {
   config, config_mod, run, find_docker_worktrees,
   read_env_multi, read_container_name, resolve_worktrees_dir,
 } = require('./lib/utils');
+const { ALL_SERVICE_NAMES } = require('./service-ports');
 
 process.on('SIGINT', () => process.exit(0));
-
-const ALL_SERVICE_NAMES = config
-  ? Object.keys(config.services.ports)
-  : [
-    'app', 'api', 'socket_server', 'serviceHostServer',
-    'combined_sync', 'listings_sync', 'admin_server', 'ship_server',
-    'job_server', 'insights_server', 'cache_server',
-    'order_table_server', 'inventory_table_server',
-  ];
 
 function get_container_status(name) {
   try { return run(`docker inspect --format={{.State.Status}} "${name}"`); }

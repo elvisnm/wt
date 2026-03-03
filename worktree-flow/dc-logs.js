@@ -2,6 +2,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { config, config_mod, resolve_worktree_path, get_container_name } = require('./lib/utils');
+const { ALL_SERVICE_NAMES } = require('./service-ports');
 
 function parse_args(argv) {
   const options = {
@@ -69,9 +70,7 @@ function main() {
     console.log('  pnpm dc:logs <name> -s app                 Logs for a specific PM2 service');
     console.log('  pnpm dc:logs <name> -s api -f              Follow specific service');
     console.log('');
-    console.log('Services: app, api, socket_server, admin_server, ship_server,');
-    console.log('          job_server, combined_sync, listings_sync, cache_server,');
-    console.log('          insights_server, order_table_server, inventory_table_server');
+    console.log(`Services: ${ALL_SERVICE_NAMES.join(', ')}`);
     process.exit(1);
   }
 

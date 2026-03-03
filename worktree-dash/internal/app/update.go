@@ -519,13 +519,7 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, Keys.Quit), key.Matches(msg, Keys.CtrlC):
 		m.confirm_open = true
 		m.confirm_prompt = "Quit worktree?"
-		m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-			mdl.close_preview()
-			if mdl.term_mgr.HasLiveSessions() {
-				mdl.term_mgr.CloseAll()
-			}
-			return *mdl, tea.Quit
-		}
+		m.confirm_action = quit_action
 		return m, nil
 
 	case key.Matches(msg, Keys.Tab):
@@ -957,13 +951,7 @@ func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.picker_open = false
 		m.confirm_open = true
 		m.confirm_prompt = "Quit worktree?"
-		m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-			mdl.close_preview()
-			if mdl.term_mgr.HasLiveSessions() {
-				mdl.term_mgr.CloseAll()
-			}
-			return *mdl, tea.Quit
-		}
+		m.confirm_action = quit_action
 		return m, nil
 
 	case key.Matches(msg, Keys.Escape):

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elvisnm/wt/internal/cmdutil"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/worktree"
 )
@@ -22,11 +23,11 @@ func apply_stats_to_worktrees(
 		prefix = cfg.ContainerPrefix()
 	}
 
-	stats := parse_json_lines(stats_json)
+	stats := cmdutil.ParseJSONLines(stats_json)
 	stats_map := make(map[string]map[string]interface{})
 
 	for _, s := range stats {
-		name := get_string_field(s, "Name", "name")
+		name := cmdutil.GetStringField(s, "Name", "name")
 		if name != "" && strings.HasPrefix(name, prefix) {
 			stats_map[name] = s
 		}
@@ -36,13 +37,13 @@ func apply_stats_to_worktrees(
 		wt := &worktrees[i]
 		s, ok := stats_map[wt.Container]
 		if ok {
-			wt.CPU = get_string_field(s, "CPUPerc")
-			mem_usage := get_string_field(s, "MemUsage")
+			wt.CPU = cmdutil.GetStringField(s, "CPUPerc")
+			mem_usage := cmdutil.GetStringField(s, "MemUsage")
 			parts := strings.SplitN(mem_usage, "/", 2)
 			if len(parts) > 0 {
 				wt.Mem = strings.TrimSpace(parts[0])
 			}
-			wt.MemPct = get_string_field(s, "MemPerc")
+			wt.MemPct = cmdutil.GetStringField(s, "MemPerc")
 		} else if !wt.Running {
 			wt.CPU = ""
 			wt.Mem = ""

@@ -2,11 +2,13 @@ package docker
 
 import (
 	"testing"
+
+	"github.com/elvisnm/wt/internal/cmdutil"
 )
 
 func TestParseJsonLines_Single(t *testing.T) {
 	raw := `{"Names":"myapp-feat","State":"running","Status":"Up 2 hours (healthy)"}`
-	result := parse_json_lines(raw)
+	result := cmdutil.ParseJSONLines(raw)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(result))
 	}
@@ -19,7 +21,7 @@ func TestParseJsonLines_Multiple(t *testing.T) {
 	raw := `{"Names":"myapp-feat","State":"running"}
 {"Names":"myapp-fix","State":"exited"}
 {"Names":"myapp-dev","State":"running"}`
-	result := parse_json_lines(raw)
+	result := cmdutil.ParseJSONLines(raw)
 	if len(result) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(result))
 	}
@@ -34,7 +36,7 @@ func TestParseJsonLines_Multiple(t *testing.T) {
 }
 
 func TestParseJsonLines_EmptyInput(t *testing.T) {
-	result := parse_json_lines("")
+	result := cmdutil.ParseJSONLines("")
 	if len(result) != 0 {
 		t.Errorf("expected 0 results for empty input, got %d", len(result))
 	}
@@ -47,7 +49,7 @@ func TestParseJsonLines_BlankLines(t *testing.T) {
 {"Names":"myapp-fix"}
 
 `
-	result := parse_json_lines(raw)
+	result := cmdutil.ParseJSONLines(raw)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 results (ignoring blank lines), got %d", len(result))
 	}
@@ -57,7 +59,7 @@ func TestParseJsonLines_InvalidJson(t *testing.T) {
 	raw := `{"Names":"myapp-feat"}
 not valid json
 {"Names":"myapp-fix"}`
-	result := parse_json_lines(raw)
+	result := cmdutil.ParseJSONLines(raw)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 results (skipping invalid), got %d", len(result))
 	}
@@ -65,7 +67,7 @@ not valid json
 
 func TestParseJsonLines_NestedJson(t *testing.T) {
 	raw := `{"name":"web","pm2_env":{"status":"online"},"monit":{"memory":104857600,"cpu":2.5}}`
-	result := parse_json_lines(raw)
+	result := cmdutil.ParseJSONLines(raw)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(result))
 	}
@@ -83,7 +85,7 @@ func TestGetStringField_SingleKey(t *testing.T) {
 		"Names": "myapp-feat",
 		"State": "running",
 	}
-	got := get_string_field(data, "Names")
+	got := cmdutil.GetStringField(data, "Names")
 	if got != "myapp-feat" {
 		t.Errorf("expected 'myapp-feat', got %q", got)
 	}
@@ -136,7 +138,7 @@ func TestGetStringField_FallbackKey(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := get_string_field(tc.data, tc.keys...)
+			got := cmdutil.GetStringField(tc.data, tc.keys...)
 			if got != tc.expected {
 				t.Errorf("expected %q, got %q", tc.expected, got)
 			}
@@ -146,7 +148,7 @@ func TestGetStringField_FallbackKey(t *testing.T) {
 
 func TestGetStringField_NilMap(t *testing.T) {
 	// Passing nil data should not panic
-	got := get_string_field(nil, "key")
+	got := cmdutil.GetStringField(nil, "key")
 	if got != "" {
 		t.Errorf("expected empty string for nil map, got %q", got)
 	}

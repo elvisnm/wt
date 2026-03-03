@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/elvisnm/wt/internal/cmdutil"
 	"github.com/elvisnm/wt/internal/worktree"
 )
 
@@ -22,7 +23,7 @@ func parse_services_from_json(raw string, wt_path string) []worktree.Service {
 	}
 
 	for _, proc := range procs {
-		name := get_string_field(proc, "name")
+		name := cmdutil.GetStringField(proc, "name")
 		if name == "" {
 			continue
 		}
@@ -30,7 +31,7 @@ func parse_services_from_json(raw string, wt_path string) []worktree.Service {
 		pm_cwd := ""
 		env_map, has_env := get_env(proc)
 		if has_env {
-			pm_cwd = get_string_field(env_map, "pm_cwd")
+			pm_cwd = cmdutil.GetStringField(env_map, "pm_cwd")
 		}
 
 		if wt_path != "" {
@@ -45,7 +46,7 @@ func parse_services_from_json(raw string, wt_path string) []worktree.Service {
 		}
 
 		if has_env {
-			svc.Status = get_string_field(env_map, "status")
+			svc.Status = cmdutil.GetStringField(env_map, "status")
 			if restart, ok := env_map["restart_time"].(float64); ok {
 				svc.RestartCount = int(restart)
 			}
@@ -88,12 +89,12 @@ func find_running_worktrees(raw string, wt_paths map[string]string) map[string]b
 			continue
 		}
 
-		status := get_string_field(env_map, "status")
+		status := cmdutil.GetStringField(env_map, "status")
 		if status != "online" {
 			continue
 		}
 
-		pm_cwd := get_string_field(env_map, "pm_cwd")
+		pm_cwd := cmdutil.GetStringField(env_map, "pm_cwd")
 		if pm_cwd == "" {
 			continue
 		}
@@ -188,9 +189,9 @@ func TestGetStringField(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := get_string_field(tc.data, tc.keys...)
+			got := cmdutil.GetStringField(tc.data, tc.keys...)
 			if got != tc.expected {
-				t.Errorf("get_string_field(%v, %v) = %q, want %q", tc.data, tc.keys, got, tc.expected)
+				t.Errorf("cmdutil.GetStringField(%v, %v) = %q, want %q", tc.data, tc.keys, got, tc.expected)
 			}
 		})
 	}
@@ -270,7 +271,7 @@ func TestGetEnv(t *testing.T) {
 				t.Errorf("get_env() has_env = %v, want %v", has, tc.has_env)
 			}
 			if has {
-				got_cwd := get_string_field(env, "pm_cwd")
+				got_cwd := cmdutil.GetStringField(env, "pm_cwd")
 				if got_cwd != tc.pm_cwd {
 					t.Errorf("get_env() pm_cwd = %q, want %q", got_cwd, tc.pm_cwd)
 				}

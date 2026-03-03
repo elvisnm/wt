@@ -2,24 +2,7 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { config, resolve_worktree_path, get_container_name } = require('./lib/utils');
-
-const ALL_SERVICE_NAMES = config
-  ? Object.keys(config.services.ports)
-  : [
-    'app',
-    'api',
-    'socket_server',
-    'serviceHostServer',
-    'combined_sync',
-    'listings_sync',
-    'admin_server',
-    'ship_server',
-    'job_server',
-    'insights_server',
-    'cache_server',
-    'order_table_server',
-    'inventory_table_server',
-  ];
+const { ALL_SERVICE_NAMES } = require('./service-ports');
 
 function print_usage() {
   console.log('Usage:');

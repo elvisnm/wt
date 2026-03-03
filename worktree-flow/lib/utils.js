@@ -297,6 +297,32 @@ function sanitize_name(name) {
   return name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
 }
 
+// ── Env file writing ─────────────────────────────────────────────────────
+
+/**
+ * Set a key=value in an env file. Updates existing key or appends new line.
+ */
+function update_env_key(env_path, key, value) {
+  let content = fs.readFileSync(env_path, 'utf8');
+  const updated = content.replace(new RegExp(`^${key}=.+$`, 'm'), `${key}=${value}`);
+  if (updated === content) {
+    content = content.trimEnd() + `\n${key}=${value}\n`;
+  } else {
+    content = updated;
+  }
+  fs.writeFileSync(env_path, content, 'utf8');
+}
+
+/**
+ * Remove a key from an env file. No-op if file or key doesn't exist.
+ */
+function remove_env_key(env_path, key) {
+  let content;
+  try { content = fs.readFileSync(env_path, 'utf8'); } catch { return; }
+  const updated = content.replace(new RegExp(`^${key}=.+\\n?`, 'm'), '');
+  if (updated !== content) fs.writeFileSync(env_path, updated, 'utf8');
+}
+
 // ── Exports ──────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -318,4 +344,6 @@ module.exports = {
   auto_alias,
   has_ref,
   sanitize_name,
+  update_env_key,
+  remove_env_key,
 };

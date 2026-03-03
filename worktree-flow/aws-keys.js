@@ -3,14 +3,10 @@ const path = require('path');
 const os = require('os');
 const readline = require('readline');
 
-const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-aws-keys-done');
-const DEBUG_LOG = path.join(os.tmpdir(), 'wt-debug.log');
+const { make_debug } = require('./lib/debug');
 
-function debug(msg) {
-  if (process.env.WT_DEBUG !== '1') return;
-  const ts = new Date().toTimeString().slice(0, 12);
-  try { fs.appendFileSync(DEBUG_LOG, `[${ts}] [aws-keys.js] ${msg}\n`); } catch {}
-}
+const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-aws-keys-done');
+const debug = make_debug('aws-keys.js');
 
 function detect_shell() {
   const shell = process.env.SHELL || '';

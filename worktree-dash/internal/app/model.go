@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -100,6 +101,24 @@ type Model struct {
 	cfg           *config.Config
 
 	layout ui.Layout
+}
+
+// cleanup_temp_files removes any temporary files created during the session.
+func (m *Model) cleanup_temp_files() {
+	if m.heihei_tmpfile != "" {
+		os.Remove(m.heihei_tmpfile)
+		m.heihei_tmpfile = ""
+	}
+}
+
+// quit_action is the shared confirm handler for both quit paths.
+func quit_action(mdl *Model) (Model, tea.Cmd) {
+	mdl.close_preview()
+	if mdl.term_mgr.HasLiveSessions() {
+		mdl.term_mgr.CloseAll()
+	}
+	mdl.cleanup_temp_files()
+	return *mdl, tea.Quit
 }
 
 // NewModelWithLayout creates a Model for inner mode with an existing tmux server and pane layout.

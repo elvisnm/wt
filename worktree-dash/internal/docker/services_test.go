@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elvisnm/wt/internal/cmdutil"
 	"github.com/elvisnm/wt/internal/worktree"
 )
 
@@ -26,7 +27,7 @@ func parse_pm2_services(pm2_json string, wt_name string) []worktree.Service {
 	}
 
 	for _, proc := range pm2_procs {
-		name := get_string_field(proc, "name")
+		name := cmdutil.GetStringField(proc, "name")
 		if name == "" {
 			continue
 		}
@@ -43,7 +44,7 @@ func parse_pm2_services(pm2_json string, wt_name string) []worktree.Service {
 
 		if env_raw, ok := proc["pm2_env"]; ok {
 			if env, ok := env_raw.(map[string]interface{}); ok {
-				svc.Status = get_string_field(env, "status")
+				svc.Status = cmdutil.GetStringField(env, "status")
 				if restart, ok := env["restart_time"].(float64); ok {
 					svc.RestartCount = int(restart)
 				}

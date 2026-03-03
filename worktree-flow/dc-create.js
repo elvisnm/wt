@@ -4,14 +4,10 @@ const path = require('path');
 const os = require('os');
 const { config, config_mod, run, find_docker_worktrees, read_env, auto_alias, resolve_worktrees_dir } = require('./lib/utils');
 
-const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-create-done');
-const DEBUG_LOG = path.join(os.tmpdir(), 'wt-debug.log');
+const { make_debug } = require('./lib/debug');
 
-function debug(msg) {
-  if (process.env.WT_DEBUG !== '1') return;
-  const ts = new Date().toTimeString().slice(0, 12);
-  try { fs.appendFileSync(DEBUG_LOG, `[${ts}] [dc-create.js] ${msg}\n`); } catch {}
-}
+const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-create-done');
+const debug = make_debug('dc-create.js');
 
 process.on('SIGINT', () => process.exit(0));
 

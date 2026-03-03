@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/elvisnm/wt/internal/cmdutil"
 	"github.com/elvisnm/wt/internal/worktree"
 )
 
@@ -14,7 +15,7 @@ func FetchServices(container string, wt_name string) []worktree.Service {
 		return nil
 	}
 
-	raw, err := run_cmd("docker", "exec", container, "pm2", "jlist")
+	raw, err := cmdutil.RunCmd("docker", "exec", container, "pm2", "jlist")
 	if err != nil {
 		return nil
 	}
@@ -34,7 +35,7 @@ func FetchServices(container string, wt_name string) []worktree.Service {
 	}
 
 	for _, proc := range pm2_procs {
-		name := get_string_field(proc, "name")
+		name := cmdutil.GetStringField(proc, "name")
 		if name == "" {
 			continue
 		}
@@ -51,7 +52,7 @@ func FetchServices(container string, wt_name string) []worktree.Service {
 
 		if env_raw, ok := proc["pm2_env"]; ok {
 			if env, ok := env_raw.(map[string]interface{}); ok {
-				svc.Status = get_string_field(env, "status")
+				svc.Status = cmdutil.GetStringField(env, "status")
 				if restart, ok := env["restart_time"].(float64); ok {
 					svc.RestartCount = int(restart)
 				}

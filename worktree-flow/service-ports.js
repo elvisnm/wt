@@ -111,12 +111,15 @@ function find_free_offset(initial_offset) {
   return initial_offset;
 }
 
+const ALL_SERVICE_NAMES = Object.keys(SERVICE_PORTS);
+
 module.exports = {
   SERVICE_PORTS,
   SERVICE_MODE_FILTERS,
   MINIMAL_SERVICES,
   VALID_SERVICE_MODES,
   DEFAULT_SERVICE_MODE,
+  ALL_SERVICE_NAMES,
   compute_ports,
   format_port_table,
   find_free_offset,
