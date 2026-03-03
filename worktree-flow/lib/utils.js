@@ -68,6 +68,7 @@ function resolve_worktree_path(repo_root_or_name, name) {
  */
 function find_docker_worktrees(base_dir) {
   const results = [];
+  if (!fs.existsSync(base_dir)) return results;
   const env_filename = get_env_filename();
 
   function scan(dir, prefix) {

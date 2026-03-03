@@ -16,7 +16,6 @@ const ALL_SERVICE_NAMES = config
     'order_table_server', 'inventory_table_server',
   ];
 
-
 function get_container_status(name) {
   try { return run(`docker inspect --format={{.State.Status}} "${name}"`); }
   catch { return null; }

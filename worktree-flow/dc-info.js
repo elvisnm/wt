@@ -1,4 +1,3 @@
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { format_port_table, compute_ports, MINIMAL_SERVICES } = require('./service-ports');
