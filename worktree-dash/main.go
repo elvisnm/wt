@@ -16,7 +16,9 @@ import (
 	"unsafe"
 
 	"github.com/elvisnm/wt/internal/app"
+	"github.com/elvisnm/wt/internal/sentinel"
 	"github.com/elvisnm/wt/internal/terminal"
+	"github.com/elvisnm/wt/internal/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -435,9 +437,8 @@ func showSplash() func() {
 	fmt.Print(art.output)
 
 	// Render "Loading worktrees" spinner below the art
-	spinFrames := []string{"\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"}
 	label := "Loading worktrees"
-	display := fmt.Sprintf("%s %s", spinFrames[0], label)
+	display := fmt.Sprintf("%s %s", ui.SpinFrames[0], label)
 	label_row := art.startRow + art.height + 1
 	label_col := (w - len(display)) / 2
 	if label_col < 1 {
@@ -476,7 +477,7 @@ func showSplash() func() {
 			default:
 				time.Sleep(80 * time.Millisecond)
 				i++
-				frame := spinFrames[i%len(spinFrames)]
+				frame := ui.SpinFrames[i%len(ui.SpinFrames)]
 				fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", label_row, label_col, frame)
 			}
 		}
@@ -597,8 +598,6 @@ func renderHeiHeiArt(w, h int) heiHeiLayout {
 
 // runHeiHei displays the HeiHei art and plays the scream audio clip.
 // Exits when playback finishes. Re-renders on terminal resize.
-const heiHeiSentinel = "wt-heihei-done"
-
 type heiHeiScreenLayout struct {
 	msgRow int
 	msgCol int
@@ -639,7 +638,6 @@ func runHeiHei(audioPath string) {
 	}()
 
 	// Animate spinner before the quote
-	spinFrames := []string{"\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"}
 	tick := time.NewTicker(80 * time.Millisecond)
 	defer tick.Stop()
 	i := 0
@@ -647,8 +645,7 @@ func runHeiHei(audioPath string) {
 	for {
 		select {
 		case <-done:
-			sentinel := filepath.Join(os.TempDir(), heiHeiSentinel)
-			os.WriteFile(sentinel, []byte("0"), 0644)
+			sentinel.Write(sentinel.HeiHei, "0")
 			fmt.Print("\033[?25h")
 			return
 		case <-sig:
@@ -657,7 +654,7 @@ func runHeiHei(audioPath string) {
 			sl = renderHeiHeiScreen(w, h)
 		case <-tick.C:
 			i++
-			frame := spinFrames[i%len(spinFrames)]
+			frame := ui.SpinFrames[i%len(ui.SpinFrames)]
 			fmt.Printf("\033[%d;%dH\033[38;5;214m%s\033[0m", sl.msgRow, sl.msgCol, frame)
 		}
 	}

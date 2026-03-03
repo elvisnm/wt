@@ -25,6 +25,24 @@ type Session struct {
 	mu   sync.Mutex
 }
 
+// build_shell_cmd builds a shell command string with proper quoting.
+// Uses exec so the shell replaces itself with the target process.
+func build_shell_cmd(cmd_name string, args []string) string {
+	shell_cmd := "exec " + cmd_name
+	if len(args) > 0 {
+		quoted := make([]string, len(args))
+		for i, a := range args {
+			if strings.ContainsAny(a, " \t\"'\\$") {
+				quoted[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
+			} else {
+				quoted[i] = a
+			}
+		}
+		shell_cmd += " " + strings.Join(quoted, " ")
+	}
+	return shell_cmd
+}
+
 // NewSession creates a tmux window running the given command.
 // If the tmux session doesn't have any windows yet (first call after EnsureStarted),
 // it reuses the initial window. Otherwise it creates a new window.
@@ -36,22 +54,7 @@ func NewSession(id int, label string, cmd_name string, args []string, width, hei
 	window := fmt.Sprintf("w%d", id)
 	target := fmt.Sprintf("%s.0", window)
 
-	// Build the shell command to run inside tmux.
-	// Use exec so the shell replaces itself with the target process.
-	// This ensures remain-on-exit detects when the process actually exits.
-	shell_cmd := "exec " + cmd_name
-	if len(args) > 0 {
-		// Quote args that contain spaces
-		quoted := make([]string, len(args))
-		for i, a := range args {
-			if strings.ContainsAny(a, " \t\"'\\$") {
-				quoted[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
-			} else {
-				quoted[i] = a
-			}
-		}
-		shell_cmd += " " + strings.Join(quoted, " ")
-	}
+	shell_cmd := build_shell_cmd(cmd_name, args)
 
 	// Build new-window command (no -x/-y: those require tmux 3.2+)
 	tmux_args := []string{
@@ -155,33 +158,6 @@ func (s *Session) monitor_loop() {
 	}
 }
 
-// Write sends input bytes to the tmux pane via send-keys -H (hex-encoded).
-func (s *Session) Write(data []byte) (int, error) {
-	if len(data) == 0 {
-		return 0, nil
-	}
-
-	// Convert bytes to hex format for send-keys -H
-	hex_parts := make([]string, len(data))
-	for i, b := range data {
-		hex_parts[i] = fmt.Sprintf("%02x", b)
-	}
-
-	_, err := s.server.Run(
-		"send-keys", "-t", s.target, "-H",
-		strings.Join(hex_parts, " "),
-	)
-	if err != nil {
-		return 0, err
-	}
-	return len(data), nil
-}
-
-// WriteString sends a string to the tmux pane.
-func (s *Session) WriteString(str string) (int, error) {
-	return s.Write([]byte(str))
-}
-
 // Resize changes the tmux pane dimensions.
 func (s *Session) Resize(width, height int) {
 	s.server.Run(
@@ -201,6 +177,29 @@ func (s *Session) IsAlive() bool {
 // Window returns the tmux window name for this session.
 func (s *Session) Window() string {
 	return s.window
+}
+
+// Respawn kills the running process and starts a new command in the same pane.
+// The tmux window and pane stay in place — no pane swapping or window recreation.
+func (s *Session) Respawn(cmd_name string, args []string, dir string) {
+	s.mu.Lock()
+	s.Alive = true
+	s.ExitCode = -1
+	s.mu.Unlock()
+
+	shell_cmd := build_shell_cmd(cmd_name, args)
+	// Use pane_id (e.g. "%5") instead of window target — the pane may have
+	// been swapped into a different window position by ShowSession.
+	target := s.pane_id
+	if target == "" {
+		target = s.target
+	}
+	respawn_args := []string{"respawn-pane", "-k", "-t", target}
+	if dir != "" {
+		respawn_args = append(respawn_args, "-c", dir)
+	}
+	respawn_args = append(respawn_args, shell_cmd)
+	s.server.Run(respawn_args...)
 }
 
 // Close terminates the tmux window.

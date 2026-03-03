@@ -1,19 +1,11 @@
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
-
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
+const { config, run, resolve_worktrees_dir, read_env } = require('./lib/utils');
 
 function main() {
   const dry_run = process.argv.includes('--dry-run');
   const repo_root = run('git rev-parse --show-toplevel');
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
+  const worktrees_dir = resolve_worktrees_dir(repo_root);
 
   const volume_prefix = config ? config.name + '_' : '';
   const volume_regex = config
@@ -31,12 +23,9 @@ function main() {
   const active_aliases = new Set();
   if (fs.existsSync(worktrees_dir)) {
     for (const entry of fs.readdirSync(worktrees_dir)) {
-      const env_path = path.join(worktrees_dir, entry, '.env.worktree');
-      if (fs.existsSync(env_path)) {
-        const content = fs.readFileSync(env_path, 'utf8');
-        const match = content.match(/^WORKTREE_ALIAS=(.+)$/m);
-        if (match) active_aliases.add(match[1].trim());
-      }
+      const wt_path = path.join(worktrees_dir, entry);
+      const alias = read_env(wt_path, 'WORKTREE_ALIAS');
+      if (alias) active_aliases.add(alias);
     }
   }
 

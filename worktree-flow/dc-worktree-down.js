@@ -1,10 +1,9 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
+const { config, config_mod, run, has_ref, resolve_worktree_path, read_env, sanitize_name } = require('./lib/utils');
 
-function parseArgs(argv) {
+function parse_args(argv) {
   const options = {
     name: null,
     remove: false,
@@ -42,40 +41,6 @@ function parseArgs(argv) {
   return options;
 }
 
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
-
-function has_ref(repo_root, ref) {
-  try {
-    execSync(`git -C "${repo_root}" show-ref --verify --quiet "${ref}"`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolve_worktree_path(repo_root, name) {
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
-  return path.join(worktrees_dir, name.replace(/\//g, '-'));
-}
-
-function read_alias(worktree_path) {
-  const env_path = path.join(worktree_path, '.env.worktree');
-  if (fs.existsSync(env_path)) {
-    const content = fs.readFileSync(env_path, 'utf8');
-    const match = content.match(/^WORKTREE_ALIAS=(.+)$/m);
-    if (match) return match[1].trim();
-  }
-  return null;
-}
-
-function sanitize_name(name) {
-  return name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
-}
-
 function remove_traefik_config(alias) {
   if (!alias) return;
   const traefik_dir = config && config.docker.proxy._dynamicDirResolved
@@ -91,7 +56,7 @@ function remove_traefik_config(alias) {
 }
 
 function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parse_args(process.argv.slice(2));
   if (!options || !options.name) {
     console.log('Usage:');
     console.log('  pnpm dc:down <name>                          Stop the Docker container');
@@ -113,7 +78,7 @@ function main() {
   const env_filename = config ? config.env.filename : '.env.worktree';
   const shared = config ? config_mod.get_compose_info(config, worktree_path) : null;
   const is_docker = fs.existsSync(compose_file) || !!shared;
-  const alias = is_docker ? read_alias(worktree_path) : null;
+  const alias = is_docker ? read_env(worktree_path, 'WORKTREE_ALIAS') : null;
 
   if (is_docker) {
     if (shared) {

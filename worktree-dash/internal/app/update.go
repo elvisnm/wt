@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/elvisnm/wt/internal/config"
+	"github.com/elvisnm/wt/internal/labels"
+	"github.com/elvisnm/wt/internal/sentinel"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
@@ -43,6 +45,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		debug_log("[discovery] MsgDiscovered: count=%d first_load=%v", len(msg.Worktrees), first_load)
 		m.update_worktrees(msg.Worktrees)
 
+		// Open deferred esbuild watch for host-build worktrees created via dc-create
+		if m.pending_esbuild_alias != "" {
+			for _, wt := range m.worktrees {
+				if wt.Alias == m.pending_esbuild_alias && wt.HostBuild && wt.Running {
+					debug_log("[create] deferred esbuild open for %s", wt.Alias)
+					m, _ = m.open_esbuild_watch(wt)
+					break
+				}
+			}
+			m.pending_esbuild_alias = ""
+		}
+
 		// Signal the outer process that we're ready (unblocks tmux attach).
 		if first_load && m.pane_layout != nil {
 			m.pane_layout.Server().Run("wait-for", "-S", "wt-ready")
@@ -68,7 +82,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := []tea.Cmd{tick_after(5*time.Second, "status")}
 		wt := m.selected_worktree()
 		if wt != nil {
-			debug_log("[tick] selected: %s type=%d running=%v svcs=%d cursor=%d", wt.Alias, wt.Type, wt.Running, len(m.services), m.cursor)
+			debug_log("[tick] selected: %s type=%v running=%v svcs=%d cursor=%d", wt.Alias, wt.Type, wt.Running, len(m.services), m.cursor)
 		} else {
 			debug_log("[tick] selected: nil cursor=%d len=%d", m.cursor, len(m.worktrees))
 		}
@@ -198,67 +212,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "render":
-			// Check if dc-create finished (via sentinel file)
-			if m.term_mgr.HasLabel("Create") || m.has_create_alias_tab() {
-				sentinel := filepath.Join(os.TempDir(), "wt-create-done")
-				if data, err := os.ReadFile(sentinel); err == nil {
-					os.Remove(sentinel)
-					lines := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)
-					exit_code := -1
-					fmt.Sscanf(lines[0], "%d", &exit_code)
-					created_alias := ""
-					if len(lines) > 1 {
-						created_alias = strings.TrimSpace(lines[1])
-					}
-					debug_log("[create] sentinel found: exit_code=%d alias=%q", exit_code, created_alias)
+			// Check if dc-create finished (via sentinel file).
+			// Always check the sentinel first — the pane may have already
+			// been reaped as dead before the file becomes visible on disk.
+			if sr := sentinel.Read(sentinel.Create); sr != nil {
+				lines := strings.SplitN(sr.Raw, "\n", 2)
+				exit_code := sr.ExitCode
+				created_alias := ""
+				if len(lines) > 1 {
+					created_alias = strings.TrimSpace(lines[1])
+				}
+				debug_log("[create] sentinel found: exit_code=%d alias=%q", exit_code, created_alias)
 
-					// Close all Create tabs
-					m.term_mgr.CloseByLabel("Create")
-					for _, wt := range m.worktrees {
-						m.term_mgr.CloseByLabel(fmt.Sprintf("Create — %s", wt.Alias))
-					}
+				// Close all Create tabs
+				m.term_mgr.CloseByLabel(labels.Create)
+				for _, wt := range m.worktrees {
+					m.term_mgr.CloseByLabel(labels.Tab(labels.Create, wt.Alias))
+				}
 
-					// For host-build worktrees, open esbuild watch after creation
-					if exit_code == 0 && created_alias != "" {
-						for _, wt := range m.worktrees {
-							if wt.Alias == created_alias && wt.HostBuild && wt.Running {
-								m, _ = m.open_esbuild_watch(wt)
-								break
-							}
-						}
-					}
+				// Defer esbuild watch for host-build worktrees until after discovery
+				// refreshes the worktree list (the new worktree may not be in
+				// m.worktrees yet, or may not have HostBuild=true yet).
+				if exit_code == 0 && created_alias != "" {
+					m.pending_esbuild_alias = created_alias
+				}
 
-					if m.term_mgr.Count() == 0 {
-						m.focus = PanelWorktrees
-						if m.pane_layout != nil {
-							m.pane_layout.FocusLeft()
-						}
-					}
-					return m, tea.Batch(
-						tick_after(100*time.Millisecond, "render"),
-						m.cmd_discover(),
-					)
-				} else if m.term_mgr.CloseDeadByPrefix("Create") {
+				m.focus_worktrees_if_empty()
+				return m, tea.Batch(
+					tick_after(100*time.Millisecond, "render"),
+					m.cmd_discover(),
+				)
+			} else if m.term_mgr.HasLabel(labels.Create) || m.has_create_alias_tab() {
+				if m.term_mgr.CloseDeadByPrefix(labels.Create) {
 					// Create process died without writing sentinel (e.g. Ctrl+C)
-					if m.term_mgr.Count() == 0 {
-						m.focus = PanelWorktrees
-						if m.pane_layout != nil {
-							m.pane_layout.FocusLeft()
-						}
-					}
+					m.focus_worktrees_if_empty()
 				}
 			}
 			// Check if skip-worktree script finished (via sentinel file)
 			if m.skip_worktree_running {
-				sentinel := filepath.Join(os.TempDir(), "wt-skip-worktree-done")
-				if data, err := os.ReadFile(sentinel); err == nil {
-					os.Remove(sentinel)
-					exit_code := -1
-					fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &exit_code)
+				if sr := sentinel.Read(sentinel.SkipWorktree); sr != nil {
+					exit_code := sr.ExitCode
 					m.skip_worktree_running = false
 					// Close the "Skip —" tab
 					for _, s := range m.term_mgr.Sessions() {
-						if strings.HasPrefix(s.Label, "Skip — ") {
+						if strings.HasPrefix(s.Label, labels.Skip+labels.Sep) {
 							m.term_mgr.CloseByLabel(s.Label)
 							break
 						}
@@ -268,37 +265,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else {
 						m.activity = "Skip-worktree failed"
 					}
-					if m.term_mgr.Count() == 0 {
-						// No tabs left — return to dashboard
-						if m.pane_layout != nil {
-							m.pane_layout.FocusLeft()
-						}
-						m.focus = PanelWorktrees
-					}
+					m.focus_worktrees_if_empty()
 					// If tabs remain, CloseByLabel already showed the next one
 					return m, tick_after(100*time.Millisecond, "render")
 				}
 			}
 			// Check if the AWS Keys script finished (via sentinel file)
 			if m.aws_keys_running {
-				sentinel := filepath.Join(os.TempDir(), "wt-aws-keys-done")
-				if data, err := os.ReadFile(sentinel); err == nil {
-					debug_log("[aws] sentinel found: raw=%q len=%d", string(data), len(data))
-					os.Remove(sentinel)
-					exit_code := -1
-					n, scan_err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &exit_code)
-					debug_log("[aws] parsed exit_code=%d (n=%d, scan_err=%v)", exit_code, n, scan_err)
+				if sr := sentinel.Read(sentinel.AWSKeys); sr != nil {
+					debug_log("[aws] sentinel found: raw=%q exit_code=%d", sr.Raw, sr.ExitCode)
+					exit_code := sr.ExitCode
 					m.aws_keys_running = false
-					m.term_mgr.CloseByLabel("AWS Keys")
+					m.term_mgr.CloseByLabel(labels.AWSKeys)
 					if m.pane_layout != nil {
 						m.pane_layout.FocusLeft()
 					}
 					if exit_code != 0 {
 						debug_log("[aws] FAILED: exit_code=%d", exit_code)
 						m.activity = "AWS keys update failed"
-						if m.term_mgr.Count() == 0 {
-							m.focus = PanelWorktrees
-						}
+						m.focus_worktrees_if_empty()
 						return m, tick_after(100*time.Millisecond, "render")
 					}
 					debug_log("[aws] SUCCESS: reloading credentials and restarting services")
@@ -332,8 +317,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								cmds = append(cmds, cmd)
 							}
 						case worktree.TypeDocker:
-							debug_log("[aws]   restart docker: %s (container=%s)", wt.Alias, wt.Container)
+							debug_log("[aws]   restart docker: %s (container=%s host_build=%v)", wt.Alias, wt.Container, wt.HostBuild)
 							wt := wt
+							if wt.HostBuild {
+								// Close existing esbuild tab — it has stale env
+								build_label := labels.Tab(labels.Build, wt.Alias)
+								m.term_mgr.CloseByLabel(build_label)
+								debug_log("[aws]   closed esbuild tab %q for restart", build_label)
+							}
 							cmds = append(cmds, tea.Sequence(
 								func() tea.Msg {
 									return MsgActionStarted{WtName: wt.Name, Status: "refreshing..."}
@@ -341,40 +332,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								func() tea.Msg {
 									run_docker("stop", wt.Container)
 									out, err := run_worktree_up(wt, m.repo_root, m.cfg)
-									return MsgActionOutput{Output: out, Err: err}
+									if err != nil {
+										return MsgActionOutput{Output: out, Err: err}
+									}
+									if wt.HostBuild {
+										return MsgOpenBuildAfterStart{WtName: wt.Name}
+									}
+									return MsgActionOutput{Output: out}
 								},
 							))
 						}
 					}
-					if m.term_mgr.Count() == 0 {
-						m.focus = PanelWorktrees
-					}
+					m.focus_worktrees_if_empty()
 					return m, tea.Batch(cmds...)
 				}
 			}
 			// Check if HeiHei scream finished (via sentinel file)
 			if m.heihei_playing {
-				sentinel := filepath.Join(os.TempDir(), "wt-heihei-done")
-				if _, err := os.ReadFile(sentinel); err == nil {
-					os.Remove(sentinel)
+				if sentinel.Read(sentinel.HeiHei) != nil {
 					m.heihei_playing = false
-					m.term_mgr.CloseByLabel("HeiHei")
+					m.term_mgr.CloseByLabel(labels.HeiHei)
 					if m.pane_layout != nil {
 						m.pane_layout.FocusLeft()
 					}
-					if m.term_mgr.Count() == 0 {
-						m.focus = PanelWorktrees
-					}
+					m.focus_worktrees_if_empty()
 				}
 			}
 			// Auto-close dead Logs tabs
 			if m.term_mgr != nil && m.term_mgr.CloseDeadLogs() {
-				if m.term_mgr.Count() == 0 {
-					m.focus = PanelWorktrees
-					if m.pane_layout != nil {
-						m.pane_layout.FocusLeft()
-					}
-				}
+				m.focus_worktrees_if_empty()
 			}
 			// Re-render tick for PTY output updates
 			if m.term_mgr.Count() > 0 || m.preview_session != nil {
@@ -509,9 +495,8 @@ func (m *Model) update_worktrees(wts []worktree.Worktree) {
 	// Mark worktrees as "creating..." when a Create tab exists and hasn't
 	// finished yet (no sentinel file). This handles the gap between dc-create
 	// writing the env file (worktree discovered) and docker compose up finishing.
-	if m.term_mgr != nil && (m.term_mgr.HasLabel("Create") || m.has_create_alias_tab()) {
-		sentinel := filepath.Join(os.TempDir(), "wt-create-done")
-		if _, err := os.Stat(sentinel); err != nil {
+	if m.term_mgr != nil && (m.term_mgr.HasLabel(labels.Create) || m.has_create_alias_tab()) {
+		if !sentinel.Exists(sentinel.Create) {
 			// Sentinel doesn't exist — creation still in progress
 			for i := range wts {
 				if wts[i].Type == worktree.TypeDocker && !wts[i].ContainerExists {
@@ -529,7 +514,7 @@ func (m *Model) update_worktrees(wts []worktree.Worktree) {
 				m.cursor = i
 				debug_log("[update_wt] stored %d worktrees, cursor=%d (%s)", len(wts), m.cursor, selected_name)
 				for j, w := range m.worktrees {
-					debug_log("[update_wt]   [%d] %s type=%d running=%v", j, w.Alias, w.Type, w.Running)
+					debug_log("[update_wt]   [%d] %s type=%v running=%v", j, w.Alias, w.Type, w.Running)
 				}
 				return
 			}
@@ -539,7 +524,7 @@ func (m *Model) update_worktrees(wts []worktree.Worktree) {
 	m.clamp_cursor()
 	debug_log("[update_wt] stored %d worktrees, cursor=%d (clamped, prev=%q)", len(wts), m.cursor, selected_name)
 	for j, w := range m.worktrees {
-		debug_log("[update_wt]   [%d] %s type=%d running=%v", j, w.Alias, w.Type, w.Running)
+		debug_log("[update_wt]   [%d] %s type=%v running=%v", j, w.Alias, w.Type, w.Running)
 	}
 }
 
@@ -557,13 +542,7 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, Keys.Quit), key.Matches(msg, Keys.CtrlC):
 		m.confirm_open = true
 		m.confirm_prompt = "Quit worktree?"
-		m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-			mdl.close_preview()
-			if mdl.term_mgr.HasLiveSessions() {
-				mdl.term_mgr.CloseAll()
-			}
-			return *mdl, tea.Quit
-		}
+		m.confirm_action = quit_action
 		return m, nil
 
 	case key.Matches(msg, Keys.Tab):
@@ -754,7 +733,7 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.picker_actions = actions_for_worktree(*wt)
 			m.picker_cursor = 0
 			m.picker_open = true
-			m.picker_context = "worktree"
+			m.picker_context = pickerWorktree
 		}
 		return m, nil
 	}
@@ -790,6 +769,9 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if wt.Running {
 			if wt.Type == worktree.TypeLocal {
 				return m.restart_local_services(*wt)
+			}
+			if wt.HostBuild {
+				return m.restart_host_build(*wt)
 			}
 			return m, cmd_docker_action("restart", *wt, m.repo_root, m.cfg)
 		}
@@ -995,13 +977,7 @@ func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.picker_open = false
 		m.confirm_open = true
 		m.confirm_prompt = "Quit worktree?"
-		m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-			mdl.close_preview()
-			if mdl.term_mgr.HasLiveSessions() {
-				mdl.term_mgr.CloseAll()
-			}
-			return *mdl, tea.Quit
-		}
+		m.confirm_action = quit_action
 		return m, nil
 
 	case key.Matches(msg, Keys.Escape):
@@ -1047,11 +1023,11 @@ func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) dispatch_picker(action ui.PickerAction) (Model, tea.Cmd) {
 	switch m.picker_context {
-	case "db":
+	case pickerDB:
 		return m.execute_db_action(action)
-	case "maintenance":
+	case pickerMaintenance:
 		return m.execute_maintenance_action(action)
-	case "remove":
+	case pickerRemove:
 		return m.execute_remove_action(action)
 	default:
 		return m.execute_picker_action(action)
@@ -1082,6 +1058,9 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 	case "r":
 		if wt.Type == worktree.TypeLocal {
 			return m.restart_local_services(*wt)
+		}
+		if wt.HostBuild {
+			return m.restart_host_build(*wt)
 		}
 		return m, cmd_docker_action("restart", *wt, m.repo_root, m.cfg)
 	case "t":
@@ -1129,7 +1108,7 @@ func (m Model) open_bash(wt worktree.Worktree) (Model, tea.Cmd) {
 		dir = wt.Path
 	}
 
-	label := fmt.Sprintf("Shell — %s", wt.Alias)
+	label := labels.Tab(labels.Shell, wt.Alias)
 	_, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
 	if err != nil {
 		m.terminal_output = fmt.Sprintf("Failed to open bash: %v", err)
@@ -1163,7 +1142,7 @@ func (m Model) open_claude(wt worktree.Worktree) (Model, tea.Cmd) {
 	}
 	dir = wt.Path
 
-	label := fmt.Sprintf("Claude — %s", wt.Alias)
+	label := labels.Tab(labels.Claude, wt.Alias)
 	_, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
 	if err != nil {
 		m.terminal_output = fmt.Sprintf("Failed to open Claude: %v", err)
@@ -1189,7 +1168,7 @@ func (m Model) open_local_shell(wt worktree.Worktree) (Model, tea.Cmd) {
 		shell = "zsh"
 	}
 
-	label := fmt.Sprintf("Zsh — %s", wt.Alias)
+	label := labels.Tab(labels.Zsh, wt.Alias)
 	_, err := m.term_mgr.OpenNew(label, shell, nil, w, h, wt.Path)
 	if err != nil {
 		m.terminal_output = fmt.Sprintf("Failed to open shell: %v", err)
@@ -1234,7 +1213,7 @@ func (m Model) open_logs(wt worktree.Worktree) (Model, tea.Cmd) {
 	}
 
 	w, h := m.right_pane_dimensions()
-	label := fmt.Sprintf("Logs — %s", wt.Alias)
+	label := labels.Tab(labels.Logs, wt.Alias)
 
 	var cmd_name string
 	var args []string
@@ -1279,13 +1258,13 @@ func (m Model) open_create(wt *worktree.Worktree) (Model, tea.Cmd) {
 	w, h := m.right_pane_dimensions()
 
 	// Remove stale sentinel before opening
-	os.Remove(filepath.Join(os.TempDir(), "wt-create-done"))
+	sentinel.Clear(sentinel.Create)
 
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-create.js")
 	debug_log("[create] open_create: script=%s", script)
 	// Always use "Create" — the selected worktree's alias doesn't match the
 	// NEW worktree being created, which breaks mark_local_running's devTab check.
-	label := "Create"
+	label := labels.Create
 
 	_, err := m.term_mgr.Open(label, "node", []string{script}, w, h, m.repo_root)
 	if err != nil {
@@ -1331,35 +1310,37 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 	var label string
 	var dir string
 
+	svc_label := wt.Alias + "/" + svc.DisplayName
+
 	if wt.Type == worktree.TypeDocker && manager == "static" {
 		// Static Docker: use docker logs (no pm2 inside containers)
 		cmd_name = "docker"
 		if svc.Name == "__all" {
 			args = []string{"logs", "-f", "--tail", "80", wt.Container}
-			label = fmt.Sprintf("Logs — %s", wt.Alias)
+			label = labels.Tab(labels.Logs, wt.Alias)
 		} else {
 			container := container_for_service(wt, svc.Name, m.cfg)
 			args = []string{"logs", "-f", "--tail", "80", container}
-			label = fmt.Sprintf("Logs — %s", svc.DisplayName)
+			label = labels.Tab(labels.Logs, svc_label)
 		}
 	} else if wt.Type == worktree.TypeDocker {
 		cmd_name = "docker"
 		if svc.Name == "__all" {
 			args = []string{"exec", "-it", wt.Container, "pm2", "logs", "--lines", "80"}
-			label = fmt.Sprintf("Logs — %s", wt.Alias)
+			label = labels.Tab(labels.Logs, wt.Alias)
 		} else {
 			args = []string{"exec", "-it", wt.Container, "pm2", "logs", svc.Name, "--lines", "80"}
-			label = fmt.Sprintf("Logs — %s", svc.DisplayName)
+			label = labels.Tab(labels.Logs, svc_label)
 		}
 	} else {
 		cmd_name = "pm2"
 		dir = wt.Path
 		if svc.Name == "__all" {
 			args = []string{"logs", "--lines", "80"}
-			label = fmt.Sprintf("Logs — %s", wt.Alias)
+			label = labels.Tab(labels.Logs, wt.Alias)
 		} else {
 			args = []string{"logs", svc.Name, "--lines", "80"}
-			label = fmt.Sprintf("Logs — %s", svc.DisplayName)
+			label = labels.Tab(labels.Logs, svc_label)
 		}
 	}
 
@@ -1438,14 +1419,39 @@ func (m Model) refresh_services() tea.Cmd {
 		return nil
 	}
 	if !wt.Running {
-		debug_log("[services] refresh_services: %s not running (type=%d)", wt.Alias, wt.Type)
+		debug_log("[services] refresh_services: %s not running (type=%v)", wt.Alias, wt.Type)
 		return nil
 	}
-	debug_log("[services] refresh_services: %s type=%d running=%v", wt.Alias, wt.Type, wt.Running)
+	debug_log("[services] refresh_services: %s type=%v running=%v", wt.Alias, wt.Type, wt.Running)
 	if wt.Type == worktree.TypeDocker {
 		return cmd_fetch_services(*wt, m.cfg)
 	}
 	return cmd_fetch_local_services(*wt, m.cfg)
+}
+
+// focus_worktrees_if_empty switches focus back to the worktrees panel and
+// returns tmux focus to the left pane when no terminal tabs remain open.
+func (m *Model) focus_worktrees_if_empty() {
+	if m.term_mgr.Count() == 0 {
+		m.focus = PanelWorktrees
+		if m.pane_layout != nil {
+			m.pane_layout.FocusLeft()
+		}
+	}
+}
+
+// close_dev_tabs closes the dev server and create wizard tabs for a worktree.
+func (m *Model) close_dev_tabs(alias string) {
+	m.term_mgr.CloseByLabel(labels.Tab(labels.Dev, alias))
+	m.term_mgr.CloseByLabel(labels.Tab(labels.Create, alias))
+	m.term_mgr.CloseByLabel(labels.Create)
+}
+
+// close_worktree_logs closes all log tabs scoped to a worktree.
+// Per-service labels are "Logs — alias/svc", all-logs label is "Logs — alias".
+func (m *Model) close_worktree_logs(wt worktree.Worktree) {
+	m.term_mgr.CloseByLabel(labels.Tab(labels.Logs, wt.Alias))
+	m.term_mgr.CloseByPrefix(labels.Tab(labels.Logs, wt.Alias+"/"))
 }
 
 func tick_after(d time.Duration, kind string) tea.Cmd {
@@ -1454,13 +1460,14 @@ func tick_after(d time.Duration, kind string) tea.Cmd {
 	})
 }
 
+// close_preview closes the preview session and restores the right pane.
 func (m *Model) close_preview() {
 	if m.preview_session == nil {
 		return
 	}
 	// Restore the manager's active session in the right pane.
-	// ShowSession returns the preview pane to its background window first,
-	// then brings the manager's active session back into the viewport.
+	// ReturnSession/ShowSession swaps the preview pane back to its background
+	// window, then brings the guide or active managed session into the viewport.
 	if m.pane_layout != nil {
 		active := m.term_mgr.Active()
 		if active != nil {
@@ -1493,10 +1500,6 @@ func (m *Model) open_preview_logs(wt worktree.Worktree, svc worktree.Service) te
 		return nil
 	}
 
-	m.close_preview()
-
-	w, h := m.right_pane_dimensions()
-
 	var cmd_name string
 	var args []string
 	var dir string
@@ -1526,6 +1529,16 @@ func (m *Model) open_preview_logs(wt worktree.Worktree, svc worktree.Service) te
 		}
 	}
 
+	// If a preview is already open, respawn the command in the same pane.
+	// This avoids pane swapping and the guide screen flashing between transitions.
+	if m.preview_session != nil {
+		m.preview_session.Respawn(cmd_name, args, dir)
+		m.preview_svc_name = svc.Name
+		return tick_after(100*time.Millisecond, "render")
+	}
+
+	// First preview: no existing session to clean up.
+	w, h := m.right_pane_dimensions()
 	s, err := terminal.NewSession(0, "preview", cmd_name, args, w, h, dir, m.term_mgr.Server())
 	if err != nil {
 		m.activity = fmt.Sprintf("Preview failed: %v", err)
@@ -1535,12 +1548,11 @@ func (m *Model) open_preview_logs(wt worktree.Worktree, svc worktree.Service) te
 	m.preview_session = s
 	m.preview_svc_name = svc.Name
 
-	// Swap preview into the right pane (stashes any active managed session)
 	if m.pane_layout != nil {
 		m.pane_layout.ShowSession(s.Window())
 	}
 
-	return nil
+	return tick_after(100*time.Millisecond, "render")
 }
 
 // alt_tab_number returns the tab number (1-9) for an Alt+N key press, or 0 if not a tab shortcut.
@@ -1559,7 +1571,7 @@ func (m Model) handle_help_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, Keys.Escape), key.Matches(msg, Keys.Help),
 		key.Matches(msg, Keys.Quit), key.Matches(msg, Keys.CtrlC):
 		m.help_open = false
-		m.term_mgr.CloseByLabel("Help")
+		m.term_mgr.CloseByLabel(labels.Help)
 	}
 	return m, nil
 }
@@ -1568,7 +1580,7 @@ func (m Model) open_help() (Model, tea.Cmd) {
 	// If help is already open, close it (toggle)
 	if m.help_open {
 		m.help_open = false
-		m.term_mgr.CloseByLabel("Help")
+		m.term_mgr.CloseByLabel(labels.Help)
 		return m, nil
 	}
 
@@ -1580,7 +1592,7 @@ func (m Model) open_help() (Model, tea.Cmd) {
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
 
-	_, err = m.term_mgr.Open("Help", exe, []string{"_help"}, w, h, "")
+	_, err = m.term_mgr.Open(labels.Help, exe, []string{"_help"}, w, h, "")
 	if err != nil {
 		return m, nil
 	}
@@ -1702,7 +1714,7 @@ func (m Model) start_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 		dev_cmd = m.cfg.Dash.LocalDevCommand
 	}
 	shell_cmd := fmt.Sprintf("%s=%s %s", path_env, wt.Path, dev_cmd)
-	label := fmt.Sprintf("Dev — %s", wt.Alias)
+	label := labels.Tab(labels.Dev, wt.Alias)
 	debug_log("[services] start_dev_server: cmd=%q label=%q", shell_cmd, label)
 
 	_, err := m.term_mgr.Open(label, "bash", []string{"-c", shell_cmd}, w, h, wt.Path)
@@ -1746,11 +1758,10 @@ func (m Model) run_stop_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 	debug_log("[services] run_stop_dev_server: alias=%s manager=%s", wt.Alias, manager)
 
 	// Close the dev server terminal session if it exists
-	dev_label := fmt.Sprintf("Dev — %s", wt.Alias)
-	m.term_mgr.CloseByLabel(dev_label)
-	create_label := fmt.Sprintf("Create — %s", wt.Alias)
-	m.term_mgr.CloseByLabel(create_label)
-	m.term_mgr.CloseByLabel("Create")
+	m.close_dev_tabs(wt.Alias)
+	// Close any open service log tabs for this worktree
+	m.close_worktree_logs(wt)
+	m.close_preview()
 	if m.term_mgr.Count() == 0 && m.focus == PanelTerminal {
 		m.focus = PanelWorktrees
 	}
@@ -1805,11 +1816,7 @@ func (m Model) restart_local_services(wt worktree.Worktree) (Model, tea.Cmd) {
 	kill_local_dev_processes(wt.Path)
 
 	// Close any existing terminal tabs for this worktree
-	dev_label := fmt.Sprintf("Dev — %s", wt.Alias)
-	m.term_mgr.CloseByLabel(dev_label)
-	create_label := fmt.Sprintf("Create — %s", wt.Alias)
-	m.term_mgr.CloseByLabel(create_label)
-	m.term_mgr.CloseByLabel("Create")
+	m.close_dev_tabs(wt.Alias)
 
 	// Start a fresh dev server (reload_aws_credentials is called inside)
 	return m.start_dev_server(wt)
@@ -1829,9 +1836,9 @@ func (m Model) is_static_local(wt worktree.Worktree) bool {
 // "Create — alias", or just "Create" (when dc-create starts the dev server inline).
 func find_dev_tab(m Model, wt worktree.Worktree) string {
 	for _, label := range []string{
-		fmt.Sprintf("Dev — %s", wt.Alias),
-		fmt.Sprintf("Create — %s", wt.Alias),
-		"Create",
+		labels.Tab(labels.Dev, wt.Alias),
+		labels.Tab(labels.Create, wt.Alias),
+		labels.Create,
 	} {
 		if m.term_mgr.HasLabel(label) {
 			return label
@@ -1843,7 +1850,7 @@ func find_dev_tab(m Model, wt worktree.Worktree) string {
 // has_create_alias_tab checks if any "Create — {alias}" tab exists
 func (m Model) has_create_alias_tab() bool {
 	for _, s := range m.term_mgr.Sessions() {
-		if strings.HasPrefix(s.Label, "Create — ") {
+		if strings.HasPrefix(s.Label, labels.Create+labels.Sep) {
 			return true
 		}
 	}
@@ -1900,7 +1907,7 @@ func (m Model) toggle_admin() (tea.Model, tea.Cmd) {
 func (m Model) run_admin_toggle(wt worktree.Worktree, action string) (Model, tea.Cmd) {
 	w, h := m.right_pane_dimensions()
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-admin.js")
-	label := fmt.Sprintf("Admin %s — %s", strings.ToUpper(action[:1])+action[1:], wt.Alias)
+	label := labels.Tab(labels.Admin+" "+strings.ToUpper(action[:1])+action[1:], wt.Alias)
 
 	_, err := m.term_mgr.Open(label, "node", []string{script, action, "--name=" + wt.Name}, w, h, m.repo_root)
 	if err != nil {
@@ -1952,10 +1959,10 @@ func (m Model) run_lan_toggle(wt worktree.Worktree, action string) (Model, tea.C
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-lan.js")
 
 	args := []string{script, wt.Name}
-	label := fmt.Sprintf("LAN On — %s", wt.Alias)
+	label := labels.Tab(labels.LANOn, wt.Alias)
 	if action == "disable" {
 		args = append(args, "--off")
-		label = fmt.Sprintf("LAN Off — %s", wt.Alias)
+		label = labels.Tab(labels.LANOff, wt.Alias)
 	}
 
 	_, err := m.term_mgr.Open(label, "node", args, w, h, m.repo_root)
@@ -2029,7 +2036,7 @@ func (m Model) run_skip_worktree_toggle(wt worktree.Worktree, action string) (Mo
 	}
 
 	args := []string{script, action, wt.Name}
-	label := fmt.Sprintf("Skip — %s", wt.Alias)
+	label := labels.Tab(labels.Skip, wt.Alias)
 
 	m.activity = fmt.Sprintf("Running skip-worktree %s on %s...", action, wt.Alias)
 
@@ -2051,7 +2058,7 @@ func (m Model) open_maintenance_picker() (tea.Model, tea.Cmd) {
 	m.picker_actions = ui.FilterMaintenanceActions(m.cfg)
 	m.picker_cursor = 0
 	m.picker_open = true
-	m.picker_context = "maintenance"
+	m.picker_context = pickerMaintenance
 	return m, nil
 }
 
@@ -2066,15 +2073,15 @@ func (m Model) execute_maintenance_action(action ui.PickerAction) (Model, tea.Cm
 	case "p":
 		script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-prune.js")
 		args = []string{script}
-		label = "Prune Volumes"
+		label = labels.Prune
 	case "s":
 		script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-autostop.js")
 		args = []string{script}
-		label = "Autostop Idle"
+		label = labels.Autostop
 	case "r":
 		script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-rebuild-base.js")
 		args = []string{script}
-		label = "Rebuild Base"
+		label = labels.RebuildBase
 	default:
 		return m, nil
 	}
@@ -2099,12 +2106,11 @@ func (m Model) open_aws_keys() (tea.Model, tea.Cmd) {
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "aws-keys.js")
 
 	// Remove stale sentinel before opening
-	sentinel := filepath.Join(os.TempDir(), "wt-aws-keys-done")
-	os.Remove(sentinel)
-	debug_log("[aws] open_aws_keys: removed stale sentinel %s", sentinel)
+	sentinel.Clear(sentinel.AWSKeys)
+	debug_log("[aws] open_aws_keys: removed stale sentinel")
 	debug_log("[aws] open_aws_keys: script=%s pane=%dx%d", script, w, h)
 
-	label := "AWS Keys"
+	label := labels.AWSKeys
 	_, err := m.term_mgr.Open(label, "node", []string{script}, w, h, m.repo_root)
 	if err != nil {
 		debug_log("[aws] open_aws_keys: FAILED to open terminal: %v", err)
@@ -2137,7 +2143,7 @@ func (m Model) play_heihei() (tea.Model, tea.Cmd) {
 		}
 		if _, err := tmp.Write(m.heihei_audio); err != nil {
 			tmp.Close()
-			os.Remove(tmp.Name())
+			_ = os.Remove(tmp.Name())
 			return m, nil
 		}
 		tmp.Close()
@@ -2145,7 +2151,7 @@ func (m Model) play_heihei() (tea.Model, tea.Cmd) {
 	}
 
 	// Remove stale sentinel before opening
-	os.Remove(filepath.Join(os.TempDir(), "wt-heihei-done"))
+	sentinel.Clear(sentinel.HeiHei)
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -2154,7 +2160,7 @@ func (m Model) play_heihei() (tea.Model, tea.Cmd) {
 	exe, _ = filepath.EvalSymlinks(exe)
 
 	w, h := m.right_pane_dimensions()
-	_, err = m.term_mgr.Open("HeiHei", exe, []string{"_heihei", m.heihei_tmpfile}, w, h, "")
+	_, err = m.term_mgr.Open(labels.HeiHei, exe, []string{"_heihei", m.heihei_tmpfile}, w, h, "")
 	if err != nil {
 		return m, nil
 	}
@@ -2181,7 +2187,7 @@ func (m Model) open_db_picker() (tea.Model, tea.Cmd) {
 	m.picker_actions = ui.FilterDatabaseActions(m.cfg)
 	m.picker_cursor = 0
 	m.picker_open = true
-	m.picker_context = "db"
+	m.picker_context = pickerDB
 	return m, nil
 }
 
@@ -2205,15 +2211,15 @@ func (m Model) execute_db_action(action ui.PickerAction) (Model, tea.Cmd) {
 	case "s":
 		cmd_name = "node"
 		args = []string{seed_script, wt.Name}
-		label = fmt.Sprintf("DB Seed — %s", wt.Alias)
+		label = labels.Tab(labels.DBSeed, wt.Alias)
 	case "d":
 		cmd_name = "node"
 		args = []string{seed_script, wt.Name, "--drop"}
-		label = fmt.Sprintf("DB Drop — %s", wt.Alias)
+		label = labels.Tab(labels.DBDrop, wt.Alias)
 	case "r":
 		cmd_name = "node"
 		args = []string{seed_script, wt.Name, "--reset"}
-		label = fmt.Sprintf("DB Reset — %s", wt.Alias)
+		label = labels.Tab(labels.DBReset, wt.Alias)
 	case "f":
 		db_name := ""
 		if m.cfg != nil {
@@ -2224,7 +2230,7 @@ func (m Model) execute_db_action(action ui.PickerAction) (Model, tea.Cmd) {
 		}
 		cmd_name = "node"
 		args = []string{fix_script, "--db=" + db_name}
-		label = fmt.Sprintf("Fix Images — %s", wt.Alias)
+		label = labels.Tab(labels.FixImages, wt.Alias)
 	default:
 		return m, nil
 	}
@@ -2247,7 +2253,7 @@ func (m Model) open_esbuild_watch(wt worktree.Worktree) (Model, tea.Cmd) {
 	w, h := m.right_pane_dimensions()
 
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-build.js")
-	label := fmt.Sprintf("Build — %s", wt.Alias)
+	label := labels.Tab(labels.Build, wt.Alias)
 	shell_cmd := fmt.Sprintf("node %q %s", script, wt.Name)
 
 	_, err := m.term_mgr.Open(label, "bash", []string{"-c", shell_cmd}, w, h, m.repo_root)
@@ -2284,9 +2290,29 @@ func (m Model) start_host_build(wt worktree.Worktree) (Model, tea.Cmd) {
 	)
 }
 
+// restart_host_build restarts the Docker container and reopens the esbuild watch tab
+func (m Model) restart_host_build(wt worktree.Worktree) (Model, tea.Cmd) {
+	build_label := labels.Tab(labels.Build, wt.Alias)
+	m.term_mgr.CloseByLabel(build_label)
+	debug_log("[restart] host-build %s: closed esbuild tab, restarting docker", wt.Alias)
+
+	return m, tea.Sequence(
+		func() tea.Msg {
+			return MsgActionStarted{WtName: wt.Name, Status: "restarting..."}
+		},
+		func() tea.Msg {
+			out, err := run_docker("restart", wt.Container)
+			if err != nil {
+				return MsgActionOutput{Output: out, Err: err}
+			}
+			return MsgOpenBuildAfterStart{WtName: wt.Name}
+		},
+	)
+}
+
 // stop_host_build closes the esbuild watch session and stops the Docker container
 func (m Model) stop_host_build(wt worktree.Worktree) (Model, tea.Cmd) {
-	build_label := fmt.Sprintf("Build — %s", wt.Alias)
+	build_label := labels.Tab(labels.Build, wt.Alias)
 	m.term_mgr.CloseByLabel(build_label)
 	if m.term_mgr.Count() == 0 && m.focus == PanelTerminal {
 		m.focus = PanelWorktrees
@@ -2300,7 +2326,7 @@ func (m Model) remove_worktree(wt worktree.Worktree) (Model, tea.Cmd) {
 	m.picker_open = true
 	m.picker_cursor = 0
 	m.picker_actions = ui.RemoveActions
-	m.picker_context = "remove"
+	m.picker_context = pickerRemove
 	return m, nil
 }
 
@@ -2322,8 +2348,8 @@ func (m Model) execute_remove_action(action ui.PickerAction) (Model, tea.Cmd) {
 
 func (m Model) run_remove_worktree(wt worktree.Worktree, force bool) (Model, tea.Cmd) {
 	// Close any terminal sessions for this worktree
-	for _, prefix := range []string{"Shell", "Claude", "Logs", "Dev", "Build"} {
-		m.term_mgr.CloseByLabel(fmt.Sprintf("%s — %s", prefix, wt.Alias))
+	for _, prefix := range []string{labels.Shell, labels.Claude, labels.Logs, labels.Dev, labels.Build} {
+		m.term_mgr.CloseByLabel(labels.Tab(prefix, wt.Alias))
 	}
 	if m.term_mgr.Count() == 0 && m.focus == PanelTerminal {
 		m.focus = PanelWorktrees

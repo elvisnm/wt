@@ -1,47 +1,12 @@
 const { execSync } = require('child_process');
-const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
+const {
+  config, config_mod, run, find_docker_worktrees,
+  read_env_multi, read_container_name, resolve_worktrees_dir,
+} = require('./lib/utils');
+const { ALL_SERVICE_NAMES } = require('./service-ports');
 
 process.on('SIGINT', () => process.exit(0));
-
-const ALL_SERVICE_NAMES = config
-  ? Object.keys(config.services.ports)
-  : [
-    'app', 'api', 'socket_server', 'serviceHostServer',
-    'combined_sync', 'listings_sync', 'admin_server', 'ship_server',
-    'job_server', 'insights_server', 'cache_server',
-    'order_table_server', 'inventory_table_server',
-  ];
-
-function run(command) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8' }).trim();
-}
-
-function find_docker_worktrees(base_dir) {
-  const results = [];
-  if (!fs.existsSync(base_dir)) return results;
-  const env_filename = config ? config.env.filename : '.env.worktree';
-  for (const entry of fs.readdirSync(base_dir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const full = path.join(base_dir, entry.name);
-    if (fs.existsSync(path.join(full, 'docker-compose.worktree.yml')) ||
-        fs.existsSync(path.join(full, env_filename))) {
-      results.push(full);
-    }
-  }
-  return results;
-}
-
-function read_env(wt_path, key) {
-  const env_filename = config ? config.env.filename : '.env.worktree';
-  const env = path.join(wt_path, env_filename);
-  if (!fs.existsSync(env)) return null;
-  const content = fs.readFileSync(env, 'utf8');
-  const m = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
-  return m ? m[1].trim() : null;
-}
 
 function get_container_status(name) {
   try { return run(`docker inspect --format={{.State.Status}} "${name}"`); }
@@ -67,19 +32,16 @@ function get_shared_compose_status(shared_info) {
   }
 }
 
-function read_container_name(wt_path) {
-  const compose = path.join(wt_path, 'docker-compose.worktree.yml');
-  try {
-    const content = fs.readFileSync(compose, 'utf8');
-    const m = content.match(/container_name:\s*(\S+)/);
-    return m ? m[1] : null;
-  } catch { return null; }
-}
-
 function get_worktree_list(worktrees_dir) {
-  return find_docker_worktrees(worktrees_dir).map((wt) => {
-    const alias = read_env(wt, 'WORKTREE_ALIAS');
-    const name = path.basename(wt);
+  const lan_domain_key = config ? config_mod.env_var(config, 'lanDomain') : 'LAN_DOMAIN';
+  const env_keys = ['WORKTREE_ALIAS', 'WORKTREE_HOST_BUILD'];
+  if (lan_domain_key) env_keys.push(lan_domain_key);
+
+  return find_docker_worktrees(worktrees_dir).map((entry) => {
+    const wt = entry.path;
+    const env = read_env_multi(wt, env_keys);
+    const alias = env.WORKTREE_ALIAS;
+    const name = entry.name;
     const shared = config ? config_mod.get_compose_info(config, wt) : null;
 
     let container, status;
@@ -95,9 +57,8 @@ function get_worktree_list(worktrees_dir) {
       status = container ? get_container_status(container) : null;
     }
 
-    const host_build = read_env(wt, 'WORKTREE_HOST_BUILD') === 'true';
-    const lan_domain_key = config ? config_mod.env_var(config, 'lanDomain') : 'LAN_DOMAIN';
-    const lan_domain = lan_domain_key ? read_env(wt, lan_domain_key) : null;
+    const host_build = env.WORKTREE_HOST_BUILD === 'true';
+    const lan_domain = lan_domain_key ? env[lan_domain_key] : null;
     return { path: wt, name, alias, container, status, host_build, lan_domain };
   });
 }
@@ -552,9 +513,7 @@ async function flow_maintenance(p, ctx) {
 async function main() {
   const p = await import('@clack/prompts');
   const repo_root = preflight_checks();
-  const worktrees_dir = config
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
+  const worktrees_dir = resolve_worktrees_dir(repo_root);
   const worktrees = get_worktree_list(worktrees_dir);
   const ctx = { repo_root, worktrees_dir, worktrees };
 

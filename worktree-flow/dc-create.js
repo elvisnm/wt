@@ -1,25 +1,15 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-
 const os = require('os');
-const config = config_mod.load_config({ required: false }) || null;
+const { config, config_mod, run, find_docker_worktrees, read_env, auto_alias, resolve_worktrees_dir } = require('./lib/utils');
+
+const { make_debug } = require('./lib/debug');
 
 const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-create-done');
-const DEBUG_LOG = path.join(os.tmpdir(), 'wt-debug.log');
-
-function debug(msg) {
-  if (process.env.WT_DEBUG !== '1') return;
-  const ts = new Date().toTimeString().slice(0, 12);
-  try { fs.appendFileSync(DEBUG_LOG, `[${ts}] [dc-create.js] ${msg}\n`); } catch {}
-}
+const debug = make_debug('dc-create.js');
 
 process.on('SIGINT', () => process.exit(0));
-
-function run(command) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8' }).trim();
-}
 
 // ── Scripts directory resolution ────────────────────────────────────────
 
@@ -37,37 +27,8 @@ const scripts_dir = resolve_scripts_dir();
 // ── Worktree discovery ──────────────────────────────────────────────────
 
 function find_existing_worktrees(base_dir) {
-  const results = [];
-  if (!fs.existsSync(base_dir)) return results;
-  const env_filename = config ? config.env.filename : '.env.worktree';
-  for (const entry of fs.readdirSync(base_dir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const full_path = path.join(base_dir, entry.name);
-    // Check for env file (shared compose) or docker-compose.worktree.yml (generate)
-    if (fs.existsSync(path.join(full_path, env_filename)) ||
-        fs.existsSync(path.join(full_path, 'docker-compose.worktree.yml'))) {
-      results.push(full_path);
-    }
-  }
-  return results;
-}
-
-function read_env(worktree_path, key) {
-  const env_filename = config ? config.env.filename : '.env.worktree';
-  const env_path = path.join(worktree_path, env_filename);
-  if (!fs.existsSync(env_path)) return null;
-  const content = fs.readFileSync(env_path, 'utf8');
-  const match = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
-  return match ? match[1].trim() : null;
-}
-
-function auto_alias(branch_name) {
-  const prefixes = config ? config.repo.branchPrefixes : ['feat', 'fix', 'ops', 'hotfix', 'release', 'chore'];
-  const prefix_pattern = new RegExp(`^(${prefixes.join('|')})\\/`, 'i');
-  const stripped = branch_name.replace(prefix_pattern, '');
-  const clean = stripped.replace(/\//g, '-').replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
-  const parts = clean.split('-').filter(Boolean);
-  return parts.slice(0, 2).join('-') || clean.slice(0, 20);
+  const results = find_docker_worktrees(base_dir);
+  return results.map((wt) => wt.path);
 }
 
 function get_container_status(container_name) {
@@ -190,16 +151,13 @@ async function main() {
 
   const repo_root = check_repo();
   debug('main: repo_root=' + repo_root);
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
+  const worktrees_dir = resolve_worktrees_dir(repo_root);
 
   p.intro('Create a worktree');
 
   const existing = find_existing_worktrees(worktrees_dir);
   debug('main: found ' + existing.length + ' existing worktrees in ' + worktrees_dir);
   const alias_var = config ? (config.env.worktreeVars.alias || 'WORKTREE_ALIAS') : 'WORKTREE_ALIAS';
-  const existing_aliases = existing.map((wt) => read_env(wt, alias_var)).filter(Boolean);
   const existing_info = existing.map((wt) => {
     const alias = read_env(wt, alias_var);
     const name = path.basename(wt);
@@ -207,6 +165,7 @@ async function main() {
     const status = container ? get_container_status(container) : 'unknown';
     return { path: wt, name, alias, container, status };
   });
+  const existing_aliases = existing_info.map((w) => w.alias).filter(Boolean);
 
   // Step 1: What do you want to do?
   const stopped = existing_info.filter((w) => w.status === 'exited' || w.status === 'created');

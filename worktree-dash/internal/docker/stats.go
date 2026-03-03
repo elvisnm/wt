@@ -3,13 +3,14 @@ package docker
 import (
 	"strings"
 
+	"github.com/elvisnm/wt/internal/cmdutil"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/worktree"
 )
 
 // FetchContainerStats updates CPU and memory stats for all docker worktrees
 func FetchContainerStats(worktrees []worktree.Worktree, cfg *config.Config) []worktree.Worktree {
-	raw, err := run_cmd("docker", "stats", "--no-stream", "--format", "json")
+	raw, err := cmdutil.RunCmd("docker", "stats", "--no-stream", "--format", "json")
 	if err != nil {
 		return worktrees
 	}
@@ -19,11 +20,11 @@ func FetchContainerStats(worktrees []worktree.Worktree, cfg *config.Config) []wo
 		prefix = cfg.ContainerPrefix()
 	}
 
-	stats := parse_json_lines(raw)
+	stats := cmdutil.ParseJSONLines(raw)
 	stats_map := make(map[string]map[string]interface{})
 
 	for _, s := range stats {
-		name := get_string_field(s, "Name", "name")
+		name := cmdutil.GetStringField(s, "Name", "name")
 		if name != "" && strings.HasPrefix(name, prefix) {
 			stats_map[name] = s
 		}
@@ -33,13 +34,13 @@ func FetchContainerStats(worktrees []worktree.Worktree, cfg *config.Config) []wo
 		wt := &worktrees[i]
 		s, ok := stats_map[wt.Container]
 		if ok {
-			wt.CPU = get_string_field(s, "CPUPerc")
-			mem_usage := get_string_field(s, "MemUsage")
+			wt.CPU = cmdutil.GetStringField(s, "CPUPerc")
+			mem_usage := cmdutil.GetStringField(s, "MemUsage")
 			parts := strings.SplitN(mem_usage, "/", 2)
 			if len(parts) > 0 {
 				wt.Mem = strings.TrimSpace(parts[0])
 			}
-			wt.MemPct = get_string_field(s, "MemPerc")
+			wt.MemPct = cmdutil.GetStringField(s, "MemPerc")
 		} else if !wt.Running {
 			wt.CPU = ""
 			wt.Mem = ""

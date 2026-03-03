@@ -1,17 +1,18 @@
 const { execSync } = require('child_process');
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { SERVICE_PORTS, compute_ports, format_port_table, find_free_offset, VALID_SERVICE_MODES } = require('./service-ports');
 const { get_lan_ip, build_lan_domain } = require('./lan-ip');
-const config_mod = require('./config');
+const {
+  config, config_mod, run, auto_alias, has_ref, compute_auto_offset,
+  resolve_worktrees_dir, update_env_key, remove_env_key,
+} = require('./lib/utils');
 
-const config = config_mod.load_config({ required: false }) || null;
 const scripts_dir = __dirname;
 
 // ── Arg parsing ─────────────────────────────────────────────────────────
 
-function parseArgs(argv) {
+function parse_args(argv) {
   const options = {
     name: null,
     branch: null,
@@ -65,19 +66,6 @@ function parseArgs(argv) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
-
-function auto_alias(branch_name) {
-  const prefixes = config ? config.repo.branchPrefixes : ['feat', 'fix', 'ops', 'hotfix', 'release', 'chore'];
-  const prefix_pattern = new RegExp(`^(${prefixes.join('|')})\\/`, 'i');
-  const stripped = branch_name.replace(prefix_pattern, '');
-  const clean = stripped.replace(/\//g, '-').replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
-  const parts = clean.split('-').filter(Boolean);
-  return parts.slice(0, 2).join('-') || clean.slice(0, 20);
-}
-
 function read_stored_mode(worktree_path) {
   const compose_path = path.join(worktree_path, 'docker-compose.worktree.yml');
   if (!fs.existsSync(compose_path)) return null;
@@ -93,22 +81,6 @@ function read_stored_alias(env_file_path) {
   const alias_var = config ? config_mod.worktree_var(config, 'alias') : 'WORKTREE_ALIAS';
   const match = content.match(new RegExp(`^${alias_var}=(.+)$`, 'm'));
   return match ? match[1].trim() : null;
-}
-
-function has_ref(repo_root, ref) {
-  try {
-    execSync(`git -C "${repo_root}" show-ref --verify --quiet "${ref}"`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function compute_auto_offset(seed) {
-  if (config) return config_mod.compute_offset(config, seed);
-  const hash = crypto.createHash('sha256').update(seed).digest('hex');
-  const hash_int = Number.parseInt(hash.slice(0, 8), 16);
-  return (hash_int % 2000) + 100;
 }
 
 function get_container_name(alias) {
@@ -435,25 +407,13 @@ function ensure_env_defaults(env_file, alias) {
 
 function ensure_env_offset(env_file, offset) {
   const offset_var = config ? config_mod.worktree_var(config, 'hostPortOffset') : 'WORKTREE_HOST_PORT_OFFSET';
-  let content = fs.readFileSync(env_file, 'utf8');
-  if (content.includes(`${offset_var}=`)) {
-    content = content.replace(new RegExp(`^${offset_var}=.+$`, 'm'), `${offset_var}=${offset}`);
-  } else {
-    content = content.trimEnd() + `\n${offset_var}=${offset}\n`;
-  }
-  fs.writeFileSync(env_file, content, 'utf8');
+  update_env_key(env_file, offset_var, offset);
 }
 
 function ensure_host_build(env_file, worktree_path, repo_root, enable) {
   const host_build_var = config ? config_mod.worktree_var(config, 'hostBuild') : 'WORKTREE_HOST_BUILD';
-  let content = fs.readFileSync(env_file, 'utf8');
   if (enable) {
-    if (!content.includes(`${host_build_var}=`)) {
-      content = content.trimEnd() + `\n${host_build_var}=true\n`;
-    } else {
-      content = content.replace(new RegExp(`^${host_build_var}=.+$`, 'm'), `${host_build_var}=true`);
-    }
-    fs.writeFileSync(env_file, content, 'utf8');
+    update_env_key(env_file, host_build_var, 'true');
 
     const nm_link = path.join(worktree_path, 'node_modules');
     const nm_target = path.join(repo_root, 'node_modules');
@@ -472,11 +432,8 @@ function ensure_host_build(env_file, worktree_path, repo_root, enable) {
       console.log(`Symlinked node_modules -> ${nm_target}`);
     }
   } else {
-    if (content.includes(`${host_build_var}=`)) {
-      content = content.replace(new RegExp(`^${host_build_var}=.+\\n?`, 'm'), '');
-      fs.writeFileSync(env_file, content, 'utf8');
-      console.log('Disabled host-build mode.');
-    }
+    remove_env_key(env_file, host_build_var);
+    console.log('Disabled host-build mode.');
     const nm_link = path.join(worktree_path, 'node_modules');
     try {
       const stat = fs.lstatSync(nm_link);
@@ -570,7 +527,7 @@ function generate_traefik_override(worktree_path, alias, network_name) {
 // ── Main ────────────────────────────────────────────────────────────────
 
 function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parse_args(process.argv.slice(2));
   if (!options || !options.name) {
     console.log('Usage:');
     console.log('  wt up <name> --from=origin/branch');
@@ -598,9 +555,7 @@ function main() {
   }
 
   const repo_root = run('git rev-parse --show-toplevel');
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
+  const worktrees_dir = resolve_worktrees_dir(repo_root);
 
   fs.mkdirSync(worktrees_dir, { recursive: true });
 

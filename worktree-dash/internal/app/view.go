@@ -1,8 +1,7 @@
 package app
 
 import (
-	"fmt"
-
+	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
 
@@ -25,9 +24,9 @@ func (m Model) View() string {
 	// The right pane (terminal) is managed natively by tmux.
 
 	// 1 - Active Tabs panel
-	labels := m.term_mgr.TabLabels()
-	tab_infos := make([]ui.TabInfo, len(labels))
-	for i, l := range labels {
+	tab_labels := m.term_mgr.TabLabels()
+	tab_infos := make([]ui.TabInfo, len(tab_labels))
+	for i, l := range tab_labels {
 		tab_infos[i] = ui.TabInfo{
 			Index:  l.Index,
 			Label:  l.Label,
@@ -72,22 +71,22 @@ func (m Model) View() string {
 	if m.picker_open {
 		var picker_title string
 		switch m.picker_context {
-		case "db":
-			picker_title = "Database"
+		case pickerDB:
+			picker_title = labels.Database
 			if selected_wt != nil {
-				picker_title = fmt.Sprintf("Database — %s", selected_wt.Alias)
+				picker_title = labels.Tab(labels.Database, selected_wt.Alias)
 			}
-		case "maintenance":
-			picker_title = "Maintenance"
-		case "remove":
-			picker_title = "Remove"
+		case pickerMaintenance:
+			picker_title = labels.Maintenance
+		case pickerRemove:
+			picker_title = labels.Remove
 			if selected_wt != nil {
-				picker_title = fmt.Sprintf("Remove — %s", selected_wt.Alias)
+				picker_title = labels.Tab(labels.Remove, selected_wt.Alias)
 			}
 		default:
-			picker_title = "Actions"
+			picker_title = labels.Actions
 			if selected_wt != nil {
-				picker_title = fmt.Sprintf("Actions — %s", selected_wt.Alias)
+				picker_title = labels.Tab(labels.Actions, selected_wt.Alias)
 			}
 		}
 		picker_h := len(m.picker_actions) + 2
@@ -119,106 +118,6 @@ func (m Model) View() string {
 	}
 
 	return left_col
-}
-
-func (m Model) status_panel_name() string {
-	if m.picker_open {
-		return "Picker"
-	}
-	return panel_display_name(m.focus)
-}
-
-func panel_display_name(p Panel) string {
-	switch p {
-	case PanelTerminal:
-		return "Active Tabs"
-	case PanelWorktrees:
-		return "Worktrees"
-	case PanelServices:
-		return "Services"
-	case PanelDetails:
-		return "Details"
-	default:
-		return ""
-	}
-}
-
-func (m Model) status_hints() []ui.HintPair {
-	if m.picker_open {
-		return []ui.HintPair{
-			{Key: "j/k", Desc: "navigate"},
-			{Key: "Enter", Desc: "select"},
-			{Key: "Esc", Desc: "close"},
-		}
-	}
-
-	common := []ui.HintPair{
-		{Key: "</>", Desc: "panel"},
-		{Key: "a/w/s", Desc: "jump"},
-		{Key: "q", Desc: "quit"},
-	}
-
-	switch m.focus {
-	case PanelWorktrees:
-		wt := m.selected_worktree()
-		hints := []ui.HintPair{
-			{Key: "j/k", Desc: "navigate"},
-			{Key: "Enter", Desc: "actions"},
-			{Key: "b", Desc: "shell"},
-			{Key: "z", Desc: "zsh"},
-			{Key: "c", Desc: "claude"},
-		}
-		if wt != nil && wt.Running {
-			hints = append(hints, ui.HintPair{Key: "l", Desc: "logs"})
-		}
-		if wt != nil && wt.HostBuild && wt.Running && (m.cfg == nil || m.cfg.FeatureEnabled("hostBuild")) {
-			hints = append(hints, ui.HintPair{Key: "e", Desc: "build"})
-		}
-		if wt == nil || (!wt.ContainerExists && wt.Type != worktree.TypeLocal) {
-			hints = append(hints, ui.HintPair{Key: "n", Desc: "create"})
-		}
-		return append(hints, common...)
-	case PanelDetails:
-		return append([]ui.HintPair{
-			{Key: "j/k", Desc: "scroll"},
-			{Key: "Esc", Desc: "back"},
-		}, common...)
-	case PanelServices:
-		wt := m.selected_worktree()
-		static_local := wt != nil && m.is_static_local(*wt)
-		if static_local {
-			return append([]ui.HintPair{
-				{Key: "j/k", Desc: "navigate"},
-				{Key: "Enter/l", Desc: "logs"},
-				{Key: "Esc", Desc: "back"},
-			}, common...)
-		}
-		if m.preview_session != nil {
-			return append([]ui.HintPair{
-				{Key: "j/k", Desc: "navigate"},
-				{Key: "l", Desc: "pin logs"},
-				{Key: "Esc", Desc: "close preview"},
-			}, common...)
-		}
-		return append([]ui.HintPair{
-			{Key: "j/k", Desc: "navigate"},
-			{Key: "Enter", Desc: "preview"},
-			{Key: "l", Desc: "logs"},
-			{Key: "r", Desc: "restart"},
-			{Key: "Esc", Desc: "back"},
-		}, common...)
-	case PanelTerminal:
-		hints := []ui.HintPair{
-			{Key: "j/k", Desc: "navigate"},
-			{Key: "Enter", Desc: "focus"},
-			{Key: "f", Desc: "fullscreen"},
-			{Key: "x", Desc: "close"},
-			{Key: "Esc", Desc: "back"},
-		}
-		return append(hints, common...)
-	}
-
-	return common
 }
 
 func (m Model) loading_view() string {

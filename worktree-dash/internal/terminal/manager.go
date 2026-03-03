@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/elvisnm/wt/internal/labels"
 )
 
 // Manager handles multiple tmux-backed terminal sessions (tabs).
@@ -200,22 +202,6 @@ func (mgr *Manager) IsLabelAlive(label string) bool {
 	return false
 }
 
-// ExitCodeForLabel returns the exit code of a finished session, or -1 if not found/still alive
-func (mgr *Manager) ExitCodeForLabel(label string) int {
-	mgr.mu.Lock()
-	defer mgr.mu.Unlock()
-
-	for _, s := range mgr.sessions {
-		if s.Label == label {
-			s.mu.Lock()
-			code := s.ExitCode
-			s.mu.Unlock()
-			return code
-		}
-	}
-	return -1
-}
-
 // Active returns the currently active session, or nil if none
 func (mgr *Manager) Active() *Session {
 	mgr.mu.Lock()
@@ -362,6 +348,22 @@ func (mgr *Manager) CloseByLabel(label string) {
 	}
 }
 
+// CloseByPrefix closes all sessions whose labels start with the given prefix.
+func (mgr *Manager) CloseByPrefix(prefix string) {
+	mgr.mu.Lock()
+	var matched []string
+	for _, s := range mgr.sessions {
+		if strings.HasPrefix(s.Label, prefix) {
+			matched = append(matched, s.Label)
+		}
+	}
+	mgr.mu.Unlock()
+
+	for _, label := range matched {
+		mgr.CloseByLabel(label)
+	}
+}
+
 // CloseDeadByPrefix closes any dead sessions whose labels match the prefix
 // (exact match or HasPrefix). Returns true if any sessions were closed.
 func (mgr *Manager) CloseDeadByPrefix(prefix string) bool {
@@ -383,7 +385,7 @@ func (mgr *Manager) CloseDeadByPrefix(prefix string) bool {
 // CloseDeadLogs closes any dead sessions whose labels start with "Logs".
 // Returns true if any sessions were closed.
 func (mgr *Manager) CloseDeadLogs() bool {
-	return mgr.CloseDeadByPrefix("Logs")
+	return mgr.CloseDeadByPrefix(labels.Logs)
 }
 
 // CloseAll closes all sessions and kills the tmux server.

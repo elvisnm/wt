@@ -1,78 +1,9 @@
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
-
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
-
-function resolve_worktrees_dir(repo_root) {
-  if (config && config.repo._worktreesDirResolved) {
-    return config.repo._worktreesDirResolved;
-  }
-  const project_name = path.basename(repo_root);
-  const parent_dir = path.dirname(repo_root);
-  return path.join(parent_dir, `${project_name}-worktrees`);
-}
-
-function find_docker_worktrees(base_dir) {
-  const results = [];
-  const env_filename = config ? config.env.filename : '.env.worktree';
-  function scan(dir) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const full_path = path.join(dir, entry.name);
-      // Detect worktrees: either generated compose file or .env.worktree (shared compose strategy)
-      if (fs.existsSync(path.join(full_path, 'docker-compose.worktree.yml')) ||
-          fs.existsSync(path.join(full_path, env_filename))) {
-        results.push(full_path);
-      }
-    }
-  }
-  scan(base_dir);
-  return results;
-}
-
-function read_env(worktree_path, key) {
-  const env_filename = config ? config.env.filename : '.env.worktree';
-  const env_path = path.join(worktree_path, env_filename);
-  if (!fs.existsSync(env_path)) return null;
-  const content = fs.readFileSync(env_path, 'utf8');
-  const match = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
-  return match ? match[1].trim() : null;
-}
-
-function read_container_name(worktree_path) {
-  const compose_file = path.join(worktree_path, 'docker-compose.worktree.yml');
-  try {
-    const content = fs.readFileSync(compose_file, 'utf8');
-    const match = content.match(/container_name:\s*(\S+)/);
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
-}
-
-function read_service_mode(worktree_path) {
-  // For shared compose, read from env or use config default
-  const shared = config ? config_mod.get_compose_info(config, worktree_path) : null;
-  if (shared) {
-    const svc_var = config.env.worktreeVars.services || 'WORKTREE_SERVICES';
-    const mode = read_env(worktree_path, svc_var);
-    return mode || config.services.defaultMode || 'default';
-  }
-  const compose_file = path.join(worktree_path, 'docker-compose.worktree.yml');
-  try {
-    const content = fs.readFileSync(compose_file, 'utf8');
-    const match = content.match(/WORKTREE_SERVICES=(\w+)/);
-    const fallback = config && config.services.defaultMode ? config.services.defaultMode : 'default';
-    return match ? match[1] : fallback;
-  } catch {
-    return config && config.services.defaultMode ? config.services.defaultMode : 'default';
-  }
-}
+const {
+  config, config_mod, run, resolve_worktrees_dir, find_docker_worktrees,
+  read_env_multi, read_container_name, read_service_mode,
+} = require('./lib/utils');
 
 function get_container_stats() {
   const stats = new Map();
@@ -235,8 +166,8 @@ function main() {
     return;
   }
 
-  const worktree_paths = find_docker_worktrees(worktrees_dir);
-  if (worktree_paths.length === 0) {
+  const docker_worktrees = find_docker_worktrees(worktrees_dir);
+  if (docker_worktrees.length === 0) {
     console.log('No Docker worktrees found.');
     return;
   }
@@ -244,28 +175,30 @@ function main() {
   const container_stats = get_container_stats();
 
   const rows = [];
-  for (const wt_path of worktree_paths) {
+  for (const wt of docker_worktrees) {
+    const wt_path = wt.path;
     const name_prefix = config ? config.name + '-' : '';
     const shared = config ? config_mod.get_compose_info(config, wt_path) : null;
 
+    const env = read_env_multi(wt_path, ['WORKTREE_ALIAS', 'WORKTREE_HOST_PORT_OFFSET', 'WORKTREE_PORT_OFFSET']);
     let alias, info, stats_data;
 
     if (shared) {
       // Shared compose strategy: multiple containers per worktree
-      alias = read_env(wt_path, 'WORKTREE_ALIAS') || shared.slug;
+      alias = env.WORKTREE_ALIAS || shared.slug;
       info = get_project_container_info(shared);
       const agg = aggregate_project_stats(container_stats, `${shared.project}-`);
       stats_data = agg ? { mem: agg.mem, cpu: agg.cpu } : null;
     } else {
       // Generate strategy: single container per worktree
       const container_name = read_container_name(wt_path) || `${name_prefix}${path.basename(wt_path)}`;
-      alias = read_env(wt_path, 'WORKTREE_ALIAS') || container_name.replace(new RegExp(`^${name_prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), '');
+      alias = env.WORKTREE_ALIAS || container_name.replace(new RegExp(`^${name_prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), '');
       info = get_container_info(container_name);
       const raw_stats = container_stats.get(container_name);
       stats_data = raw_stats ? { mem: raw_stats.mem.split('/')[0].trim(), cpu: raw_stats.cpu } : null;
     }
 
-    const offset = read_env(wt_path, 'WORKTREE_HOST_PORT_OFFSET') || read_env(wt_path, 'WORKTREE_PORT_OFFSET') || '?';
+    const offset = env.WORKTREE_HOST_PORT_OFFSET || env.WORKTREE_PORT_OFFSET || '?';
     const mode = read_service_mode(wt_path);
 
     let status;
@@ -303,7 +236,7 @@ function main() {
   const divider = '  ' + '-'.repeat(header.length - 2);
 
   console.log('');
-  console.log(`Docker worktrees (${rows.length}):`);
+  console.log(`Docker worktrees (${docker_worktrees.length}):`);
   console.log('');
   console.log(header);
   console.log(divider);

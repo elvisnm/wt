@@ -1,10 +1,10 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
+const { config, config_mod, resolve_worktree_path, get_container_name } = require('./lib/utils');
+const { ALL_SERVICE_NAMES } = require('./service-ports');
 
-function parseArgs(argv) {
+function parse_args(argv) {
   const options = {
     name: null,
     follow: false,
@@ -59,45 +59,8 @@ function parseArgs(argv) {
   return options;
 }
 
-function resolve_worktree_path(name) {
-  const repo_root = execSync('git rev-parse --show-toplevel', {
-    stdio: 'pipe',
-    encoding: 'utf8',
-  }).trim();
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
-  return path.join(worktrees_dir, name.replace(/\//g, '-'));
-}
-
-function get_container_name(worktree_path) {
-  try {
-    const output = execSync('docker compose -f docker-compose.worktree.yml ps --format json', {
-      stdio: 'pipe',
-      encoding: 'utf8',
-      cwd: worktree_path,
-    }).trim();
-
-    if (!output) return null;
-
-    const lines = output.split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        const data = JSON.parse(line);
-        return data.Name || data.name || null;
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-}
-
 function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parse_args(process.argv.slice(2));
   if (!options || !options.name) {
     console.log('Usage:');
     console.log('  pnpm dc:logs <name>                        Last 100 lines');
@@ -107,9 +70,7 @@ function main() {
     console.log('  pnpm dc:logs <name> -s app                 Logs for a specific PM2 service');
     console.log('  pnpm dc:logs <name> -s api -f              Follow specific service');
     console.log('');
-    console.log('Services: app, api, socket_server, admin_server, ship_server,');
-    console.log('          job_server, combined_sync, listings_sync, cache_server,');
-    console.log('          insights_server, order_table_server, inventory_table_server');
+    console.log(`Services: ${ALL_SERVICE_NAMES.join(', ')}`);
     process.exit(1);
   }
 

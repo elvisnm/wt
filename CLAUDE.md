@@ -9,7 +9,7 @@ wt/
 ├── workflow.config.example.js      # Example config
 ├── workflow.config.schema.md       # Full schema documentation
 ├── worktree-flow/                  # Node.js CLI scripts
-│   ├── config.js                   # Config loader + 15 helper functions
+│   ├── config.js                   # Config loader + helpers
 │   ├── dc.js                       # Interactive hub (@clack/prompts)
 │   ├── dc-worktree-up.js           # Create/restart worktrees
 │   ├── dc-worktree-down.js         # Stop/remove worktrees
@@ -22,6 +22,10 @@ wt/
 │   ├── generate-docker-compose.js  # YAML generator (generate strategy)
 │   ├── service-ports.js            # Port definitions + mode filtering
 │   ├── workflow-init.js            # Interactive config generator
+│   ├── lib/
+│   │   ├── utils.js                # Shared utilities (sanitize, env helpers, etc.)
+│   │   └── debug.js                # Debug logging factory
+│   ├── __tests__/                  # Jest test suites
 │   └── [dc-admin, dc-autostop, dc-build, dc-exec, dc-images-fix,
 │        dc-lan, dc-prune, dc-rebuild-base, dc-seed, dc-service,
 │        dc-skip-worktree].js
@@ -31,12 +35,15 @@ wt/
     ├── Makefile
     └── internal/
         ├── app/                    # Model, Update, View, Actions, Keys
+        ├── cmdutil/                # Shared helpers (RunCmd, ParseJSONLines, GetStringField)
         ├── config/                 # Config loader (runs node to eval JS)
         ├── docker/                 # Container status, stats, services
-        ├── worktree/               # Discovery, git metadata, types
-        ├── terminal/               # Tmux session manager + pane layout
+        ├── labels/                 # Shared label constants
         ├── pm2/                    # PM2 service queries
-        └── ui/                     # Panels, picker, overlays, layout
+        ├── sentinel/               # Sentinel file helpers
+        ├── terminal/               # Tmux session manager + pane layout
+        ├── ui/                     # Panels, picker, overlays, layout
+        └── worktree/               # Discovery, git metadata, types
 ```
 
 ## Architecture
@@ -52,7 +59,7 @@ Every project-specific value comes from `workflow.config.js`. Both Node.js and G
 
 ### Config Loader (`worktree-flow/config.js`)
 
-Walks upward from CWD to find `workflow.config.js`. Deep-merges with defaults, resolves `{PREFIX}` templates in env vars, converts relative paths to absolute. Exports `load_config()` plus helpers: `container_name()`, `compose_project()`, `compute_offset()`, `compute_ports()`, `db_name()`, `domain_for()`, `get_compose_info()`, etc.
+Walks upward from CWD to find `workflow.config.js`. Deep-merges with defaults, resolves `{PREFIX}` templates in env vars, converts relative paths to absolute. Exports `load_config()` plus helpers: `container_name()`, `compose_project()`, `compute_offset()`, `compute_ports()`, `db_name()`, `domain_for()`, `get_compose_info()`, `worktree_var()`, etc. Shared utilities (path sanitization, env file manipulation, offset computation) live in `lib/utils.js`.
 
 ### Shared Compose Helper (`get_compose_info`)
 
@@ -164,6 +171,7 @@ Real-time container stats via `docker stats`. Integrated terminal sessions for s
 ### Node.js (worktree-flow)
 - **CommonJS** — `require()` / `module.exports`
 - **snake_case** for all functions: `find_docker_worktrees`, `read_env`, `compute_auto_offset`
+- **Shared modules** — `lib/utils.js` (path sanitization, env file helpers, offset computation), `lib/debug.js` (debug logging factory)
 - **Config pattern** — every script starts with:
   ```js
   const config_mod = require('./config');
@@ -171,12 +179,12 @@ Real-time container stats via `docker stats`. Integrated terminal sessions for s
   ```
 - **Legacy fallback** — `const value = config ? config.xxx : 'hardcoded_default';`
 - **Shell execution** — `execSync` with `{ stdio: 'pipe', encoding: 'utf8' }`
-- **No external deps** in scripts (except `@clack/prompts` in dc.js and dc-create.js)
+- **No external deps** in runtime scripts (except `@clack/prompts` in dc.js and dc-create.js). Jest is a devDependency for tests.
 
 ### Go (worktree-dash)
 - **snake_case** for unexported, **CamelCase** for exported
 - **Config via Node.js** — `exec.Command("node", "-e", script)` to evaluate JS config
-- **Package layout** — `internal/{app, config, docker, worktree, terminal, pm2, ui}`
+- **Package layout** — `internal/{app, cmdutil, config, docker, labels, pm2, sentinel, terminal, ui, worktree}`
 - **Bubbletea pattern** — Model/Update/View + Cmd messages
 - **Background refresh** — goroutines for stats (3s) and status (5s)
 
@@ -198,11 +206,13 @@ Real-time container stats via `docker stats`. Integrated terminal sessions for s
 | If you want to understand... | Read these files |
 |---|---|
 | Config system | `worktree-flow/config.js`, `workflow.config.schema.md` |
+| Shared JS utilities | `worktree-flow/lib/utils.js`, `worktree-flow/lib/debug.js` |
 | Worktree creation | `worktree-flow/dc-worktree-up.js` |
 | Shared compose logic | `dc-worktree-up.js` (search "is_shared_compose"), `dc-status.js` (search "get_project_container_info") |
 | Status monitoring | `worktree-flow/dc-status.js` |
 | Interactive CLI | `worktree-flow/dc.js`, `worktree-flow/dc-create.js` |
 | Go dashboard | `worktree-dash/internal/app/model.go`, `update.go`, `view.go` |
+| Go shared helpers | `worktree-dash/internal/cmdutil/cmdutil.go` |
 | Go config loader | `worktree-dash/internal/config/config.go` |
 | Go discovery | `worktree-dash/internal/worktree/discover.go` |
 | Example configs | `workflow.config.example.js`, check `~/dev/build-check/workflow.config.js` |
@@ -226,7 +236,7 @@ This produces `worktree-dash/wt-dev`. Never build as just `wt` — that conflict
 ## Testing
 
 - **Go**: `cd worktree-dash && go test ./...`
-- **Node.js**: No test framework — test by running commands against a real project with `workflow.config.js`
+- **Node.js**: `cd worktree-flow && npx jest` (292 tests across 4 suites). Coverage: `npx jest --coverage`
 - **Integration**: Create a worktree on a target project, verify dc:status/dc:info/dc:logs/dc:restart/dc:down lifecycle
 
 ## Adding Support for a New Project

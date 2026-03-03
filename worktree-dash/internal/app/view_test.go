@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/worktree"
 
@@ -58,8 +59,8 @@ func TestViewWithPickerOpen(t *testing.T) {
 		t.Error("View missing 'Stop' action in picker")
 	}
 
-	// Check "Actions" title appears
-	has_title := strings.Contains(view, "Actions")
+	// Check Actions title appears
+	has_title := strings.Contains(view, labels.Actions)
 	if !has_title {
 		t.Error("View missing 'Actions' title in picker")
 	}

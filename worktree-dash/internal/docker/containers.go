@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elvisnm/wt/internal/cmdutil"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/worktree"
 )
@@ -21,12 +22,12 @@ func FetchContainerStatus(worktrees []worktree.Worktree, cfg *config.Config) []w
 	if filter != "" {
 		args = []string{"ps", "-a", "--filter", filter, "--format", "json"}
 	}
-	raw, err := run_cmd("docker", args...)
+	raw, err := cmdutil.RunCmd("docker", args...)
 	if err != nil {
 		return worktrees
 	}
 
-	containers := parse_json_lines(raw)
+	containers := cmdutil.ParseJSONLines(raw)
 
 	by_name := make(map[string]map[string]interface{})
 	by_workdir := make(map[string]map[string]interface{})
@@ -34,11 +35,11 @@ func FetchContainerStatus(worktrees []worktree.Worktree, cfg *config.Config) []w
 	wd_re := regexp.MustCompile(`com\.docker\.compose\.project\.working_dir=([^,]+)`)
 
 	for _, c := range containers {
-		name := get_string_field(c, "Names", "names")
+		name := cmdutil.GetStringField(c, "Names", "names")
 		if name != "" {
 			by_name[name] = c
 		}
-		labels := get_string_field(c, "Labels", "labels")
+		labels := cmdutil.GetStringField(c, "Labels", "labels")
 		if m := wd_re.FindStringSubmatch(labels); m != nil {
 			by_workdir[m[1]] = c
 		}
@@ -81,16 +82,16 @@ func FetchContainerStatus(worktrees []worktree.Worktree, cfg *config.Config) []w
 			continue
 		}
 
-		matched_name := get_string_field(match, "Names", "names")
+		matched_name := cmdutil.GetStringField(match, "Names", "names")
 		if matched_name != "" && matched_name != wt.Container {
 			wt.Container = matched_name
 		}
 
 		wt.ContainerExists = true
-		state := strings.ToLower(get_string_field(match, "State", "state"))
+		state := strings.ToLower(cmdutil.GetStringField(match, "State", "state"))
 		wt.Running = state == "running"
 
-		status := get_string_field(match, "Status", "status")
+		status := cmdutil.GetStringField(match, "Status", "status")
 		switch {
 		case strings.Contains(status, "healthy"):
 			wt.Health = "healthy"
@@ -108,7 +109,7 @@ func FetchContainerStatus(worktrees []worktree.Worktree, cfg *config.Config) []w
 			continue
 		}
 
-		inspect_raw, err := run_cmd("docker", "inspect", "--format", "json", wt.Container)
+		inspect_raw, err := cmdutil.RunCmd("docker", "inspect", "--format", "json", wt.Container)
 		if err != nil {
 			continue
 		}

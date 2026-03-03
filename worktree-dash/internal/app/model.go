@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/docker"
+	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/pm2"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/ui"
@@ -50,7 +52,7 @@ type Model struct {
 	picker_open     bool
 	picker_cursor   int
 	picker_actions  []ui.PickerAction
-	picker_context  string // "worktree", "db", "maintenance"
+	picker_context  string // pickerWorktree, pickerDB, pickerMaintenance, pickerRemove
 
 	// Details panel scroll
 	details_scroll int
@@ -89,6 +91,9 @@ type Model struct {
 	// Skip-worktree: tracks when the skip-worktree script is running
 	skip_worktree_running bool
 
+	// Deferred esbuild: alias to open esbuild watch for after next discovery
+	pending_esbuild_alias string
+
 	// HeiHei easter egg
 	heihei_audio   []byte
 	heihei_tmpfile string
@@ -101,31 +106,22 @@ type Model struct {
 	layout ui.Layout
 }
 
-func NewModel() Model {
-	repo_root, err := worktree.FindRepoRoot()
-	if err != nil {
-		repo_root = ""
+// cleanup_temp_files removes any temporary files created during the session.
+func (m *Model) cleanup_temp_files() {
+	if m.heihei_tmpfile != "" {
+		os.Remove(m.heihei_tmpfile)
+		m.heihei_tmpfile = ""
 	}
+}
 
-	// Load config; nil means legacy mode (ignore error)
-	var cfg *config.Config
-	if repo_root != "" {
-		cfg, _ = config.Load(repo_root)
+// quit_action is the shared confirm handler for both quit paths.
+func quit_action(mdl *Model) (Model, tea.Cmd) {
+	mdl.close_preview()
+	if mdl.term_mgr.HasLiveSessions() {
+		mdl.term_mgr.CloseAll()
 	}
-
-	wt_dir := ""
-	if repo_root != "" {
-		wt_dir = worktree.ResolveWorktreesDir(repo_root, cfg)
-	}
-
-	return Model{
-		focus:         PanelWorktrees,
-		cursor:        0,
-		repo_root:     repo_root,
-		worktrees_dir: wt_dir,
-		cfg:           cfg,
-		term_mgr:      terminal.NewManager(),
-	}
+	mdl.cleanup_temp_files()
+	return *mdl, tea.Quit
 }
 
 // NewModelWithLayout creates a Model for inner mode with an existing tmux server and pane layout.
@@ -199,7 +195,7 @@ func (m Model) cmd_discover() tea.Cmd {
 		wts := worktree.Discover(m.worktrees_dir, m.worktrees, cfg)
 		debug_log("[discovery] found %d worktrees", len(wts))
 		for _, wt := range wts {
-			debug_log("[discovery]   %s type=%d alias=%s path=%s", wt.Name, wt.Type, wt.Alias, wt.Path)
+			debug_log("[discovery]   %s type=%v alias=%s path=%s", wt.Name, wt.Type, wt.Alias, wt.Path)
 		}
 		wts = worktree.SortWorktrees(wts)
 		debug_log("[discovery] fetching container status")
@@ -444,11 +440,10 @@ func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *t
 	case "devTab":
 		for i := range wts {
 			if wts[i].Type == worktree.TypeLocal && term_mgr != nil {
-				dev_label := fmt.Sprintf("Dev — %s", wts[i].Alias)
-				create_label := fmt.Sprintf("Create — %s", wts[i].Alias)
+				dev_label := labels.Tab(labels.Dev, wts[i].Alias)
+				create_label := labels.Tab(labels.Create, wts[i].Alias)
 				wts[i].Running = term_mgr.IsLabelAlive(dev_label) ||
-					term_mgr.IsLabelAlive(create_label) ||
-					term_mgr.IsLabelAlive("Create")
+					term_mgr.IsLabelAlive(create_label)
 				debug_log("[discovery]   %s running=%v (devTab)", wts[i].Alias, wts[i].Running)
 			}
 		}

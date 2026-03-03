@@ -1,63 +1,8 @@
-const { execSync, execFileSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
-
-const ALL_SERVICE_NAMES = config
-  ? Object.keys(config.services.ports)
-  : [
-    'app',
-    'api',
-    'socket_server',
-    'serviceHostServer',
-    'combined_sync',
-    'listings_sync',
-    'admin_server',
-    'ship_server',
-    'job_server',
-    'insights_server',
-    'cache_server',
-    'order_table_server',
-    'inventory_table_server',
-  ];
-
-function resolve_worktree_path(name) {
-  const repo_root = execSync('git rev-parse --show-toplevel', {
-    stdio: 'pipe',
-    encoding: 'utf8',
-  }).trim();
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
-  return path.join(worktrees_dir, name.replace(/\//g, '-'));
-}
-
-function get_container_name(worktree_path) {
-  try {
-    const output = execSync('docker compose -f docker-compose.worktree.yml ps --format json', {
-      stdio: 'pipe',
-      encoding: 'utf8',
-      cwd: worktree_path,
-    }).trim();
-
-    if (!output) return null;
-
-    const lines = output.split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        const data = JSON.parse(line);
-        return data.Name || data.name || null;
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-}
+const { config, resolve_worktree_path, get_container_name } = require('./lib/utils');
+const { ALL_SERVICE_NAMES } = require('./service-ports');
 
 function print_usage() {
   console.log('Usage:');

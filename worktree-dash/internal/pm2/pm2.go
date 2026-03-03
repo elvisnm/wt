@@ -2,9 +2,9 @@ package pm2
 
 import (
 	"encoding/json"
-	"os/exec"
 	"strings"
 
+	"github.com/elvisnm/wt/internal/cmdutil"
 	"github.com/elvisnm/wt/internal/worktree"
 )
 
@@ -25,7 +25,7 @@ func FetchServices(wt_path string) []worktree.Service {
 	}
 
 	for _, proc := range procs {
-		name := get_string_field(proc, "name")
+		name := cmdutil.GetStringField(proc, "name")
 		if name == "" {
 			continue
 		}
@@ -33,7 +33,7 @@ func FetchServices(wt_path string) []worktree.Service {
 		pm_cwd := ""
 		env_map, has_env := get_env(proc)
 		if has_env {
-			pm_cwd = get_string_field(env_map, "pm_cwd")
+			pm_cwd = cmdutil.GetStringField(env_map, "pm_cwd")
 		}
 
 		if !strings.HasPrefix(pm_cwd, wt_path) {
@@ -46,7 +46,7 @@ func FetchServices(wt_path string) []worktree.Service {
 		}
 
 		if has_env {
-			svc.Status = get_string_field(env_map, "status")
+			svc.Status = cmdutil.GetStringField(env_map, "status")
 			if restart, ok := env_map["restart_time"].(float64); ok {
 				svc.RestartCount = int(restart)
 			}
@@ -93,12 +93,12 @@ func FetchRunningWorktrees(wt_paths map[string]string) map[string]bool {
 			continue
 		}
 
-		status := get_string_field(env_map, "status")
+		status := cmdutil.GetStringField(env_map, "status")
 		if status != "online" {
 			continue
 		}
 
-		pm_cwd := get_string_field(env_map, "pm_cwd")
+		pm_cwd := cmdutil.GetStringField(env_map, "pm_cwd")
 		if pm_cwd == "" {
 			continue
 		}
@@ -115,7 +115,7 @@ func FetchRunningWorktrees(wt_paths map[string]string) map[string]bool {
 }
 
 func fetch_procs() []map[string]interface{} {
-	raw, err := run_cmd("pm2", "jlist")
+	raw, err := cmdutil.RunCmd("pm2", "jlist")
 	if err != nil {
 		return nil
 	}
@@ -137,22 +137,3 @@ func get_env(proc map[string]interface{}) (map[string]interface{}, bool) {
 	return nil, false
 }
 
-func run_cmd(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func get_string_field(data map[string]interface{}, keys ...string) string {
-	for _, key := range keys {
-		if v, ok := data[key]; ok {
-			if s, ok := v.(string); ok {
-				return s
-			}
-		}
-	}
-	return ""
-}
