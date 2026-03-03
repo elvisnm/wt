@@ -2,32 +2,11 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
+const {
+  config, config_mod, run, resolve_worktree_path, read_container_name,
+} = require('./lib/utils');
 
 const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-skip-worktree-done');
-
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
-
-function resolve_worktree_path(repo_root, name) {
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
-  return path.join(worktrees_dir, name.replace(/\//g, '-'));
-}
-
-function read_container_name(worktree_path) {
-  const compose_file = path.join(worktree_path, 'docker-compose.worktree.yml');
-  try {
-    const content = fs.readFileSync(compose_file, 'utf8');
-    const match = content.match(/container_name:\s*(\S+)/);
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
-}
 
 function get_skip_paths() {
   const paths = config && config.git && Array.isArray(config.git.skipWorktree)

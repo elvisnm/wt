@@ -1,20 +1,5 @@
 const { execSync } = require('child_process');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
-
-function find_mongo_container() {
-  try {
-    const output = execSync('docker ps --format "{{.Names}}"', {
-      stdio: 'pipe',
-      encoding: 'utf8',
-    }).trim();
-    const names = output.split('\n').filter(Boolean);
-    const project_name = config ? config.name : 'project';
-    return names.find((n) => n.includes(project_name) && n.includes('mongo')) || null;
-  } catch {
-    return null;
-  }
-}
+const { config, config_mod, find_mongo_container } = require('./lib/utils');
 
 function main() {
   if (config && !config_mod.feature_enabled(config, 'imagesFix')) {

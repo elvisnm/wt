@@ -1,10 +1,8 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-
 const os = require('os');
-const config = config_mod.load_config({ required: false }) || null;
+const { config, config_mod, run, find_docker_worktrees, read_env, auto_alias } = require('./lib/utils');
 
 const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-create-done');
 const DEBUG_LOG = path.join(os.tmpdir(), 'wt-debug.log');
@@ -16,10 +14,6 @@ function debug(msg) {
 }
 
 process.on('SIGINT', () => process.exit(0));
-
-function run(command) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8' }).trim();
-}
 
 // ── Scripts directory resolution ────────────────────────────────────────
 
@@ -37,37 +31,8 @@ const scripts_dir = resolve_scripts_dir();
 // ── Worktree discovery ──────────────────────────────────────────────────
 
 function find_existing_worktrees(base_dir) {
-  const results = [];
-  if (!fs.existsSync(base_dir)) return results;
-  const env_filename = config ? config.env.filename : '.env.worktree';
-  for (const entry of fs.readdirSync(base_dir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const full_path = path.join(base_dir, entry.name);
-    // Check for env file (shared compose) or docker-compose.worktree.yml (generate)
-    if (fs.existsSync(path.join(full_path, env_filename)) ||
-        fs.existsSync(path.join(full_path, 'docker-compose.worktree.yml'))) {
-      results.push(full_path);
-    }
-  }
-  return results;
-}
-
-function read_env(worktree_path, key) {
-  const env_filename = config ? config.env.filename : '.env.worktree';
-  const env_path = path.join(worktree_path, env_filename);
-  if (!fs.existsSync(env_path)) return null;
-  const content = fs.readFileSync(env_path, 'utf8');
-  const match = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
-  return match ? match[1].trim() : null;
-}
-
-function auto_alias(branch_name) {
-  const prefixes = config ? config.repo.branchPrefixes : ['feat', 'fix', 'ops', 'hotfix', 'release', 'chore'];
-  const prefix_pattern = new RegExp(`^(${prefixes.join('|')})\\/`, 'i');
-  const stripped = branch_name.replace(prefix_pattern, '');
-  const clean = stripped.replace(/\//g, '-').replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
-  const parts = clean.split('-').filter(Boolean);
-  return parts.slice(0, 2).join('-') || clean.slice(0, 20);
+  const results = find_docker_worktrees(base_dir);
+  return results.map((wt) => wt.path);
 }
 
 function get_container_status(container_name) {

@@ -41,7 +41,7 @@ function compute_ports(offset) {
 }
 
 const SERVICE_MODE_FILTERS = config && config.services.modes
-  ? Object.fromEntries(Object.entries(config.services.modes).map(([k, v]) => [k, v]))
+  ? config.services.modes
   : {
     minimal: MINIMAL_SERVICES,
     full: null,
@@ -146,7 +146,7 @@ function get_valid_service_modes(cfg) {
  */
 function get_service_mode_filters(cfg) {
   return cfg && cfg.services.modes
-    ? Object.fromEntries(Object.entries(cfg.services.modes).map(([k, v]) => [k, v]))
+    ? cfg.services.modes
     : SERVICE_MODE_FILTERS;
 }
 

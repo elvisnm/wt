@@ -1,47 +1,14 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
+const {
+  config, config_mod, run, resolve_worktrees_dir, find_docker_worktrees, read_container_name,
+} = require('./lib/utils');
 
 const ADMIN_KEY = config ? config_mod.env_var(config, 'adminAccounts') : 'ADMIN_ACCOUNTS';
 const DEFAULT_ADMIN_ID = config && config.features.admin && config.features.admin.defaultUserId
   ? config.features.admin.defaultUserId
   : null;
-
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
-
-function resolve_worktrees_dir() {
-  if (config && config.repo._worktreesDirResolved) {
-    return config.repo._worktreesDirResolved;
-  }
-  const repo_root = run('git rev-parse --show-toplevel');
-  const project_name = path.basename(repo_root);
-  const parent_dir = path.dirname(repo_root);
-  return path.join(parent_dir, `${project_name}-worktrees`);
-}
-
-function find_docker_worktrees() {
-  const worktrees_dir = resolve_worktrees_dir();
-  if (!fs.existsSync(worktrees_dir)) return [];
-  const results = [];
-  function scan(dir, prefix) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const full_path = path.join(dir, entry.name);
-      const rel_name = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (fs.existsSync(path.join(full_path, 'docker-compose.worktree.yml'))) {
-        results.push({ name: rel_name, path: full_path });
-      } else {
-        scan(full_path, rel_name);
-      }
-    }
-  }
-  scan(worktrees_dir, '');
-  return results;
-}
 
 function is_running(worktree_path) {
   try {
@@ -53,16 +20,6 @@ function is_running(worktree_path) {
     }
   } catch { }
   return false;
-}
-
-function read_container_name(worktree_path) {
-  try {
-    const content = fs.readFileSync(path.join(worktree_path, 'docker-compose.worktree.yml'), 'utf8');
-    const match = content.match(/container_name:\s*(\S+)/);
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
 }
 
 function update_env(env_path, set_admin, admin_id) {
@@ -99,7 +56,12 @@ function main() {
   }
 
   const set_admin = action === 'set';
-  const worktrees = find_docker_worktrees();
+  const worktrees_dir = resolve_worktrees_dir();
+  if (!fs.existsSync(worktrees_dir)) {
+    console.error('No Docker worktrees found.');
+    process.exit(1);
+  }
+  const worktrees = find_docker_worktrees(worktrees_dir);
 
   if (worktrees.length === 0) {
     console.error('No Docker worktrees found.');
@@ -111,7 +73,8 @@ function main() {
   for (const wt of worktrees) {
     if (target && !wt.name.includes(target)) continue;
 
-    const env_path = path.join(wt.path, '.env.worktree');
+    const env_filename = config ? config.env.filename : '.env.worktree';
+    const env_path = path.join(wt.path, env_filename);
     if (!fs.existsSync(env_path)) continue;
 
     const running = is_running(wt.path);

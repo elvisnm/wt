@@ -1,45 +1,12 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
-
-function resolve_worktree_path(name) {
-  const repo_root = execSync('git rev-parse --show-toplevel', {
-    stdio: 'pipe',
-    encoding: 'utf8',
-  }).trim();
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
-  return path.join(worktrees_dir, name.replace(/\//g, '-'));
-}
-
-function read_env_value(env_file, key) {
-  if (!fs.existsSync(env_file)) return null;
-  const content = fs.readFileSync(env_file, 'utf8');
-  const match = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
-  return match ? match[1].trim() : null;
-}
+const { config, config_mod, resolve_worktree_path, read_env, find_mongo_container } = require('./lib/utils');
 
 function parse_db_name_from_mongo_url(url) {
   if (!url) return null;
   const match = url.match(/\/([^/?]+)(\?|$)/);
   return match ? match[1] : null;
-}
-
-function find_mongo_container() {
-  try {
-    const output = execSync('docker ps --format "{{.Names}}"', {
-      stdio: 'pipe',
-      encoding: 'utf8',
-    }).trim();
-    const names = output.split('\n').filter(Boolean);
-    const project_name = config ? config.name : 'project';
-    return names.find((n) => n.includes(project_name) && n.includes('mongo')) || null;
-  } catch {
-    return null;
-  }
 }
 
 const MONGO_HOST = config
@@ -73,9 +40,8 @@ function resolve_target_db(name) {
     process.exit(1);
   }
 
-  const env_file = path.join(worktree_path, '.env.worktree');
   const mongo_env_key = config ? config_mod.env_var(config, 'dbConnection') : 'MONGO_URL';
-  const mongo_url = read_env_value(env_file, mongo_env_key);
+  const mongo_url = read_env(worktree_path, mongo_env_key);
   const target_db = parse_db_name_from_mongo_url(mongo_url);
 
   if (!target_db) {

@@ -1,21 +1,7 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
-
-function resolve_worktrees_dir() {
-  if (config && config.repo._worktreesDirResolved) {
-    return config.repo._worktreesDirResolved;
-  }
-  const repo_root = execSync('git rev-parse --show-toplevel', {
-    stdio: 'pipe',
-    encoding: 'utf8',
-  }).trim();
-  const project_name = path.basename(repo_root);
-  const parent_dir = path.dirname(repo_root);
-  return path.join(parent_dir, `${project_name}-worktrees`);
-}
+const { config, config_mod, resolve_worktrees_dir } = require('./lib/utils');
 
 function find_worktree(name) {
   const worktrees_dir = resolve_worktrees_dir();
@@ -28,7 +14,8 @@ function find_worktree(name) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const full = path.join(dir, entry.name);
-      if (entry.name.includes(name) && fs.existsSync(path.join(full, '.env.worktree'))) {
+      const env_filename = config ? config.env.filename : '.env.worktree';
+      if (entry.name.includes(name) && fs.existsSync(path.join(full, env_filename))) {
         return full;
       }
       const nested = scan(full);
@@ -123,9 +110,10 @@ function main() {
     process.exit(1);
   }
 
-  const env_file = path.join(worktree_path, '.env.worktree');
+  const env_filename = config ? config.env.filename : '.env.worktree';
+  const env_file = path.join(worktree_path, env_filename);
   if (!fs.existsSync(env_file)) {
-    console.error(`No .env.worktree found at: ${worktree_path}`);
+    console.error(`No ${env_filename} found at: ${worktree_path}`);
     process.exit(1);
   }
 

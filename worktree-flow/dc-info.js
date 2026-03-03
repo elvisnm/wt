@@ -2,8 +2,10 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { format_port_table, compute_ports, MINIMAL_SERVICES } = require('./service-ports');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
+const {
+  config, config_mod, run, resolve_worktrees_dir, find_docker_worktrees,
+  read_offset, read_service_mode, read_alias,
+} = require('./lib/utils');
 
 function parseArgs(argv) {
   const options = {
@@ -31,77 +33,6 @@ function parseArgs(argv) {
   return options;
 }
 
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
-
-function resolve_worktrees_dir(repo_root) {
-  if (config && config.repo._worktreesDirResolved) {
-    return config.repo._worktreesDirResolved;
-  }
-  const project_name = path.basename(repo_root);
-  const parent_dir = path.dirname(repo_root);
-  return path.join(parent_dir, `${project_name}-worktrees`);
-}
-
-function find_docker_worktrees(base_dir) {
-  const results = [];
-  const env_filename = config ? config.env.filename : '.env.worktree';
-
-  function scan(dir, prefix) {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const full_path = path.join(dir, entry.name);
-      const rel_name = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (fs.existsSync(path.join(full_path, 'docker-compose.worktree.yml')) ||
-          fs.existsSync(path.join(full_path, env_filename))) {
-        results.push({ name: rel_name, path: full_path });
-      } else {
-        scan(full_path, rel_name);
-      }
-    }
-  }
-
-  scan(base_dir, '');
-  return results;
-}
-
-function compute_auto_offset(seed) {
-  if (config) return config_mod.compute_offset(config, seed);
-  const crypto = require('crypto');
-  const hash = crypto.createHash('sha256').update(seed).digest('hex');
-  const hash_int = Number.parseInt(hash.slice(0, 8), 16);
-  return (hash_int % 2000) + 100;
-}
-
-function read_offset(worktree_path) {
-  const env_path = path.join(worktree_path, '.env.worktree');
-  if (fs.existsSync(env_path)) {
-    const content = fs.readFileSync(env_path, 'utf8');
-    const host_offset_match = content.match(/^WORKTREE_HOST_PORT_OFFSET=(\d+)/m);
-    if (host_offset_match) return Number.parseInt(host_offset_match[1], 10);
-
-    const offset_match = content.match(/^WORKTREE_PORT_OFFSET=(\d+)/m);
-    if (offset_match) return Number.parseInt(offset_match[1], 10);
-
-    const base_match = content.match(/^WORKTREE_PORT_BASE=(\d+)/m);
-    if (base_match) return Number.parseInt(base_match[1], 10) - 3000;
-  }
-
-  const compose_path = path.join(worktree_path, 'docker-compose.worktree.yml');
-  if (fs.existsSync(compose_path)) {
-    const content = fs.readFileSync(compose_path, 'utf8');
-    const port_match = content.match(/"(\d+):3001"/);
-    if (port_match) {
-      const host_port = Number.parseInt(port_match[1], 10);
-      if (host_port !== 3001) return host_port - 3001;
-    }
-  }
-
-  return compute_auto_offset(worktree_path);
-}
-
 function get_container_status(worktree_path) {
   try {
     const output = run('docker compose -f docker-compose.worktree.yml ps --format json', {
@@ -127,28 +58,6 @@ function get_container_status(worktree_path) {
     return null;
   }
 
-  return null;
-}
-
-function read_service_mode(worktree_path) {
-  const compose_file = path.join(worktree_path, 'docker-compose.worktree.yml');
-  try {
-    const content = fs.readFileSync(compose_file, 'utf8');
-    const match = content.match(/WORKTREE_SERVICES=(\w+)/);
-    const fallback = config && config.services.defaultMode ? config.services.defaultMode : 'default';
-    return match ? match[1] : fallback;
-  } catch {
-    return config && config.services.defaultMode ? config.services.defaultMode : 'default';
-  }
-}
-
-function read_alias(worktree_path) {
-  const env_path = path.join(worktree_path, '.env.worktree');
-  if (fs.existsSync(env_path)) {
-    const content = fs.readFileSync(env_path, 'utf8');
-    const match = content.match(/^WORKTREE_ALIAS=(.+)$/m);
-    if (match) return match[1].trim();
-  }
   return null;
 }
 

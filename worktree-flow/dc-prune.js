@@ -1,12 +1,7 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
-
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
+const { config, config_mod, run } = require('./lib/utils');
 
 function main() {
   const dry_run = process.argv.includes('--dry-run');
@@ -31,7 +26,8 @@ function main() {
   const active_aliases = new Set();
   if (fs.existsSync(worktrees_dir)) {
     for (const entry of fs.readdirSync(worktrees_dir)) {
-      const env_path = path.join(worktrees_dir, entry, '.env.worktree');
+      const env_filename = config ? config.env.filename : '.env.worktree';
+      const env_path = path.join(worktrees_dir, entry, env_filename);
       if (fs.existsSync(env_path)) {
         const content = fs.readFileSync(env_path, 'utf8');
         const match = content.match(/^WORKTREE_ALIAS=(.+)$/m);

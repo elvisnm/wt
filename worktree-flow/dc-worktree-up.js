@@ -1,12 +1,12 @@
 const { execSync } = require('child_process');
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { SERVICE_PORTS, compute_ports, format_port_table, find_free_offset, VALID_SERVICE_MODES } = require('./service-ports');
 const { get_lan_ip, build_lan_domain } = require('./lan-ip');
-const config_mod = require('./config');
+const {
+  config, config_mod, run, auto_alias, has_ref, compute_auto_offset,
+} = require('./lib/utils');
 
-const config = config_mod.load_config({ required: false }) || null;
 const scripts_dir = __dirname;
 
 // ── Arg parsing ─────────────────────────────────────────────────────────
@@ -65,19 +65,6 @@ function parseArgs(argv) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
-
-function auto_alias(branch_name) {
-  const prefixes = config ? config.repo.branchPrefixes : ['feat', 'fix', 'ops', 'hotfix', 'release', 'chore'];
-  const prefix_pattern = new RegExp(`^(${prefixes.join('|')})\\/`, 'i');
-  const stripped = branch_name.replace(prefix_pattern, '');
-  const clean = stripped.replace(/\//g, '-').replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
-  const parts = clean.split('-').filter(Boolean);
-  return parts.slice(0, 2).join('-') || clean.slice(0, 20);
-}
-
 function read_stored_mode(worktree_path) {
   const compose_path = path.join(worktree_path, 'docker-compose.worktree.yml');
   if (!fs.existsSync(compose_path)) return null;
@@ -93,22 +80,6 @@ function read_stored_alias(env_file_path) {
   const alias_var = config ? config_mod.worktree_var(config, 'alias') : 'WORKTREE_ALIAS';
   const match = content.match(new RegExp(`^${alias_var}=(.+)$`, 'm'));
   return match ? match[1].trim() : null;
-}
-
-function has_ref(repo_root, ref) {
-  try {
-    execSync(`git -C "${repo_root}" show-ref --verify --quiet "${ref}"`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function compute_auto_offset(seed) {
-  if (config) return config_mod.compute_offset(config, seed);
-  const hash = crypto.createHash('sha256').update(seed).digest('hex');
-  const hash_int = Number.parseInt(hash.slice(0, 8), 16);
-  return (hash_int % 2000) + 100;
 }
 
 function get_container_name(alias) {

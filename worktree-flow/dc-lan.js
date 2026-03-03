@@ -1,39 +1,11 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
+const {
+  config, config_mod, run, resolve_worktree_path, read_env, read_container_name,
+} = require('./lib/utils');
 const { get_lan_ip, build_lan_domain } = require('./lan-ip');
 const { generate_traefik_config, find_traefik_dir, sanitize_name } = require('./generate-docker-compose');
-
-function run(command, opts = {}) {
-  return execSync(command, { stdio: 'pipe', encoding: 'utf8', ...opts }).trim();
-}
-
-function resolve_worktree_path(repo_root, name) {
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
-  return path.join(worktrees_dir, name.replace(/\//g, '-'));
-}
-
-function read_env(env_path, key) {
-  if (!fs.existsSync(env_path)) return null;
-  const content = fs.readFileSync(env_path, 'utf8');
-  const match = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
-  return match ? match[1].trim() : null;
-}
-
-function read_container_name(worktree_path) {
-  const compose_file = path.join(worktree_path, 'docker-compose.worktree.yml');
-  try {
-    const content = fs.readFileSync(compose_file, 'utf8');
-    const match = content.match(/container_name:\s*(\S+)/);
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
-}
 
 function update_env_key(env_path, key, value) {
   let content = fs.readFileSync(env_path, 'utf8');
@@ -73,16 +45,17 @@ function main() {
     process.exit(1);
   }
 
-  const env_path = path.join(worktree_path, '.env.worktree');
+  const env_filename = config ? config.env.filename : '.env.worktree';
+  const env_path = path.join(worktree_path, env_filename);
   if (!fs.existsSync(env_path)) {
-    console.error(`No .env.worktree found at: ${worktree_path}`);
+    console.error(`No ${env_filename} found at: ${worktree_path}`);
     process.exit(1);
   }
 
   const container_prefix = config ? config.name + '-' : '';
-  const alias = read_env(env_path, 'WORKTREE_ALIAS') || read_container_name(worktree_path)?.replace(new RegExp(`^${container_prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), '') || path.basename(worktree_path);
+  const alias = read_env(worktree_path, 'WORKTREE_ALIAS') || read_container_name(worktree_path)?.replace(new RegExp(`^${container_prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), '') || path.basename(worktree_path);
   const safe_name = sanitize_name(alias);
-  const offset_str = read_env(env_path, 'WORKTREE_HOST_PORT_OFFSET') || read_env(env_path, 'WORKTREE_PORT_OFFSET');
+  const offset_str = read_env(worktree_path, 'WORKTREE_HOST_PORT_OFFSET') || read_env(worktree_path, 'WORKTREE_PORT_OFFSET');
   const port_offset = offset_str ? Number.parseInt(offset_str, 10) : 0;
   const container_name = config ? config_mod.container_name(config, safe_name) : safe_name;
   const localhost_domain = config ? config_mod.domain_for(config, safe_name) : `${safe_name}.localhost`;
