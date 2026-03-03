@@ -3,7 +3,7 @@ const path = require('path');
 const { format_port_table, compute_ports, MINIMAL_SERVICES } = require('./service-ports');
 const {
   config, config_mod, run, resolve_worktrees_dir, find_docker_worktrees,
-  read_offset, read_service_mode, read_alias,
+  read_offset, read_service_mode, read_env,
 } = require('./lib/utils');
 
 function parse_args(argv) {
@@ -66,7 +66,7 @@ function format_info(worktree_name, worktree_path, { compact = false } = {}) {
   if (!shared && !fs.existsSync(compose_file)) return false;
 
   const offset = read_offset(worktree_path);
-  const alias = read_alias(worktree_path);
+  const alias = read_env(worktree_path, 'WORKTREE_ALIAS');
 
   let container_info;
   if (shared) {

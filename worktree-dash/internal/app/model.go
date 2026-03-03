@@ -50,7 +50,7 @@ type Model struct {
 	picker_open     bool
 	picker_cursor   int
 	picker_actions  []ui.PickerAction
-	picker_context  string // "worktree", "db", "maintenance"
+	picker_context  string // pickerWorktree, pickerDB, pickerMaintenance, pickerRemove
 
 	// Details panel scroll
 	details_scroll int
@@ -99,33 +99,6 @@ type Model struct {
 	cfg           *config.Config
 
 	layout ui.Layout
-}
-
-func NewModel() Model {
-	repo_root, err := worktree.FindRepoRoot()
-	if err != nil {
-		repo_root = ""
-	}
-
-	// Load config; nil means legacy mode (ignore error)
-	var cfg *config.Config
-	if repo_root != "" {
-		cfg, _ = config.Load(repo_root)
-	}
-
-	wt_dir := ""
-	if repo_root != "" {
-		wt_dir = worktree.ResolveWorktreesDir(repo_root, cfg)
-	}
-
-	return Model{
-		focus:         PanelWorktrees,
-		cursor:        0,
-		repo_root:     repo_root,
-		worktrees_dir: wt_dir,
-		cfg:           cfg,
-		term_mgr:      terminal.NewManager(),
-	}
 }
 
 // NewModelWithLayout creates a Model for inner mode with an existing tmux server and pane layout.
@@ -444,8 +417,8 @@ func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *t
 	case "devTab":
 		for i := range wts {
 			if wts[i].Type == worktree.TypeLocal && term_mgr != nil {
-				dev_label := fmt.Sprintf("Dev — %s", wts[i].Alias)
-				create_label := fmt.Sprintf("Create — %s", wts[i].Alias)
+				dev_label := tab_label(LabelDev, wts[i].Alias)
+				create_label := tab_label(LabelCreate, wts[i].Alias)
 				wts[i].Running = term_mgr.IsLabelAlive(dev_label) ||
 					term_mgr.IsLabelAlive(create_label) ||
 					term_mgr.IsLabelAlive(LabelCreate)

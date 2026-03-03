@@ -222,22 +222,6 @@ function read_service_mode(worktree_path) {
   }
 }
 
-// ── Alias reading ────────────────────────────────────────────────────────
-
-/**
- * Read the WORKTREE_ALIAS from the env file.
- */
-function read_alias(worktree_path) {
-  const env_path = path.join(worktree_path, get_env_filename());
-  try {
-    const content = fs.readFileSync(env_path, 'utf8');
-    const match = content.match(/^WORKTREE_ALIAS=(.+)$/m);
-    return match ? match[1].trim() : null;
-  } catch {
-    return null;
-  }
-}
-
 // ── Mongo container ──────────────────────────────────────────────────────
 
 /**
@@ -309,7 +293,6 @@ module.exports = {
   get_container_name,
   read_container_name,
   read_service_mode,
-  read_alias,
   find_mongo_container,
   auto_alias,
   has_ref,

@@ -1,8 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
-const { compute_auto_offset } = require('./lib/utils');
+const { config, config_mod, compute_auto_offset } = require('./lib/utils');
 
 function parse_args(argv) {
   const options = {

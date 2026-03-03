@@ -1,7 +1,7 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { config, config_mod, run, has_ref, resolve_worktree_path, read_alias, sanitize_name } = require('./lib/utils');
+const { config, config_mod, run, has_ref, resolve_worktree_path, read_env, sanitize_name } = require('./lib/utils');
 
 function parse_args(argv) {
   const options = {
@@ -78,7 +78,7 @@ function main() {
   const env_filename = config ? config.env.filename : '.env.worktree';
   const shared = config ? config_mod.get_compose_info(config, worktree_path) : null;
   const is_docker = fs.existsSync(compose_file) || !!shared;
-  const alias = is_docker ? read_alias(worktree_path) : null;
+  const alias = is_docker ? read_env(worktree_path, 'WORKTREE_ALIAS') : null;
 
   if (is_docker) {
     if (shared) {

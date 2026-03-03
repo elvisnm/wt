@@ -158,33 +158,6 @@ func (s *Session) monitor_loop() {
 	}
 }
 
-// Write sends input bytes to the tmux pane via send-keys -H (hex-encoded).
-func (s *Session) Write(data []byte) (int, error) {
-	if len(data) == 0 {
-		return 0, nil
-	}
-
-	// Convert bytes to hex format for send-keys -H
-	hex_parts := make([]string, len(data))
-	for i, b := range data {
-		hex_parts[i] = fmt.Sprintf("%02x", b)
-	}
-
-	_, err := s.server.Run(
-		"send-keys", "-t", s.target, "-H",
-		strings.Join(hex_parts, " "),
-	)
-	if err != nil {
-		return 0, err
-	}
-	return len(data), nil
-}
-
-// WriteString sends a string to the tmux pane.
-func (s *Session) WriteString(str string) (int, error) {
-	return s.Write([]byte(str))
-}
-
 // Resize changes the tmux pane dimensions.
 func (s *Session) Resize(width, height int) {
 	s.server.Run(

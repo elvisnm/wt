@@ -1,6 +1,5 @@
 const { execSync } = require('child_process');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
+const { config, config_mod } = require('./lib/utils');
 
 /**
  * Service-to-base-port mapping for Docker worktrees.

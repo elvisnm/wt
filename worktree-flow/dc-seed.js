@@ -1,6 +1,5 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
-const path = require('path');
 const { config, config_mod, resolve_worktree_path, read_env, find_mongo_container } = require('./lib/utils');
 
 function parse_db_name_from_mongo_url(url) {

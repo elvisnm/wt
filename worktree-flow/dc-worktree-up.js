@@ -4,7 +4,7 @@ const path = require('path');
 const { SERVICE_PORTS, compute_ports, format_port_table, find_free_offset, VALID_SERVICE_MODES } = require('./service-ports');
 const { get_lan_ip, build_lan_domain } = require('./lan-ip');
 const {
-  config, config_mod, run, auto_alias, has_ref, compute_auto_offset,
+  config, config_mod, run, auto_alias, has_ref, compute_auto_offset, resolve_worktrees_dir,
 } = require('./lib/utils');
 
 const scripts_dir = __dirname;
@@ -569,9 +569,7 @@ function main() {
   }
 
   const repo_root = run('git rev-parse --show-toplevel');
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
+  const worktrees_dir = resolve_worktrees_dir(repo_root);
 
   fs.mkdirSync(worktrees_dir, { recursive: true });
 

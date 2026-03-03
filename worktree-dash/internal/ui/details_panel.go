@@ -96,7 +96,7 @@ func build_detail_lines(wt *worktree.Worktree, inner_w, spin_frame int, cfg *con
 	// Action in progress (e.g. "removing...", "starting...")
 	if strings.HasSuffix(wt.Health, "...") {
 		action := strings.TrimSuffix(wt.Health, "...")
-		frame := spinFrames[spin_frame%len(spinFrames)]
+		frame := SpinFrames[spin_frame%len(SpinFrames)]
 		status_text := fmt.Sprintf("%s %s", frame, action)
 		lines = append(lines, detail_line("Status",
 			lipgloss.NewStyle().Foreground(StartingColor).Render(status_text), inner_w))

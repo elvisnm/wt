@@ -715,7 +715,7 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.picker_actions = actions_for_worktree(*wt)
 			m.picker_cursor = 0
 			m.picker_open = true
-			m.picker_context = "worktree"
+			m.picker_context = pickerWorktree
 		}
 		return m, nil
 	}
@@ -1008,11 +1008,11 @@ func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) dispatch_picker(action ui.PickerAction) (Model, tea.Cmd) {
 	switch m.picker_context {
-	case "db":
+	case pickerDB:
 		return m.execute_db_action(action)
-	case "maintenance":
+	case pickerMaintenance:
 		return m.execute_maintenance_action(action)
-	case "remove":
+	case pickerRemove:
 		return m.execute_remove_action(action)
 	default:
 		return m.execute_picker_action(action)
@@ -1544,7 +1544,7 @@ func (m Model) handle_help_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, Keys.Escape), key.Matches(msg, Keys.Help),
 		key.Matches(msg, Keys.Quit), key.Matches(msg, Keys.CtrlC):
 		m.help_open = false
-		m.term_mgr.CloseByLabel("Help")
+		m.term_mgr.CloseByLabel(LabelHelp)
 	}
 	return m, nil
 }
@@ -1553,7 +1553,7 @@ func (m Model) open_help() (Model, tea.Cmd) {
 	// If help is already open, close it (toggle)
 	if m.help_open {
 		m.help_open = false
-		m.term_mgr.CloseByLabel("Help")
+		m.term_mgr.CloseByLabel(LabelHelp)
 		return m, nil
 	}
 
@@ -1565,7 +1565,7 @@ func (m Model) open_help() (Model, tea.Cmd) {
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
 
-	_, err = m.term_mgr.Open("Help", exe, []string{"_help"}, w, h, "")
+	_, err = m.term_mgr.Open(LabelHelp, exe, []string{"_help"}, w, h, "")
 	if err != nil {
 		return m, nil
 	}
@@ -2028,7 +2028,7 @@ func (m Model) open_maintenance_picker() (tea.Model, tea.Cmd) {
 	m.picker_actions = ui.FilterMaintenanceActions(m.cfg)
 	m.picker_cursor = 0
 	m.picker_open = true
-	m.picker_context = "maintenance"
+	m.picker_context = pickerMaintenance
 	return m, nil
 }
 
@@ -2043,15 +2043,15 @@ func (m Model) execute_maintenance_action(action ui.PickerAction) (Model, tea.Cm
 	case "p":
 		script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-prune.js")
 		args = []string{script}
-		label = "Prune Volumes"
+		label = LabelPrune
 	case "s":
 		script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-autostop.js")
 		args = []string{script}
-		label = "Autostop Idle"
+		label = LabelAutostop
 	case "r":
 		script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-rebuild-base.js")
 		args = []string{script}
-		label = "Rebuild Base"
+		label = LabelRebuildBase
 	default:
 		return m, nil
 	}
@@ -2157,7 +2157,7 @@ func (m Model) open_db_picker() (tea.Model, tea.Cmd) {
 	m.picker_actions = ui.FilterDatabaseActions(m.cfg)
 	m.picker_cursor = 0
 	m.picker_open = true
-	m.picker_context = "db"
+	m.picker_context = pickerDB
 	return m, nil
 }
 
@@ -2276,7 +2276,7 @@ func (m Model) remove_worktree(wt worktree.Worktree) (Model, tea.Cmd) {
 	m.picker_open = true
 	m.picker_cursor = 0
 	m.picker_actions = ui.RemoveActions
-	m.picker_context = "remove"
+	m.picker_context = pickerRemove
 	return m, nil
 }
 

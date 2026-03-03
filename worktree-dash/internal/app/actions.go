@@ -67,13 +67,6 @@ type MsgActionOutput struct {
 	Err    error
 }
 
-// MsgConfirmAction asks for confirmation before destructive actions
-type MsgConfirmAction struct {
-	Action string
-	Desc   string
-}
-
-
 func actions_for_worktree(wt worktree.Worktree) []ui.PickerAction {
 	if wt.Type == worktree.TypeLocal {
 		if wt.Running {

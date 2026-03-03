@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/elvisnm/wt/internal/config"
+	"github.com/elvisnm/wt/internal/labels"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -17,26 +18,26 @@ type PickerAction struct {
 }
 
 var WorktreeActions = []PickerAction{
-	{Key: "b", Label: "Shell", Desc: "Container shell"},
-	{Key: "z", Label: "Zsh", Desc: "Host shell"},
-	{Key: "c", Label: "Claude", Desc: "Claude Code"},
+	{Key: "b", Label: labels.Shell, Desc: "Container shell"},
+	{Key: "z", Label: labels.Zsh, Desc: "Host shell"},
+	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
 	{Key: "r", Label: "Restart", Desc: "Restart container"},
 	{Key: "t", Label: "Stop", Desc: "Stop container"},
-	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
 }
 
 var StoppedActions = []PickerAction{
 	{Key: "u", Label: "Start", Desc: "Start container"},
-	{Key: "z", Label: "Zsh", Desc: "Host shell"},
-	{Key: "c", Label: "Claude", Desc: "Claude Code"},
-	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "z", Label: labels.Zsh, Desc: "Host shell"},
+	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
+	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
 }
 
 var DatabaseActions = []PickerAction{
 	{Key: "s", Label: "Seed", Desc: "Copy shared → worktree db"},
 	{Key: "d", Label: "Drop", Desc: "Drop worktree db"},
 	{Key: "r", Label: "Reset", Desc: "Drop + re-seed"},
-	{Key: "f", Label: "Fix Images", Desc: "Fix fakes3 URLs"},
+	{Key: "f", Label: labels.FixImages, Desc: "Fix fakes3 URLs"},
 }
 
 var MaintenanceActions = []PickerAction{
@@ -47,28 +48,28 @@ var MaintenanceActions = []PickerAction{
 
 var LocalActions = []PickerAction{
 	{Key: "u", Label: "Start", Desc: "Start dev server"},
-	{Key: "b", Label: "Shell", Desc: "Worktree shell"},
-	{Key: "c", Label: "Claude", Desc: "Claude Code"},
-	{Key: "n", Label: "Create", Desc: "Create container"},
+	{Key: "b", Label: labels.Shell, Desc: "Worktree shell"},
+	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
+	{Key: "n", Label: labels.Create, Desc: "Create container"},
 	{Key: "i", Label: "Info", Desc: "Worktree info"},
-	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
 }
 
 var HostBuildRunningActions = []PickerAction{
-	{Key: "e", Label: "Build", Desc: "Esbuild watch"},
-	{Key: "b", Label: "Shell", Desc: "Container shell"},
-	{Key: "z", Label: "Zsh", Desc: "Host shell"},
-	{Key: "c", Label: "Claude", Desc: "Claude Code"},
+	{Key: "e", Label: labels.Build, Desc: "Esbuild watch"},
+	{Key: "b", Label: labels.Shell, Desc: "Container shell"},
+	{Key: "z", Label: labels.Zsh, Desc: "Host shell"},
+	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
 	{Key: "r", Label: "Restart", Desc: "Restart container"},
 	{Key: "t", Label: "Stop", Desc: "Stop container"},
-	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
 }
 
 var HostBuildStoppedActions = []PickerAction{
 	{Key: "u", Label: "Start + Build", Desc: "Container + esbuild"},
-	{Key: "z", Label: "Zsh", Desc: "Host shell"},
-	{Key: "c", Label: "Claude", Desc: "Claude Code"},
-	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "z", Label: labels.Zsh, Desc: "Host shell"},
+	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
+	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
 }
 
 var RemoveActions = []PickerAction{
@@ -77,14 +78,14 @@ var RemoveActions = []PickerAction{
 }
 
 var LocalRunningActions = []PickerAction{
-	{Key: "b", Label: "Shell", Desc: "Worktree shell"},
-	{Key: "c", Label: "Claude", Desc: "Claude Code"},
-	{Key: "l", Label: "Logs", Desc: "Dev logs"},
+	{Key: "b", Label: labels.Shell, Desc: "Worktree shell"},
+	{Key: "c", Label: labels.Claude, Desc: "Claude Code"},
+	{Key: "l", Label: labels.Logs, Desc: "Dev logs"},
 	{Key: "r", Label: "Restart", Desc: "Restart services"},
 	{Key: "s", Label: "Services", Desc: "Manage services"},
 	{Key: "i", Label: "Info", Desc: "Worktree info"},
 	{Key: "t", Label: "Stop", Desc: "Stop dev server"},
-	{Key: "x", Label: "Remove", Desc: "Remove worktree"},
+	{Key: "x", Label: labels.Remove, Desc: "Remove worktree"},
 }
 
 // FilterDatabaseActions returns DatabaseActions filtered by config feature flags.

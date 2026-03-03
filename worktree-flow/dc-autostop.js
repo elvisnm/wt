@@ -1,7 +1,7 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { config, config_mod, run } = require('./lib/utils');
+const { config, run, resolve_worktrees_dir } = require('./lib/utils');
 
 function get_running_containers() {
   const container_prefix = config ? config.name + '-' : '';
@@ -65,9 +65,7 @@ function main() {
   const cpu_threshold = 1.0;
 
   const repo_root = run('git rev-parse --show-toplevel');
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
+  const worktrees_dir = resolve_worktrees_dir(repo_root);
 
   const containers = get_running_containers();
   if (containers.length === 0) {

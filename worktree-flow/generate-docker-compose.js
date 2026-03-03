@@ -2,9 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { SERVICE_PORTS, SERVICE_MODE_FILTERS } = require('./service-ports');
-const config_mod = require('./config');
-const config = config_mod.load_config({ required: false }) || null;
-const { sanitize_name, run } = require('./lib/utils');
+const { config, config_mod, sanitize_name, run } = require('./lib/utils');
 
 function generate(worktree_path, worktree_name, port_offset, repo_root, service_mode, alias, host_build) {
   const safe_name = alias ? sanitize_name(alias) : sanitize_name(worktree_name);

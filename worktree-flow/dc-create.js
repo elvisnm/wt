@@ -2,7 +2,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { config, config_mod, run, find_docker_worktrees, read_env, auto_alias } = require('./lib/utils');
+const { config, config_mod, run, find_docker_worktrees, read_env, auto_alias, resolve_worktrees_dir } = require('./lib/utils');
 
 const SENTINEL_PATH = path.join(os.tmpdir(), 'wt-create-done');
 const DEBUG_LOG = path.join(os.tmpdir(), 'wt-debug.log');
@@ -155,9 +155,7 @@ async function main() {
 
   const repo_root = check_repo();
   debug('main: repo_root=' + repo_root);
-  const worktrees_dir = config && config.repo._worktreesDirResolved
-    ? config.repo._worktreesDirResolved
-    : path.join(path.dirname(repo_root), `${path.basename(repo_root)}-worktrees`);
+  const worktrees_dir = resolve_worktrees_dir(repo_root);
 
   p.intro('Create a worktree');
 

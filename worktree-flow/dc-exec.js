@@ -1,4 +1,3 @@
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { resolve_worktree_path, get_container_name } = require('./lib/utils');
