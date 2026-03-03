@@ -91,6 +91,9 @@ type Model struct {
 	// Skip-worktree: tracks when the skip-worktree script is running
 	skip_worktree_running bool
 
+	// Deferred esbuild: alias to open esbuild watch for after next discovery
+	pending_esbuild_alias string
+
 	// HeiHei easter egg
 	heihei_audio   []byte
 	heihei_tmpfile string
@@ -440,8 +443,7 @@ func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *t
 				dev_label := labels.Tab(labels.Dev, wts[i].Alias)
 				create_label := labels.Tab(labels.Create, wts[i].Alias)
 				wts[i].Running = term_mgr.IsLabelAlive(dev_label) ||
-					term_mgr.IsLabelAlive(create_label) ||
-					term_mgr.IsLabelAlive(labels.Create)
+					term_mgr.IsLabelAlive(create_label)
 				debug_log("[discovery]   %s running=%v (devTab)", wts[i].Alias, wts[i].Running)
 			}
 		}

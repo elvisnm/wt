@@ -348,6 +348,22 @@ func (mgr *Manager) CloseByLabel(label string) {
 	}
 }
 
+// CloseByPrefix closes all sessions whose labels start with the given prefix.
+func (mgr *Manager) CloseByPrefix(prefix string) {
+	mgr.mu.Lock()
+	var matched []string
+	for _, s := range mgr.sessions {
+		if strings.HasPrefix(s.Label, prefix) {
+			matched = append(matched, s.Label)
+		}
+	}
+	mgr.mu.Unlock()
+
+	for _, label := range matched {
+		mgr.CloseByLabel(label)
+	}
+}
+
 // CloseDeadByPrefix closes any dead sessions whose labels match the prefix
 // (exact match or HasPrefix). Returns true if any sessions were closed.
 func (mgr *Manager) CloseDeadByPrefix(prefix string) bool {

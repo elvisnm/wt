@@ -45,6 +45,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		debug_log("[discovery] MsgDiscovered: count=%d first_load=%v", len(msg.Worktrees), first_load)
 		m.update_worktrees(msg.Worktrees)
 
+		// Open deferred esbuild watch for host-build worktrees created via dc-create
+		if m.pending_esbuild_alias != "" {
+			for _, wt := range m.worktrees {
+				if wt.Alias == m.pending_esbuild_alias && wt.HostBuild && wt.Running {
+					debug_log("[create] deferred esbuild open for %s", wt.Alias)
+					m, _ = m.open_esbuild_watch(wt)
+					break
+				}
+			}
+			m.pending_esbuild_alias = ""
+		}
+
 		// Signal the outer process that we're ready (unblocks tmux attach).
 		if first_load && m.pane_layout != nil {
 			m.pane_layout.Server().Run("wait-for", "-S", "wt-ready")
@@ -200,39 +212,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "render":
-			// Check if dc-create finished (via sentinel file)
-			if m.term_mgr.HasLabel(labels.Create) || m.has_create_alias_tab() {
-				if sr := sentinel.Read(sentinel.Create); sr != nil {
-					lines := strings.SplitN(sr.Raw, "\n", 2)
-					exit_code := sr.ExitCode
-					created_alias := ""
-					if len(lines) > 1 {
-						created_alias = strings.TrimSpace(lines[1])
-					}
-					debug_log("[create] sentinel found: exit_code=%d alias=%q", exit_code, created_alias)
+			// Check if dc-create finished (via sentinel file).
+			// Always check the sentinel first — the pane may have already
+			// been reaped as dead before the file becomes visible on disk.
+			if sr := sentinel.Read(sentinel.Create); sr != nil {
+				lines := strings.SplitN(sr.Raw, "\n", 2)
+				exit_code := sr.ExitCode
+				created_alias := ""
+				if len(lines) > 1 {
+					created_alias = strings.TrimSpace(lines[1])
+				}
+				debug_log("[create] sentinel found: exit_code=%d alias=%q", exit_code, created_alias)
 
-					// Close all Create tabs
-					m.term_mgr.CloseByLabel(labels.Create)
-					for _, wt := range m.worktrees {
-						m.term_mgr.CloseByLabel(labels.Tab(labels.Create, wt.Alias))
-					}
+				// Close all Create tabs
+				m.term_mgr.CloseByLabel(labels.Create)
+				for _, wt := range m.worktrees {
+					m.term_mgr.CloseByLabel(labels.Tab(labels.Create, wt.Alias))
+				}
 
-					// For host-build worktrees, open esbuild watch after creation
-					if exit_code == 0 && created_alias != "" {
-						for _, wt := range m.worktrees {
-							if wt.Alias == created_alias && wt.HostBuild && wt.Running {
-								m, _ = m.open_esbuild_watch(wt)
-								break
-							}
-						}
-					}
+				// Defer esbuild watch for host-build worktrees until after discovery
+				// refreshes the worktree list (the new worktree may not be in
+				// m.worktrees yet, or may not have HostBuild=true yet).
+				if exit_code == 0 && created_alias != "" {
+					m.pending_esbuild_alias = created_alias
+				}
 
-					m.focus_worktrees_if_empty()
-					return m, tea.Batch(
-						tick_after(100*time.Millisecond, "render"),
-						m.cmd_discover(),
-					)
-				} else if m.term_mgr.CloseDeadByPrefix(labels.Create) {
+				m.focus_worktrees_if_empty()
+				return m, tea.Batch(
+					tick_after(100*time.Millisecond, "render"),
+					m.cmd_discover(),
+				)
+			} else if m.term_mgr.HasLabel(labels.Create) || m.has_create_alias_tab() {
+				if m.term_mgr.CloseDeadByPrefix(labels.Create) {
 					// Create process died without writing sentinel (e.g. Ctrl+C)
 					m.focus_worktrees_if_empty()
 				}
@@ -306,8 +317,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								cmds = append(cmds, cmd)
 							}
 						case worktree.TypeDocker:
-							debug_log("[aws]   restart docker: %s (container=%s)", wt.Alias, wt.Container)
+							debug_log("[aws]   restart docker: %s (container=%s host_build=%v)", wt.Alias, wt.Container, wt.HostBuild)
 							wt := wt
+							if wt.HostBuild {
+								// Close existing esbuild tab — it has stale env
+								build_label := labels.Tab(labels.Build, wt.Alias)
+								m.term_mgr.CloseByLabel(build_label)
+								debug_log("[aws]   closed esbuild tab %q for restart", build_label)
+							}
 							cmds = append(cmds, tea.Sequence(
 								func() tea.Msg {
 									return MsgActionStarted{WtName: wt.Name, Status: "refreshing..."}
@@ -315,7 +332,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								func() tea.Msg {
 									run_docker("stop", wt.Container)
 									out, err := run_worktree_up(wt, m.repo_root, m.cfg)
-									return MsgActionOutput{Output: out, Err: err}
+									if err != nil {
+										return MsgActionOutput{Output: out, Err: err}
+									}
+									if wt.HostBuild {
+										return MsgOpenBuildAfterStart{WtName: wt.Name}
+									}
+									return MsgActionOutput{Output: out}
 								},
 							))
 						}
@@ -747,6 +770,9 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if wt.Type == worktree.TypeLocal {
 				return m.restart_local_services(*wt)
 			}
+			if wt.HostBuild {
+				return m.restart_host_build(*wt)
+			}
 			return m, cmd_docker_action("restart", *wt, m.repo_root, m.cfg)
 		}
 	case "t":
@@ -1033,6 +1059,9 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 		if wt.Type == worktree.TypeLocal {
 			return m.restart_local_services(*wt)
 		}
+		if wt.HostBuild {
+			return m.restart_host_build(*wt)
+		}
 		return m, cmd_docker_action("restart", *wt, m.repo_root, m.cfg)
 	case "t":
 		if wt.Type == worktree.TypeLocal {
@@ -1281,6 +1310,8 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 	var label string
 	var dir string
 
+	svc_label := wt.Alias + "/" + svc.DisplayName
+
 	if wt.Type == worktree.TypeDocker && manager == "static" {
 		// Static Docker: use docker logs (no pm2 inside containers)
 		cmd_name = "docker"
@@ -1290,7 +1321,7 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 		} else {
 			container := container_for_service(wt, svc.Name, m.cfg)
 			args = []string{"logs", "-f", "--tail", "80", container}
-			label = labels.Tab(labels.Logs, svc.DisplayName)
+			label = labels.Tab(labels.Logs, svc_label)
 		}
 	} else if wt.Type == worktree.TypeDocker {
 		cmd_name = "docker"
@@ -1299,7 +1330,7 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 			label = labels.Tab(labels.Logs, wt.Alias)
 		} else {
 			args = []string{"exec", "-it", wt.Container, "pm2", "logs", svc.Name, "--lines", "80"}
-			label = labels.Tab(labels.Logs, svc.DisplayName)
+			label = labels.Tab(labels.Logs, svc_label)
 		}
 	} else {
 		cmd_name = "pm2"
@@ -1309,7 +1340,7 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 			label = labels.Tab(labels.Logs, wt.Alias)
 		} else {
 			args = []string{"logs", svc.Name, "--lines", "80"}
-			label = labels.Tab(labels.Logs, svc.DisplayName)
+			label = labels.Tab(labels.Logs, svc_label)
 		}
 	}
 
@@ -1414,6 +1445,13 @@ func (m *Model) close_dev_tabs(alias string) {
 	m.term_mgr.CloseByLabel(labels.Tab(labels.Dev, alias))
 	m.term_mgr.CloseByLabel(labels.Tab(labels.Create, alias))
 	m.term_mgr.CloseByLabel(labels.Create)
+}
+
+// close_worktree_logs closes all log tabs scoped to a worktree.
+// Per-service labels are "Logs — alias/svc", all-logs label is "Logs — alias".
+func (m *Model) close_worktree_logs(wt worktree.Worktree) {
+	m.term_mgr.CloseByLabel(labels.Tab(labels.Logs, wt.Alias))
+	m.term_mgr.CloseByPrefix(labels.Tab(labels.Logs, wt.Alias+"/"))
 }
 
 func tick_after(d time.Duration, kind string) tea.Cmd {
@@ -1721,6 +1759,9 @@ func (m Model) run_stop_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 
 	// Close the dev server terminal session if it exists
 	m.close_dev_tabs(wt.Alias)
+	// Close any open service log tabs for this worktree
+	m.close_worktree_logs(wt)
+	m.close_preview()
 	if m.term_mgr.Count() == 0 && m.focus == PanelTerminal {
 		m.focus = PanelWorktrees
 	}
@@ -2241,6 +2282,26 @@ func (m Model) start_host_build(wt worktree.Worktree) (Model, tea.Cmd) {
 		},
 		func() tea.Msg {
 			out, err := run_worktree_up(wt, m.repo_root, m.cfg)
+			if err != nil {
+				return MsgActionOutput{Output: out, Err: err}
+			}
+			return MsgOpenBuildAfterStart{WtName: wt.Name}
+		},
+	)
+}
+
+// restart_host_build restarts the Docker container and reopens the esbuild watch tab
+func (m Model) restart_host_build(wt worktree.Worktree) (Model, tea.Cmd) {
+	build_label := labels.Tab(labels.Build, wt.Alias)
+	m.term_mgr.CloseByLabel(build_label)
+	debug_log("[restart] host-build %s: closed esbuild tab, restarting docker", wt.Alias)
+
+	return m, tea.Sequence(
+		func() tea.Msg {
+			return MsgActionStarted{WtName: wt.Name, Status: "restarting..."}
+		},
+		func() tea.Msg {
+			out, err := run_docker("restart", wt.Container)
 			if err != nil {
 				return MsgActionOutput{Output: out, Err: err}
 			}
