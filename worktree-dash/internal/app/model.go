@@ -199,7 +199,7 @@ func (m Model) cmd_discover() tea.Cmd {
 		wts := worktree.Discover(m.worktrees_dir, m.worktrees, cfg)
 		debug_log("[discovery] found %d worktrees", len(wts))
 		for _, wt := range wts {
-			debug_log("[discovery]   %s type=%d alias=%s path=%s", wt.Name, wt.Type, wt.Alias, wt.Path)
+			debug_log("[discovery]   %s type=%v alias=%s path=%s", wt.Name, wt.Type, wt.Alias, wt.Path)
 		}
 		wts = worktree.SortWorktrees(wts)
 		debug_log("[discovery] fetching container status")
@@ -448,7 +448,7 @@ func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *t
 				create_label := fmt.Sprintf("Create — %s", wts[i].Alias)
 				wts[i].Running = term_mgr.IsLabelAlive(dev_label) ||
 					term_mgr.IsLabelAlive(create_label) ||
-					term_mgr.IsLabelAlive("Create")
+					term_mgr.IsLabelAlive(LabelCreate)
 				debug_log("[discovery]   %s running=%v (devTab)", wts[i].Alias, wts[i].Running)
 			}
 		}

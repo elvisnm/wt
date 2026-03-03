@@ -73,9 +73,9 @@ func (m Model) View() string {
 		var picker_title string
 		switch m.picker_context {
 		case "db":
-			picker_title = "Database"
+			picker_title = LabelDatabase
 			if selected_wt != nil {
-				picker_title = fmt.Sprintf("Database — %s", selected_wt.Alias)
+				picker_title = tab_label(LabelDatabase, selected_wt.Alias)
 			}
 		case "maintenance":
 			picker_title = "Maintenance"
