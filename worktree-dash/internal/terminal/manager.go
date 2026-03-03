@@ -362,14 +362,13 @@ func (mgr *Manager) CloseByLabel(label string) {
 	}
 }
 
-// CloseDeadLogs closes any dead sessions whose labels start with "Logs".
-// Returns true if any sessions were closed.
-func (mgr *Manager) CloseDeadLogs() bool {
-	// Collect dead log labels outside the lock, then use CloseByLabel.
+// CloseDeadByPrefix closes any dead sessions whose labels match the prefix
+// (exact match or HasPrefix). Returns true if any sessions were closed.
+func (mgr *Manager) CloseDeadByPrefix(prefix string) bool {
 	mgr.mu.Lock()
 	var dead_labels []string
 	for _, s := range mgr.sessions {
-		if !s.IsAlive() && strings.HasPrefix(s.Label, "Logs") {
+		if !s.IsAlive() && strings.HasPrefix(s.Label, prefix) {
 			dead_labels = append(dead_labels, s.Label)
 		}
 	}
@@ -379,6 +378,12 @@ func (mgr *Manager) CloseDeadLogs() bool {
 		mgr.CloseByLabel(label)
 	}
 	return len(dead_labels) > 0
+}
+
+// CloseDeadLogs closes any dead sessions whose labels start with "Logs".
+// Returns true if any sessions were closed.
+func (mgr *Manager) CloseDeadLogs() bool {
+	return mgr.CloseDeadByPrefix("Logs")
 }
 
 // CloseAll closes all sessions and kills the tmux server.

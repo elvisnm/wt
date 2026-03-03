@@ -165,6 +165,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.cmd_discover()
 
 	case MsgOpenBuildAfterStart:
+		m.actions_pending = nil
 		m.activity = ""
 		for _, wt := range m.worktrees {
 			if wt.Name == msg.WtName {
@@ -237,6 +238,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						tick_after(100*time.Millisecond, "render"),
 						m.cmd_discover(),
 					)
+				} else if m.term_mgr.CloseDeadByPrefix("Create") {
+					// Create process died without writing sentinel (e.g. Ctrl+C)
+					if m.term_mgr.Count() == 0 {
+						m.focus = PanelWorktrees
+						if m.pane_layout != nil {
+							m.pane_layout.FocusLeft()
+						}
+					}
 				}
 			}
 			// Check if skip-worktree script finished (via sentinel file)

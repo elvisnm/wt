@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -881,9 +882,29 @@ func renderGuide() string {
 	return strings.Join(result, "\n")
 }
 
+// disableEcho puts the terminal into a mode where input is not echoed back.
+// This prevents keypresses and mouse clicks from showing raw escape sequences.
+func disableEcho() {
+	fd := int(os.Stdin.Fd())
+	var termios syscall.Termios
+	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
+		uintptr(syscall.TIOCGETA), uintptr(unsafe.Pointer(&termios)),
+		0, 0, 0); err != 0 {
+		return
+	}
+	termios.Lflag &^= syscall.ECHO | syscall.ICANON
+	syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
+		uintptr(syscall.TIOCSETA), uintptr(unsafe.Pointer(&termios)),
+		0, 0, 0)
+	// Drain stdin so bytes don't queue up
+	go io.Copy(io.Discard, os.Stdin)
+}
+
 // runGuide renders the welcome guide and re-renders on terminal resize (SIGWINCH).
 // Exits when stdin is closed or the process is killed.
 func runGuide() {
+	disableEcho()
+
 	// Initial render
 	fmt.Print("\033[2J\033[H") // clear screen, cursor home
 	fmt.Print(renderGuide())
@@ -1012,6 +1033,8 @@ func renderHelp() string {
 
 // runHelp renders keybindings and re-renders on resize. Exits when stdin is closed.
 func runHelp() {
+	disableEcho()
+
 	fmt.Print("\033[2J\033[H")
 	fmt.Print(renderHelp())
 

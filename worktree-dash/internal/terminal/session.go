@@ -14,9 +14,10 @@ type Session struct {
 	Label string
 	Alive bool
 
-	server *TmuxServer
-	window string // tmux window name "w{id}"
-	target string // "{window}.0" — the pane target
+	server  *TmuxServer
+	window  string // tmux window name "w{id}"
+	target  string // "{window}.0" — the pane target
+	pane_id string // tmux pane ID (e.g. "%5") — stable across swap-pane
 
 	ExitCode int // process exit code (-1 if unknown)
 
@@ -73,6 +74,12 @@ func NewSession(id int, label string, cmd_name string, args []string, width, hei
 	// Override remain-on-exit for this window so we can detect exit code
 	server.Run("set-option", "-t", window, "remain-on-exit", "on")
 
+	// Capture the pane ID (e.g. "%5") — stable across swap-pane operations
+	pane_id := ""
+	if pid_out, err := server.Run("display-message", "-t", target, "-p", "#{pane_id}"); err == nil {
+		pane_id = strings.TrimSpace(pid_out)
+	}
+
 	// Resize the pane to the requested dimensions (works on all tmux versions)
 	server.Run("resize-pane", "-t", target,
 		"-x", fmt.Sprintf("%d", width),
@@ -86,6 +93,7 @@ func NewSession(id int, label string, cmd_name string, args []string, width, hei
 		server:   server,
 		window:   window,
 		target:   target,
+		pane_id:  pane_id,
 		ExitCode: -1,
 		done:     make(chan struct{}),
 	}
@@ -96,6 +104,9 @@ func NewSession(id int, label string, cmd_name string, args []string, width, hei
 }
 
 // monitor_loop polls tmux to detect when the pane's process exits.
+// Uses the pane ID (e.g. "%5") to track the pane across swap-pane operations,
+// since swap-pane moves panes between windows and the window name alone would
+// query the wrong pane after a swap.
 func (s *Session) monitor_loop() {
 	defer close(s.done)
 
@@ -110,13 +121,18 @@ func (s *Session) monitor_loop() {
 		}
 		s.mu.Unlock()
 
-		// Query pane status: #{pane_dead} #{pane_dead_status}
+		// Query pane status using the pane ID which is stable across swap-pane.
+		// Fall back to window name if pane ID wasn't captured.
+		target := s.window
+		if s.pane_id != "" {
+			target = s.pane_id
+		}
 		out, err := s.server.Run(
-			"list-panes", "-t", s.window,
-			"-F", "#{pane_dead} #{pane_dead_status}",
+			"display-message", "-t", target,
+			"-p", "#{pane_dead} #{pane_dead_status}",
 		)
 		if err != nil {
-			// Window was killed externally
+			// Pane/window was killed externally
 			s.mu.Lock()
 			s.Alive = false
 			s.mu.Unlock()
