@@ -239,6 +239,18 @@ module.exports = {
     },
   },
 
+  // ─── Setup (worktree initialization) ──────────────────────────────
+  setup: {
+    // Paths to symlink into each worktree on creation.
+    // Each entry: { src: "path/to/source", dst: "path/in/worktree" }
+    // src: resolved relative to repo root. Supports absolute paths and ~/... tilde expansion.
+    // dst: relative to worktree root.
+    // Useful for Claude Code slash commands, shared tool configs, etc.
+    symlinks: [
+      // { src: "../.claude/commands", dst: ".claude/commands" },
+    ],
+  },
+
   // ─── Git ──────────────────────────────────────────────────────────
   git: {
     // Paths to mark with git update-index --skip-worktree on creation.

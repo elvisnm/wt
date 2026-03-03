@@ -97,6 +97,10 @@ const DEFAULTS = {
     },
   },
 
+  setup: {
+    symlinks: [], // paths to symlink into each worktree on creation: [{ src, dst }]
+  },
+
   git: {
     skipWorktree: [],
   },

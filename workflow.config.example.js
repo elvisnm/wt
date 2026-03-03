@@ -101,6 +101,15 @@ module.exports = {
     },
   },
 
+  setup: {
+    // Paths to symlink into each worktree on creation.
+    // src: relative to repo root (or absolute / ~/...), dst: relative to worktree root.
+    // Useful for Claude Code skills, shared configs, etc.
+    symlinks: [
+      // { src: '../.claude/commands', dst: '.claude/commands' },
+    ],
+  },
+
   git: {
     skipWorktree: ['build/', '.beads/', 'CLAUDE.md', 'pnpm-lock.yaml'],
   },

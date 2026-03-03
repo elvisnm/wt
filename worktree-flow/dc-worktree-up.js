@@ -1,6 +1,7 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { SERVICE_PORTS, compute_ports, format_port_table, find_free_offset, VALID_SERVICE_MODES } = require('./service-ports');
 const { get_lan_ip, build_lan_domain } = require('./lan-ip');
 const {
@@ -182,6 +183,43 @@ function ensure_override_files(repo_root, worktree_path) {
   }
   if (copied > 0) {
     console.log(`Copied ${copied} override file(s).`);
+  }
+}
+
+// ── Setup symlinks (all strategies) ──────────────────────────────────────
+
+function ensure_setup_symlinks(repo_root, worktree_path) {
+  const symlinks = config && config.setup && config.setup.symlinks
+    ? config.setup.symlinks
+    : [];
+
+  if (symlinks.length === 0) return;
+
+  let created = 0;
+  for (const entry of symlinks) {
+    const src = path.isAbsolute(entry.src)
+      ? entry.src
+      : entry.src.startsWith('~/')
+        ? path.join(os.homedir(), entry.src.slice(2))
+        : path.resolve(repo_root, entry.src);
+    const dst = path.join(worktree_path, entry.dst);
+
+    if (!fs.existsSync(src)) {
+      console.warn(`Warning: symlink source does not exist: ${entry.src}`);
+      continue;
+    }
+
+    try {
+      fs.rmSync(dst, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.symlinkSync(src, dst);
+      created++;
+    } catch (e) {
+      console.warn(`Warning: Could not symlink ${entry.src} -> ${entry.dst}: ${e.message}`);
+    }
+  }
+  if (created > 0) {
+    console.log(`Created ${created} setup symlink(s).`);
   }
 }
 
@@ -610,6 +648,7 @@ function main() {
   if (options.no_docker) {
     console.log(`Worktree created at: ${worktree_path}`);
     copy_env_files(repo_root, worktree_path);
+    ensure_setup_symlinks(repo_root, worktree_path);
 
     // Install dependencies if node project
     const pkg_path = path.join(worktree_path, 'package.json');
@@ -803,6 +842,7 @@ function create_shared(repo_root, worktree_path, target_branch, alias, options) 
 
   // Copy env files from config
   copy_env_files(repo_root, worktree_path);
+  ensure_setup_symlinks(repo_root, worktree_path);
 
   // Set env vars for docker compose
   const compose_env = {
@@ -878,6 +918,7 @@ function restart_generate(repo_root, worktree_path, target_branch, alias, env_fi
   const restart_offset = find_free_offset(compute_auto_offset(worktree_path));
 
   ensure_override_files(repo_root, worktree_path);
+  ensure_setup_symlinks(repo_root, worktree_path);
   ensure_env_defaults(env_file, alias);
   ensure_env_offset(env_file, restart_offset);
 
@@ -966,6 +1007,7 @@ function create_generate(repo_root, worktree_path, target_branch, alias, env_fil
   const host_build_flag = options.host_build ? ' --host-build' : '';
 
   ensure_override_files(repo_root, worktree_path);
+  ensure_setup_symlinks(repo_root, worktree_path);
 
   const compose_script = path.join(scripts_dir, 'generate-docker-compose.js');
   execSync(
