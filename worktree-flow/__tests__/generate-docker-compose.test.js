@@ -1,0 +1,962 @@
+/**
+ * generate-docker-compose.test.js — Tests for the Docker compose YAML generator.
+ *
+ * Covers: generate, generate_traefik_config, find_traefik_dir, sanitize_name.
+ *
+ * The module under test loads config at require-time (line 7), so we use
+ * jest.resetModules() + mocking to control the config state. Tests are split
+ * into two groups: no-config (legacy fallback) and config-aware paths.
+ */
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+/**
+ * Re-require the generate module fresh. Because generate-docker-compose.js
+ * calls load_config() at require-time, we must reset modules and set up
+ * the config mock BEFORE requiring it.
+ */
+function fresh_generate_mod({ config_obj = null } = {}) {
+  jest.resetModules();
+
+  jest.doMock('../config', () => {
+    const real = jest.requireActual('../config');
+    return {
+      ...real,
+      load_config: jest.fn(() => config_obj),
+    };
+  });
+
+  return require('../generate-docker-compose');
+}
+
+/**
+ * Require the module in no-config (legacy) mode.
+ * config = null, falls back to SERVICE_PORTS and hardcoded defaults.
+ */
+function fresh_no_config_mod() {
+  return fresh_generate_mod({ config_obj: null });
+}
+
+/**
+ * Build a full config object for testing the config-aware code paths.
+ * Deep-merges overrides onto a minimal complete config.
+ */
+function make_config(overrides = {}) {
+  const base = {
+    name: 'testapp',
+    docker: {
+      baseImage: 'testapp-dev:latest',
+      composeStrategy: 'generate',
+      generate: {
+        containerWorkdir: '/app',
+        entrypoint: 'pnpm dev',
+        extraMounts: [],
+        extraEnv: {},
+      },
+      sharedInfra: {
+        network: 'infra_app_network',
+      },
+      proxy: {
+        type: 'traefik',
+        domainTemplate: '{alias}.localhost',
+        _dynamicDirResolved: null,
+      },
+    },
+    services: {
+      ports: {
+        web: 3000,
+        api: 3001,
+        worker: 3005,
+      },
+      modes: {
+        minimal: ['web', 'api'],
+        full: null,
+      },
+      defaultMode: 'minimal',
+    },
+    env: {
+      prefix: 'TESTAPP',
+      filename: '.env.worktree',
+      vars: {
+        environment: 'TESTAPP_ENV',
+      },
+      worktreeVars: {
+        services: 'WORKTREE_SERVICES',
+      },
+    },
+    features: {
+      hostBuild: true,
+    },
+  };
+
+  return deep_merge(base, overrides);
+}
+
+/**
+ * Simple deep merge for test config building.
+ */
+function deep_merge(target, source) {
+  const result = { ...target };
+  for (const key of Object.keys(source)) {
+    if (
+      source[key] !== null &&
+      typeof source[key] === 'object' &&
+      !Array.isArray(source[key]) &&
+      typeof target[key] === 'object' &&
+      target[key] !== null &&
+      !Array.isArray(target[key])
+    ) {
+      result[key] = deep_merge(target[key], source[key]);
+    } else {
+      result[key] = source[key];
+    }
+  }
+  return result;
+}
+
+// ── sanitize_name ────────────────────────────────────────────────────────
+
+describe('sanitize_name', () => {
+  let mod;
+
+  beforeAll(() => {
+    mod = fresh_no_config_mod();
+  });
+
+  test('lowercases input', () => {
+    expect(mod.sanitize_name('MyFeature')).toBe('myfeature');
+  });
+
+  test('replaces special characters with hyphens', () => {
+    expect(mod.sanitize_name('feat/my branch')).toBe('feat-my-branch');
+  });
+
+  test('keeps hyphens and underscores', () => {
+    expect(mod.sanitize_name('my-feature_name')).toBe('my-feature_name');
+  });
+
+  test('handles dots and slashes', () => {
+    expect(mod.sanitize_name('fix/issue.123')).toBe('fix-issue-123');
+  });
+
+  test('handles already clean name', () => {
+    expect(mod.sanitize_name('clean-name')).toBe('clean-name');
+  });
+
+  test('handles empty string', () => {
+    expect(mod.sanitize_name('')).toBe('');
+  });
+
+  test('handles consecutive special characters', () => {
+    expect(mod.sanitize_name('a//b..c')).toBe('a--b--c');
+  });
+});
+
+// ── generate (no-config / legacy path) ──────────────────────────────────
+
+describe('generate (no-config legacy path)', () => {
+  let mod;
+
+  beforeEach(() => {
+    mod = fresh_no_config_mod();
+  });
+
+  const default_args = {
+    worktree_path: '/tmp/worktrees/my-feature',
+    worktree_name: 'my-feature',
+    port_offset: 150,
+    repo_root: '/home/user/project',
+    service_mode: 'minimal',
+    alias: null,
+    host_build: false,
+  };
+
+  function call_generate(overrides = {}) {
+    const args = { ...default_args, ...overrides };
+    return mod.generate(
+      args.worktree_path,
+      args.worktree_name,
+      args.port_offset,
+      args.repo_root,
+      args.service_mode,
+      args.alias,
+      args.host_build,
+    );
+  }
+
+  test('returns a string', () => {
+    const yaml = call_generate();
+    expect(typeof yaml).toBe('string');
+  });
+
+  test('starts with generated-by comment', () => {
+    const yaml = call_generate();
+    expect(yaml).toMatch(/^# Generated by/);
+  });
+
+  test('contains a services section', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('services:');
+  });
+
+  test('contains a volumes section', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('volumes:');
+  });
+
+  test('contains a networks section', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('networks:');
+  });
+
+  test('uses sanitized worktree name as service name when no alias', () => {
+    const yaml = call_generate({ worktree_name: 'My Feature' });
+    expect(yaml).toContain('  my-feature:');
+    expect(yaml).toContain('container_name: my-feature');
+  });
+
+  test('uses sanitized alias as service name when alias is provided', () => {
+    const yaml = call_generate({ alias: 'feat-login' });
+    expect(yaml).toContain('  feat-login:');
+    expect(yaml).toContain('container_name: feat-login');
+  });
+
+  test('uses default image dev:latest without config', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('image: dev:latest');
+  });
+
+  test('uses default container workdir /app', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('.:' + '/app');
+  });
+
+  test('mounts .aws directory read-only', () => {
+    const yaml = call_generate();
+    const aws_dir = path.join(os.homedir(), '.aws');
+    expect(yaml).toContain(`${aws_dir}:/root/.aws:ro`);
+  });
+
+  test('mounts docker-overrides files as read-only', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('ecosystem.dev.config.js:/app/ecosystem.dev.config.js:ro');
+    expect(yaml).toContain('scripts/dev.js:/app/scripts/dev.js:ro');
+    expect(yaml).toContain('scripts/deployment_scripts/build.js:/app/scripts/deployment_scripts/build.js:ro');
+    expect(yaml).toContain('frontend/js/lib/cache_socket.js:/app/frontend/js/lib/cache_socket.js:ro');
+  });
+
+  test('uses .env.worktree as env_file', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('env_file:');
+    expect(yaml).toContain('- .env.worktree');
+  });
+
+  test('sets APP_ENV=development in environment', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('- APP_ENV=development');
+  });
+
+  test('sets NODE_ENV=development', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('- NODE_ENV=development');
+  });
+
+  test('sets WORKTREE_SERVICES to the service mode', () => {
+    const yaml = call_generate({ service_mode: 'full' });
+    expect(yaml).toContain('- WORKTREE_SERVICES=full');
+  });
+
+  test('uses docker-entrypoint.sh as entrypoint', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('entrypoint: ["docker-entrypoint.sh"]');
+  });
+
+  test('command is JSON array of entrypoint parts', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('command: ["pnpm","dev"]');
+  });
+
+  test('includes healthcheck configuration', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('healthcheck:');
+    expect(yaml).toContain('pm2 list');
+    expect(yaml).toContain('interval: 10s');
+    expect(yaml).toContain('timeout: 5s');
+    expect(yaml).toContain('retries: 30');
+    expect(yaml).toContain('start_period: 60s');
+  });
+
+  test('sets tty: true', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('tty: true');
+  });
+
+  test('sets extra_hosts for host.docker.internal', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('host.docker.internal:host-gateway');
+  });
+
+  test('uses default network name infra_default', () => {
+    const yaml = call_generate();
+    expect(yaml).toContain('name: infra_default');
+    expect(yaml).toContain('external: true');
+  });
+
+  test('falls back to fakes3 mount when no config', () => {
+    const yaml = call_generate({ repo_root: '/repo' });
+    expect(yaml).toContain('/repo/fakes3:/app/fakes3');
+  });
+
+  // ── Port mapping tests ──────────────────────────────────────────────
+
+  describe('port mappings', () => {
+    test('applies port offset to base ports', () => {
+      const yaml = call_generate({ port_offset: 200 });
+      // The SERVICE_PORTS from service-ports.js are used in legacy mode.
+      // socket_server = 3000, so host port = 3200
+      expect(yaml).toContain('"3200:3000"');
+    });
+
+    test('livereload uses host_port for both sides', () => {
+      // livereload base is 53099, offset 100 -> host = 53199, container = 53199
+      const yaml = call_generate({ port_offset: 100, service_mode: 'full' });
+      expect(yaml).toContain('"53199:53199"');
+    });
+
+    test('non-livereload ports use base as container port', () => {
+      const yaml = call_generate({ port_offset: 50, service_mode: 'full' });
+      // app base = 3001, host = 3051, container = 3001
+      expect(yaml).toContain('"3051:3001"');
+    });
+
+    test('mode filter reduces port entries', () => {
+      const yaml_minimal = call_generate({ service_mode: 'minimal', port_offset: 10 });
+      const yaml_full = call_generate({ service_mode: 'full', port_offset: 10 });
+
+      const count_ports = (yaml) => (yaml.match(/"(\d+):(\d+)"/g) || []).length;
+      expect(count_ports(yaml_minimal)).toBeLessThan(count_ports(yaml_full));
+    });
+  });
+
+  // ── Host build tests ────────────────────────────────────────────────
+
+  describe('host_build', () => {
+    test('appends --no-build to command when host_build is true', () => {
+      const yaml = call_generate({ host_build: true });
+      expect(yaml).toContain('--no-build');
+    });
+
+    test('does not append --no-build when host_build is false', () => {
+      const yaml = call_generate({ host_build: false });
+      expect(yaml).not.toContain('--no-build');
+    });
+
+    test('excludes livereload port when host_build is true (legacy)', () => {
+      const yaml = call_generate({ host_build: true, service_mode: 'full', port_offset: 100 });
+      // livereload base = 53099, offset 100 -> would be "53199:53199"
+      expect(yaml).not.toContain('"53199:53199"');
+      // But other ports should still be present (e.g., app base 3001 -> "3101:3001")
+      expect(yaml).toContain('"3101:3001"');
+    });
+  });
+
+  // ── Volume tests ────────────────────────────────────────────────────
+
+  describe('volumes', () => {
+    test('declares named volume for node_modules', () => {
+      const yaml = call_generate({ worktree_name: 'test-wt' });
+      expect(yaml).toContain('test-wt_node_modules');
+    });
+
+    test('uses alias for volume prefix when alias is provided', () => {
+      const yaml = call_generate({ alias: 'my-alias' });
+      expect(yaml).toContain('my-alias_node_modules');
+    });
+
+    test('volume name appears in both volumes section and service mount', () => {
+      const yaml = call_generate({ worktree_name: 'vol-test' });
+      const vol_name = 'vol-test_node_modules';
+      const occurrences = yaml.split(vol_name).length - 1;
+      expect(occurrences).toBe(2);
+    });
+  });
+});
+
+// ── generate (config-aware path) ────────────────────────────────────────
+
+describe('generate (config-aware path)', () => {
+  function call_generate_with_config(config_overrides = {}, gen_overrides = {}) {
+    const cfg = make_config(config_overrides);
+    const mod = fresh_generate_mod({ config_obj: cfg });
+
+    const defaults = {
+      worktree_path: '/tmp/worktrees/feat-login',
+      worktree_name: 'feat-login',
+      port_offset: 64,
+      repo_root: '/home/user/project',
+      service_mode: 'minimal',
+      alias: null,
+      host_build: false,
+    };
+
+    const args = { ...defaults, ...gen_overrides };
+    const yaml = mod.generate(
+      args.worktree_path,
+      args.worktree_name,
+      args.port_offset,
+      args.repo_root,
+      args.service_mode,
+      args.alias,
+      args.host_build,
+    );
+
+    return yaml;
+  }
+
+  test('uses config baseImage', () => {
+    const yaml = call_generate_with_config({
+      docker: { baseImage: 'custom-img:v2' },
+    });
+    expect(yaml).toContain('image: custom-img:v2');
+  });
+
+  test('uses config container naming: {name}-{alias}', () => {
+    const yaml = call_generate_with_config({}, { worktree_name: 'feat-login' });
+    expect(yaml).toContain('container_name: testapp-feat-login');
+  });
+
+  test('uses config domain_for for domain', () => {
+    const yaml = call_generate_with_config({
+      docker: { proxy: { domainTemplate: '{alias}.dev.local' } },
+    });
+    // domain is not directly in the compose YAML, but container naming is
+    // The domain is used in main() for traefik, not in generate() output
+    expect(yaml).toContain('testapp-feat-login');
+  });
+
+  test('uses config containerWorkdir', () => {
+    const yaml = call_generate_with_config({
+      docker: { generate: { containerWorkdir: '/workspace' } },
+    });
+    expect(yaml).toContain('.:/workspace');
+  });
+
+  test('uses config entrypoint for command', () => {
+    const yaml = call_generate_with_config({
+      docker: { generate: { entrypoint: 'npm run start' } },
+    });
+    expect(yaml).toContain('["npm","run","start"]');
+  });
+
+  test('uses config env.filename', () => {
+    const yaml = call_generate_with_config({
+      env: { filename: '.env.custom' },
+    });
+    expect(yaml).toContain('- .env.custom');
+  });
+
+  test('uses config env_var for environment name', () => {
+    const yaml = call_generate_with_config({
+      env: { vars: { environment: 'CUSTOM_ENV' } },
+    });
+    expect(yaml).toContain('- CUSTOM_ENV=development');
+  });
+
+  test('uses config worktree_var for services', () => {
+    const yaml = call_generate_with_config({
+      env: { worktreeVars: { services: 'CUSTOM_SERVICES_VAR' } },
+    });
+    expect(yaml).toContain('- CUSTOM_SERVICES_VAR=minimal');
+  });
+
+  test('uses config volume_prefix: {name}_{alias}', () => {
+    const yaml = call_generate_with_config({}, { worktree_name: 'feat-x' });
+    expect(yaml).toContain('testapp_feat-x_node_modules');
+  });
+
+  test('uses config network name and derives alias', () => {
+    const yaml = call_generate_with_config({
+      docker: { sharedInfra: { network: 'infra_app_network' } },
+    });
+    expect(yaml).toContain('name: infra_app_network');
+    // Network alias strips up to first underscore: 'infra_app_network' -> 'app_network'
+    expect(yaml).toContain('- app_network');
+  });
+
+  test('network alias without underscore uses full name', () => {
+    const yaml = call_generate_with_config({
+      docker: { sharedInfra: { network: 'mynetwork' } },
+    });
+    expect(yaml).toContain('- mynetwork');
+    expect(yaml).toContain('name: mynetwork');
+  });
+
+  test('applies config service port offsets', () => {
+    const yaml = call_generate_with_config(
+      { services: { ports: { web: 8080, api: 9090 } } },
+      { port_offset: 10 },
+    );
+    // web: host=8090, container=8080
+    expect(yaml).toContain('"8090:8080"');
+    // api: host=9100, container=9090
+    expect(yaml).toContain('"9100:9090"');
+  });
+
+  test('config services_for_mode filters ports', () => {
+    const yaml = call_generate_with_config(
+      {
+        services: {
+          ports: { web: 3000, api: 3001, worker: 3005 },
+          modes: { minimal: ['web', 'api'], full: null },
+        },
+      },
+      { service_mode: 'minimal', port_offset: 10 },
+    );
+    // web and api should be present
+    expect(yaml).toContain('"3010:3000"');
+    expect(yaml).toContain('"3011:3001"');
+    // worker should NOT be present
+    expect(yaml).not.toContain('"3015:3005"');
+  });
+
+  test('full mode includes all services', () => {
+    const yaml = call_generate_with_config(
+      {
+        services: {
+          ports: { web: 3000, api: 3001, worker: 3005 },
+          modes: { minimal: ['web', 'api'], full: null },
+        },
+      },
+      { service_mode: 'full', port_offset: 10 },
+    );
+    expect(yaml).toContain('"3010:3000"');
+    expect(yaml).toContain('"3011:3001"');
+    expect(yaml).toContain('"3015:3005"');
+  });
+
+  test('extraMounts from config appear in volumes', () => {
+    const yaml = call_generate_with_config({
+      docker: {
+        generate: {
+          extraMounts: [
+            '/data/storage:/app/storage:rw',
+            '/cache:/app/cache:ro',
+          ],
+        },
+      },
+    });
+    expect(yaml).toContain('/data/storage:/app/storage:rw');
+    expect(yaml).toContain('/cache:/app/cache:ro');
+    // Should NOT contain the legacy fakes3 fallback
+    expect(yaml).not.toContain('fakes3');
+  });
+
+  test('extraEnv from config appears in environment', () => {
+    const yaml = call_generate_with_config({
+      docker: {
+        generate: {
+          extraEnv: {
+            DEBUG: 'true',
+            LOG_LEVEL: 'verbose',
+          },
+        },
+      },
+    });
+    expect(yaml).toContain('- DEBUG=true');
+    expect(yaml).toContain('- LOG_LEVEL=verbose');
+  });
+
+  test('host_build appends --no-build and excludes livereload when feature enabled', () => {
+    const yaml = call_generate_with_config(
+      {
+        services: {
+          ports: { web: 3000, livereload: 53099 },
+          modes: { full: null },
+        },
+        features: { hostBuild: true },
+      },
+      { service_mode: 'full', host_build: true, port_offset: 10 },
+    );
+    expect(yaml).toContain('--no-build');
+    // livereload should be excluded
+    expect(yaml).not.toContain('53109');
+  });
+
+  test('host_build=false does not exclude livereload even if feature enabled', () => {
+    const yaml = call_generate_with_config(
+      {
+        services: {
+          ports: { web: 3000, livereload: 53099 },
+          modes: { full: null },
+        },
+        features: { hostBuild: true },
+      },
+      { service_mode: 'full', host_build: false, port_offset: 10 },
+    );
+    // livereload should be present
+    expect(yaml).toContain('53109');
+  });
+
+  test('host_build=true but hostBuild feature disabled does not exclude livereload', () => {
+    const yaml = call_generate_with_config(
+      {
+        services: {
+          ports: { web: 3000, livereload: 53099 },
+          modes: { full: null },
+        },
+        features: { hostBuild: false },
+      },
+      { service_mode: 'full', host_build: true, port_offset: 10 },
+    );
+    // feature_enabled returns false so livereload_excluded is false
+    expect(yaml).toContain('53109');
+    // But command still gets --no-build because host_build param is true
+    expect(yaml).toContain('--no-build');
+  });
+
+  test('alias overrides worktree_name for naming', () => {
+    const yaml = call_generate_with_config(
+      {},
+      { worktree_name: 'long-branch-name', alias: 'short' },
+    );
+    expect(yaml).toContain('container_name: testapp-short');
+    expect(yaml).toContain('testapp_short_node_modules');
+  });
+});
+
+// ── generate_traefik_config ──────────────────────────────────────────────
+
+describe('generate_traefik_config', () => {
+  let mod;
+
+  beforeEach(() => {
+    mod = fresh_no_config_mod();
+  });
+
+  test('returns a string starting with generated-by comment', () => {
+    const yaml = mod.generate_traefik_config('my-wt', 'my-wt.localhost', 'my-wt', 100, null);
+    expect(typeof yaml).toBe('string');
+    expect(yaml).toMatch(/^# Generated by/);
+  });
+
+  test('includes worktree name in comment', () => {
+    const yaml = mod.generate_traefik_config('feat-x', 'feat-x.localhost', 'feat-x', 50, null);
+    expect(yaml).toContain('worktree: feat-x');
+  });
+
+  test('generates app and socket router entries', () => {
+    const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 0, null);
+    expect(yaml).toContain('wt-app:');
+    expect(yaml).toContain('wt-socket:');
+  });
+
+  test('generates app and socket service entries', () => {
+    const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 0, null);
+    expect(yaml).toContain('wt-app:');
+    expect(yaml).toContain('wt-socket:');
+    expect(yaml).toContain('loadBalancer:');
+  });
+
+  test('computes correct app port with offset', () => {
+    // Legacy: app base = 3001, socket base = 3000
+    const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 200, null);
+    expect(yaml).toContain('http://host.docker.internal:3201');
+  });
+
+  test('computes correct socket port with offset', () => {
+    const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 200, null);
+    expect(yaml).toContain('http://host.docker.internal:3200');
+  });
+
+  test('uses domain in Host rule', () => {
+    const yaml = mod.generate_traefik_config('wt', 'custom.dev', 'svc', 0, null);
+    expect(yaml).toContain('Host(`custom.dev`)');
+  });
+
+  test('socket rule includes PathPrefix for /socket.io', () => {
+    const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 0, null);
+    expect(yaml).toContain('PathPrefix(`/socket.io`)');
+  });
+
+  test('socket router has priority 100', () => {
+    const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 0, null);
+    expect(yaml).toContain('priority: 100');
+  });
+
+  test('uses web entrypoint for both routers', () => {
+    const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 0, null);
+    const web_count = (yaml.match(/- web$/gm) || []).length;
+    expect(web_count).toBe(2);
+  });
+
+  // ── LAN domain tests ──────────────────────────────────────────────
+
+  describe('with lan_domain', () => {
+    test('includes LAN domain in app Host rule', () => {
+      const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 0, 'wt.local.lan');
+      expect(yaml).toContain('Host(`wt.localhost`)');
+      expect(yaml).toContain('Host(`wt.local.lan`)');
+    });
+
+    test('includes LAN domain in socket Host rule', () => {
+      const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 0, 'wt.local.lan');
+      // socket rule should have both hosts combined with OR
+      expect(yaml).toContain('Host(`wt.local.lan`)');
+    });
+
+    test('app rule uses OR syntax for dual host', () => {
+      const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 0, 'wt.lan');
+      expect(yaml).toContain('Host(`wt.localhost`) || Host(`wt.lan`)');
+    });
+  });
+
+  describe('without lan_domain', () => {
+    test('app rule has single Host', () => {
+      const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 0, null);
+      expect(yaml).toContain('Host(`wt.localhost`)');
+      expect(yaml).not.toContain('||');
+    });
+  });
+});
+
+describe('generate_traefik_config (config-aware)', () => {
+  test('uses config app and socket_server ports', () => {
+    const cfg = make_config({
+      services: {
+        ports: {
+          app: 8080,
+          socket_server: 9000,
+        },
+      },
+    });
+    const mod = fresh_generate_mod({ config_obj: cfg });
+    const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 50, null);
+    expect(yaml).toContain('http://host.docker.internal:8130');
+    expect(yaml).toContain('http://host.docker.internal:9050');
+  });
+
+  test('falls back to default ports when config ports missing', () => {
+    const cfg = make_config({
+      services: { ports: {} },
+    });
+    const mod = fresh_generate_mod({ config_obj: cfg });
+    const yaml = mod.generate_traefik_config('wt', 'wt.localhost', 'svc', 100, null);
+    // Fallback: app = undefined + 100, should produce NaN. Let's check the real behavior.
+    // Actually: config ? (config.services.ports.app || 3001) : 3001
+    // So missing app falls back to 3001
+    expect(yaml).toContain('http://host.docker.internal:3101');
+    expect(yaml).toContain('http://host.docker.internal:3100');
+  });
+});
+
+// ── find_traefik_dir ─────────────────────────────────────────────────────
+
+describe('find_traefik_dir', () => {
+  test('returns null when no config is loaded', () => {
+    const mod = fresh_no_config_mod();
+    expect(mod.find_traefik_dir()).toBeNull();
+  });
+
+  test('returns null when config has no proxy', () => {
+    const cfg = make_config({
+      docker: { proxy: null },
+    });
+    const mod = fresh_generate_mod({ config_obj: cfg });
+    expect(mod.find_traefik_dir()).toBeNull();
+  });
+
+  test('returns null when _dynamicDirResolved is null', () => {
+    const cfg = make_config({
+      docker: { proxy: { _dynamicDirResolved: null } },
+    });
+    const mod = fresh_generate_mod({ config_obj: cfg });
+    expect(mod.find_traefik_dir()).toBeNull();
+  });
+
+  test('returns null when _dynamicDirResolved path does not exist', () => {
+    const cfg = make_config({
+      docker: { proxy: { _dynamicDirResolved: '/nonexistent/path/traefik/dynamic' } },
+    });
+    const mod = fresh_generate_mod({ config_obj: cfg });
+    expect(mod.find_traefik_dir()).toBeNull();
+  });
+
+  test('returns the directory when _dynamicDirResolved exists', () => {
+    const tmp_dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-traefik-'));
+    try {
+      const cfg = make_config({
+        docker: { proxy: { _dynamicDirResolved: tmp_dir } },
+      });
+      const mod = fresh_generate_mod({ config_obj: cfg });
+      expect(mod.find_traefik_dir()).toBe(tmp_dir);
+    } finally {
+      fs.rmSync(tmp_dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── YAML structure validation ────────────────────────────────────────────
+
+describe('YAML structural integrity', () => {
+  let mod;
+
+  beforeEach(() => {
+    mod = fresh_no_config_mod();
+  });
+
+  function generate_default() {
+    return mod.generate(
+      '/tmp/wt/test',
+      'test-wt',
+      100,
+      '/repo',
+      'full',
+      null,
+      false,
+    );
+  }
+
+  test('YAML has proper indentation (no tabs)', () => {
+    const yaml = generate_default();
+    expect(yaml).not.toContain('\t');
+  });
+
+  test('port entries are properly formatted as "host:container"', () => {
+    const yaml = generate_default();
+    const port_lines = yaml.match(/^\s*- "\d+:\d+"$/gm);
+    expect(port_lines).not.toBeNull();
+    expect(port_lines.length).toBeGreaterThan(0);
+  });
+
+  test('service name appears under services: key', () => {
+    const yaml = generate_default();
+    const lines = yaml.split('\n');
+    const services_idx = lines.findIndex(l => l === 'services:');
+    expect(services_idx).toBeGreaterThanOrEqual(0);
+    // Next non-empty line should be the service definition
+    const next_line = lines[services_idx + 1];
+    expect(next_line).toMatch(/^\s+\S+:$/);
+  });
+
+  test('volumes section declares the named volume', () => {
+    const yaml = generate_default();
+    const lines = yaml.split('\n');
+    const volumes_idx = lines.findIndex(l => l === 'volumes:');
+    expect(volumes_idx).toBeGreaterThanOrEqual(0);
+    const next_line = lines[volumes_idx + 1];
+    expect(next_line).toMatch(/^\s+\S+_node_modules:$/);
+  });
+
+  test('networks section declares external network', () => {
+    const yaml = generate_default();
+    expect(yaml).toContain('external: true');
+    expect(yaml).toContain('name:');
+  });
+});
+
+// ── Integration: end-to-end config scenarios ─────────────────────────────
+
+describe('integration: realistic config scenarios', () => {
+  test('generate strategy with full config produces valid compose YAML', () => {
+    const cfg = make_config({
+      name: 'myapp',
+      docker: {
+        baseImage: 'myapp-dev:v3',
+        generate: {
+          containerWorkdir: '/workspace',
+          entrypoint: 'npm start',
+          extraMounts: ['/data:/workspace/data:rw'],
+          extraEnv: { VERBOSE: '1' },
+        },
+        sharedInfra: { network: 'myapp_net' },
+      },
+      services: {
+        ports: { web: 4000, api: 5000, socket: 6000 },
+        modes: {
+          light: ['web', 'api'],
+          full: null,
+        },
+        defaultMode: 'light',
+      },
+      env: {
+        prefix: 'MYAPP',
+        filename: '.env.dev',
+        vars: { environment: 'MYAPP_ENVIRONMENT' },
+        worktreeVars: { services: 'WT_SVCS' },
+      },
+      features: { hostBuild: false },
+    });
+    const mod = fresh_generate_mod({ config_obj: cfg });
+
+    const yaml = mod.generate(
+      '/wt/feat-x', 'feat-x', 42, '/repo', 'light', null, false,
+    );
+
+    expect(yaml).toContain('image: myapp-dev:v3');
+    expect(yaml).toContain('container_name: myapp-feat-x');
+    expect(yaml).toContain('.:/workspace');
+    expect(yaml).toContain('/data:/workspace/data:rw');
+    expect(yaml).toContain('- .env.dev');
+    expect(yaml).toContain('- MYAPP_ENVIRONMENT=development');
+    expect(yaml).toContain('- WT_SVCS=light');
+    expect(yaml).toContain('- VERBOSE=1');
+    expect(yaml).toContain('["npm","start"]');
+    expect(yaml).toContain('myapp_feat-x_node_modules');
+    expect(yaml).toContain('name: myapp_net');
+    // web: 4042:4000, api: 5042:5000
+    expect(yaml).toContain('"4042:4000"');
+    expect(yaml).toContain('"5042:5000"');
+    // socket should NOT be present (light mode only has web, api)
+    expect(yaml).not.toContain('"6042:6000"');
+  });
+
+  test('host-build mode with alias generates correct YAML', () => {
+    const cfg = make_config({
+      name: 'proj',
+      docker: {
+        baseImage: 'proj:latest',
+        generate: {
+          containerWorkdir: '/app',
+          entrypoint: 'pnpm dev',
+          extraMounts: [],
+          extraEnv: {},
+        },
+        sharedInfra: { network: 'proj_network' },
+      },
+      services: {
+        ports: { web: 3000, api: 4000, livereload: 53099 },
+        modes: { full: null },
+      },
+      features: { hostBuild: true },
+    });
+    const mod = fresh_generate_mod({ config_obj: cfg });
+
+    const yaml = mod.generate(
+      '/wt/long-branch', 'long-branch-name', 100, '/repo', 'full', 'short', true,
+    );
+
+    expect(yaml).toContain('container_name: proj-short');
+    expect(yaml).toContain('proj_short_node_modules');
+    expect(yaml).toContain('["pnpm","dev","--no-build"]');
+    // livereload should be excluded (host_build=true AND hostBuild feature enabled)
+    expect(yaml).not.toContain('53199');
+    // web and api should be present
+    expect(yaml).toContain('"3100:3000"');
+    expect(yaml).toContain('"4100:4000"');
+  });
+
+  test('zero port offset produces base ports as host ports', () => {
+    const cfg = make_config({
+      services: {
+        ports: { web: 3000 },
+        modes: { full: null },
+      },
+    });
+    const mod = fresh_generate_mod({ config_obj: cfg });
+
+    const yaml = mod.generate('/wt/x', 'x', 0, '/repo', 'full', null, false);
+    expect(yaml).toContain('"3000:3000"');
+  });
+});

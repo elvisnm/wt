@@ -2,7 +2,15 @@
   "name": "worktree-flow",
   "version": "0.1.0",
   "private": true,
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:verbose": "jest --verbose"
+  },
   "dependencies": {
     "@clack/prompts": "^0.10.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }
