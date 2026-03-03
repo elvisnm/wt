@@ -7,7 +7,7 @@ const {
   read_offset, read_service_mode, read_alias,
 } = require('./lib/utils');
 
-function parseArgs(argv) {
+function parse_args(argv) {
   const options = {
     name: null,
     all: false,
@@ -165,7 +165,7 @@ function format_info(worktree_name, worktree_path, { compact = false } = {}) {
 }
 
 function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parse_args(process.argv.slice(2));
   if (!options || (!options.name && !options.all)) {
     console.log('Usage:');
     console.log('  pnpm dc:info <name>    Show container info for a specific worktree');

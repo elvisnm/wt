@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { config, config_mod, resolve_worktree_path, get_container_name } = require('./lib/utils');
 
-function parseArgs(argv) {
+function parse_args(argv) {
   const options = {
     name: null,
     follow: false,
@@ -59,7 +59,7 @@ function parseArgs(argv) {
 }
 
 function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parse_args(process.argv.slice(2));
   if (!options || !options.name) {
     console.log('Usage:');
     console.log('  pnpm dc:logs <name>                        Last 100 lines');

@@ -282,6 +282,16 @@ function has_ref(repo_root, ref) {
   }
 }
 
+// ── Name sanitization ────────────────────────────────────────────────────
+
+/**
+ * Sanitize a name for use in Docker container/volume names.
+ * Replaces non-alphanumeric characters (except _ and -) with hyphens and lowercases.
+ */
+function sanitize_name(name) {
+  return name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+}
+
 // ── Exports ──────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -302,4 +312,5 @@ module.exports = {
   find_mongo_container,
   auto_alias,
   has_ref,
+  sanitize_name,
 };

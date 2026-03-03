@@ -1,7 +1,7 @@
 /**
  * generate-docker-compose.test.js — Tests for the Docker compose YAML generator.
  *
- * Covers: generate, generate_traefik_config, find_traefik_dir, sanitize_name.
+ * Covers: generate, generate_traefik_config, find_traefik_dir.
  *
  * The module under test loads config at require-time (line 7), so we use
  * jest.resetModules() + mocking to control the config state. Tests are split
@@ -116,41 +116,37 @@ function deep_merge(target, source) {
   return result;
 }
 
-// ── sanitize_name ────────────────────────────────────────────────────────
+// ── sanitize_name (imported from lib/utils, tested here for coverage) ───
 
 describe('sanitize_name', () => {
-  let mod;
-
-  beforeAll(() => {
-    mod = fresh_no_config_mod();
-  });
+  const { sanitize_name } = require('../lib/utils');
 
   test('lowercases input', () => {
-    expect(mod.sanitize_name('MyFeature')).toBe('myfeature');
+    expect(sanitize_name('MyFeature')).toBe('myfeature');
   });
 
   test('replaces special characters with hyphens', () => {
-    expect(mod.sanitize_name('feat/my branch')).toBe('feat-my-branch');
+    expect(sanitize_name('feat/my branch')).toBe('feat-my-branch');
   });
 
   test('keeps hyphens and underscores', () => {
-    expect(mod.sanitize_name('my-feature_name')).toBe('my-feature_name');
+    expect(sanitize_name('my-feature_name')).toBe('my-feature_name');
   });
 
   test('handles dots and slashes', () => {
-    expect(mod.sanitize_name('fix/issue.123')).toBe('fix-issue-123');
+    expect(sanitize_name('fix/issue.123')).toBe('fix-issue-123');
   });
 
   test('handles already clean name', () => {
-    expect(mod.sanitize_name('clean-name')).toBe('clean-name');
+    expect(sanitize_name('clean-name')).toBe('clean-name');
   });
 
   test('handles empty string', () => {
-    expect(mod.sanitize_name('')).toBe('');
+    expect(sanitize_name('')).toBe('');
   });
 
   test('handles consecutive special characters', () => {
-    expect(mod.sanitize_name('a//b..c')).toBe('a--b--c');
+    expect(sanitize_name('a//b..c')).toBe('a--b--c');
   });
 });
 

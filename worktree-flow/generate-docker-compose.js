@@ -1,14 +1,10 @@
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { SERVICE_PORTS, SERVICE_MODE_FILTERS } = require('./service-ports');
 const config_mod = require('./config');
 const config = config_mod.load_config({ required: false }) || null;
-
-function sanitize_name(name) {
-  return name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
-}
+const { sanitize_name, run } = require('./lib/utils');
 
 function generate(worktree_path, worktree_name, port_offset, repo_root, service_mode, alias, host_build) {
   const safe_name = alias ? sanitize_name(alias) : sanitize_name(worktree_name);
@@ -121,7 +117,7 @@ networks:
   return yaml;
 }
 
-function parseArgs(argv) {
+function parse_args(argv) {
   const options = {
     worktree_path: null,
     worktree_name: null,
@@ -209,7 +205,7 @@ function parseArgs(argv) {
 
 function main() {
   const { VALID_SERVICE_MODES, DEFAULT_SERVICE_MODE } = require('./service-ports');
-  const options = parseArgs(process.argv.slice(2));
+  const options = parse_args(process.argv.slice(2));
   if (!options || !options.worktree_path || !options.worktree_name || options.port_offset === null || Number.isNaN(options.port_offset)) {
     console.log(`Usage: node generate-docker-compose.js --path <worktree_path> --name <name> --offset <n> [--mode <${VALID_SERVICE_MODES.join('|')}>]`);
     process.exit(1);
@@ -224,7 +220,7 @@ function main() {
     process.exit(1);
   }
 
-  const repo_root = execSync('git rev-parse --show-toplevel', { stdio: 'pipe', encoding: 'utf8' }).trim();
+  const repo_root = run('git rev-parse --show-toplevel');
   const safe_name = options.alias ? sanitize_name(options.alias) : sanitize_name(options.worktree_name);
   const domain = config ? config_mod.domain_for(config, safe_name) || `${safe_name}.localhost` : `${safe_name}.localhost`;
 
@@ -294,7 +290,7 @@ function find_traefik_dir() {
   return null;
 }
 
-module.exports = { generate, generate_traefik_config, find_traefik_dir, sanitize_name };
+module.exports = { generate, generate_traefik_config, find_traefik_dir };
 
 if (require.main === module) {
   main();

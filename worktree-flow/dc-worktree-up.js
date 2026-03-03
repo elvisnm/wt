@@ -11,7 +11,7 @@ const scripts_dir = __dirname;
 
 // ── Arg parsing ─────────────────────────────────────────────────────────
 
-function parseArgs(argv) {
+function parse_args(argv) {
   const options = {
     name: null,
     branch: null,
@@ -541,7 +541,7 @@ function generate_traefik_override(worktree_path, alias, network_name) {
 // ── Main ────────────────────────────────────────────────────────────────
 
 function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parse_args(process.argv.slice(2));
   if (!options || !options.name) {
     console.log('Usage:');
     console.log('  wt up <name> --from=origin/branch');

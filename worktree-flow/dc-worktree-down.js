@@ -1,9 +1,9 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { config, config_mod, run, has_ref, resolve_worktree_path, read_alias } = require('./lib/utils');
+const { config, config_mod, run, has_ref, resolve_worktree_path, read_alias, sanitize_name } = require('./lib/utils');
 
-function parseArgs(argv) {
+function parse_args(argv) {
   const options = {
     name: null,
     remove: false,
@@ -41,10 +41,6 @@ function parseArgs(argv) {
   return options;
 }
 
-function sanitize_name(name) {
-  return name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
-}
-
 function remove_traefik_config(alias) {
   if (!alias) return;
   const traefik_dir = config && config.docker.proxy._dynamicDirResolved
@@ -60,7 +56,7 @@ function remove_traefik_config(alias) {
 }
 
 function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parse_args(process.argv.slice(2));
   if (!options || !options.name) {
     console.log('Usage:');
     console.log('  pnpm dc:down <name>                          Stop the Docker container');

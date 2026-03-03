@@ -2,10 +2,10 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const {
-  config, config_mod, run, resolve_worktree_path, read_env, read_container_name,
+  config, config_mod, run, resolve_worktree_path, read_env, read_container_name, sanitize_name,
 } = require('./lib/utils');
 const { get_lan_ip, build_lan_domain } = require('./lan-ip');
-const { generate_traefik_config, find_traefik_dir, sanitize_name } = require('./generate-docker-compose');
+const { generate_traefik_config, find_traefik_dir } = require('./generate-docker-compose');
 
 function update_env_key(env_path, key, value) {
   let content = fs.readFileSync(env_path, 'utf8');

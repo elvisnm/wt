@@ -1,8 +1,8 @@
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const config_mod = require('./config');
 const config = config_mod.load_config({ required: false }) || null;
+const { compute_auto_offset } = require('./lib/utils');
 
 function parse_args(argv) {
   const options = {
@@ -100,12 +100,6 @@ function parse_integer(value, label) {
     throw new Error(`${label} must be an integer`);
   }
   return parsed;
-}
-
-function compute_auto_offset(seed) {
-  const hash = crypto.createHash('sha256').update(seed).digest('hex');
-  const hash_int = Number.parseInt(hash.slice(0, 8), 16);
-  return (hash_int % 2000) + 100;
 }
 
 function format_env_lines(options) {
