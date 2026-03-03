@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/elvisnm/wt/internal/config"
+	"github.com/elvisnm/wt/internal/sentinel"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
@@ -200,9 +201,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "render":
 			// Check if dc-create finished (via sentinel file)
 			if m.term_mgr.HasLabel(LabelCreate) || m.has_create_alias_tab() {
-				if sr := read_sentinel(SentinelCreate); sr != nil {
-					lines := strings.SplitN(sr.raw, "\n", 2)
-					exit_code := sr.exit_code
+				if sr := sentinel.Read(sentinel.Create); sr != nil {
+					lines := strings.SplitN(sr.Raw, "\n", 2)
+					exit_code := sr.ExitCode
 					created_alias := ""
 					if len(lines) > 1 {
 						created_alias = strings.TrimSpace(lines[1])
@@ -237,8 +238,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Check if skip-worktree script finished (via sentinel file)
 			if m.skip_worktree_running {
-				if sr := read_sentinel(SentinelSkipWorktree); sr != nil {
-					exit_code := sr.exit_code
+				if sr := sentinel.Read(sentinel.SkipWorktree); sr != nil {
+					exit_code := sr.ExitCode
 					m.skip_worktree_running = false
 					// Close the "Skip —" tab
 					for _, s := range m.term_mgr.Sessions() {
@@ -259,9 +260,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Check if the AWS Keys script finished (via sentinel file)
 			if m.aws_keys_running {
-				if sr := read_sentinel(SentinelAWSKeys); sr != nil {
-					debug_log("[aws] sentinel found: raw=%q exit_code=%d", sr.raw, sr.exit_code)
-					exit_code := sr.exit_code
+				if sr := sentinel.Read(sentinel.AWSKeys); sr != nil {
+					debug_log("[aws] sentinel found: raw=%q exit_code=%d", sr.Raw, sr.ExitCode)
+					exit_code := sr.ExitCode
 					m.aws_keys_running = false
 					m.term_mgr.CloseByLabel(LabelAWSKeys)
 					if m.pane_layout != nil {
@@ -324,7 +325,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Check if HeiHei scream finished (via sentinel file)
 			if m.heihei_playing {
-				if read_sentinel(SentinelHeiHei) != nil {
+				if sentinel.Read(sentinel.HeiHei) != nil {
 					m.heihei_playing = false
 					m.term_mgr.CloseByLabel(LabelHeiHei)
 					if m.pane_layout != nil {
@@ -471,7 +472,7 @@ func (m *Model) update_worktrees(wts []worktree.Worktree) {
 	// finished yet (no sentinel file). This handles the gap between dc-create
 	// writing the env file (worktree discovered) and docker compose up finishing.
 	if m.term_mgr != nil && (m.term_mgr.HasLabel(LabelCreate) || m.has_create_alias_tab()) {
-		if !sentinel_exists(SentinelCreate) {
+		if !sentinel.Exists(sentinel.Create) {
 			// Sentinel doesn't exist — creation still in progress
 			for i := range wts {
 				if wts[i].Type == worktree.TypeDocker && !wts[i].ContainerExists {
@@ -1239,7 +1240,7 @@ func (m Model) open_create(wt *worktree.Worktree) (Model, tea.Cmd) {
 	w, h := m.right_pane_dimensions()
 
 	// Remove stale sentinel before opening
-	clear_sentinel(SentinelCreate)
+	sentinel.Clear(sentinel.Create)
 
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-create.js")
 	debug_log("[create] open_create: script=%s", script)
@@ -2075,7 +2076,7 @@ func (m Model) open_aws_keys() (tea.Model, tea.Cmd) {
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "aws-keys.js")
 
 	// Remove stale sentinel before opening
-	clear_sentinel(SentinelAWSKeys)
+	sentinel.Clear(sentinel.AWSKeys)
 	debug_log("[aws] open_aws_keys: removed stale sentinel")
 	debug_log("[aws] open_aws_keys: script=%s pane=%dx%d", script, w, h)
 
@@ -2120,7 +2121,7 @@ func (m Model) play_heihei() (tea.Model, tea.Cmd) {
 	}
 
 	// Remove stale sentinel before opening
-	clear_sentinel(SentinelHeiHei)
+	sentinel.Clear(sentinel.HeiHei)
 
 	exe, err := os.Executable()
 	if err != nil {

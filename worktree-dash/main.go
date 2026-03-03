@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/elvisnm/wt/internal/app"
+	"github.com/elvisnm/wt/internal/sentinel"
 	"github.com/elvisnm/wt/internal/terminal"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -597,8 +598,6 @@ func renderHeiHeiArt(w, h int) heiHeiLayout {
 
 // runHeiHei displays the HeiHei art and plays the scream audio clip.
 // Exits when playback finishes. Re-renders on terminal resize.
-const heiHeiSentinel = "wt-heihei-done"
-
 type heiHeiScreenLayout struct {
 	msgRow int
 	msgCol int
@@ -647,8 +646,7 @@ func runHeiHei(audioPath string) {
 	for {
 		select {
 		case <-done:
-			sentinel := filepath.Join(os.TempDir(), heiHeiSentinel)
-			os.WriteFile(sentinel, []byte("0"), 0644)
+			sentinel.Write(sentinel.HeiHei, "0")
 			fmt.Print("\033[?25h")
 			return
 		case <-sig:
