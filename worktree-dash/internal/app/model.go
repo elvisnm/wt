@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elvisnm/wt/internal/claude"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/docker"
 	"github.com/elvisnm/wt/internal/labels"
@@ -93,6 +94,12 @@ type Model struct {
 
 	// Deferred esbuild: alias to open esbuild watch for after next discovery
 	pending_esbuild_alias string
+
+	// Claude usage panel
+	usage_visible bool
+	usage_data    *claude.Usage
+	usage_err     error
+	usage_token   string
 
 	// HeiHei easter egg
 	heihei_audio   []byte
@@ -180,6 +187,11 @@ type MsgDiscovered struct{ Worktrees []worktree.Worktree }
 type MsgStatusUpdated struct{ Worktrees []worktree.Worktree }
 type MsgStatsUpdated struct{ Worktrees []worktree.Worktree }
 type MsgServicesUpdated struct{ Services []worktree.Service }
+type MsgUsageUpdated struct {
+	Token string
+	Usage *claude.Usage
+	Err   error
+}
 type MsgTick struct{ Kind string }
 type MsgSessionOpened struct{ Err error }
 type MsgResultClear struct{}
@@ -226,6 +238,21 @@ func cmd_fetch_stats(wts []worktree.Worktree, cfg *config.Config) tea.Cmd {
 		debug_log("[tick] fetch_stats: %d worktrees", len(wts))
 		updated := docker.FetchContainerStats(wts, cfg)
 		return MsgStatsUpdated{Worktrees: updated}
+	}
+}
+
+// cmd_fetch_usage fetches usage data. If token is empty, fetches it from keychain first.
+func cmd_fetch_usage(token string) tea.Cmd {
+	return func() tea.Msg {
+		if token == "" {
+			var err error
+			token, err = claude.FetchToken()
+			if err != nil {
+				return MsgUsageUpdated{Err: err}
+			}
+		}
+		usage, err := claude.FetchUsage(token)
+		return MsgUsageUpdated{Token: token, Usage: usage, Err: err}
 	}
 }
 

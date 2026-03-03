@@ -20,7 +20,7 @@ func test_model() Model {
 			{Name: "local-wt", Alias: "local", Branch: "fix/local", Type: worktree.TypeLocal},
 		},
 	}
-	m.layout = m.layout.Resize(120, 40)
+	m.layout = m.layout.Resize(120, 40, false)
 	return m
 }
 

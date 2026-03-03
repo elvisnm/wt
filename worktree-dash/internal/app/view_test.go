@@ -24,7 +24,7 @@ func test_model_full() Model {
 			{Name: "test-wt", Alias: "test", Branch: "feat/test", Type: worktree.TypeDocker, Running: true, Health: "healthy", ContainerExists: true},
 		},
 	}
-	m.layout = m.layout.Resize(60, 40)
+	m.layout = m.layout.Resize(60, 40, false)
 	return m
 }
 

@@ -833,9 +833,8 @@ func renderGuide() string {
 
 	// More
 	sections = append(sections, guideBox("More", []string{
-		guideKey("Shift+D") + " database    " + guideKey("Shift+A") + " aws keys",
-		guideKey("Shift+M") + " maintenance " + guideKey("Shift+X") + " admin",
-		guideKey("Shift+L") + " LAN mode    " + guideKey("Shift+K") + " skip-worktree",
+		guideKey("Shift+A") + " aws keys    " + guideKey("Shift+X") + " admin",
+		guideKey("Shift+L") + " LAN mode    " + guideKey("Shift+U") + " Claude usage",
 		ansiDim + strings.Repeat("─", 42) + ansiReset,
 		guideKey("i") + " info  " + guideKey("r") + " restart  " + guideKey("u") + " start  " + guideKey("t") + " stop",
 	}, w))
@@ -956,12 +955,10 @@ func renderHelp() string {
 
 	// Operations
 	sections = append(sections, helpBox("Operations", []string{
-		guideKey("Shift+D") + "     database",
-		guideKey("Shift+K") + "     skip-worktree toggle",
-		guideKey("Shift+M") + "     maintenance",
 		guideKey("Shift+A") + "     aws keys",
 		guideKey("Shift+X") + "     admin toggle",
 		guideKey("Shift+L") + "     LAN toggle",
+		guideKey("Shift+U") + "     Claude usage",
 	}, w))
 
 	// Tmux

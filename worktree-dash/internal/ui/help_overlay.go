@@ -61,10 +61,9 @@ func HelpSections() []HelpSection {
 			Title: "Operations",
 			Items: []HintPair{
 				{Key: "A", Desc: "AWS keys"},
-				{Key: "D", Desc: "Database ops"},
 				{Key: "L", Desc: "LAN toggle"},
 				{Key: "X", Desc: "Admin toggle"},
-				{Key: "M", Desc: "Maintenance"},
+				{Key: "U", Desc: "Claude usage"},
 			},
 		},
 		{

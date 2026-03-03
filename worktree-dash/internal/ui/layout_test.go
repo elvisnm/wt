@@ -66,7 +66,7 @@ func TestLayoutResize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := Layout{}.Resize(tt.w, tt.h)
+			l := Layout{}.Resize(tt.w, tt.h, false)
 			tt.checks(t, l)
 		})
 	}
@@ -224,5 +224,40 @@ func TestTabStatusIndicatorPlain(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLayoutResizeWithUsage(t *testing.T) {
+	l := Layout{}.Resize(40, 50, true)
+
+	if l.UsageHeight != 5 {
+		t.Errorf("UsageHeight: got %d, want 5", l.UsageHeight)
+	}
+
+	total := l.TabsHeight + l.WorktreeHeight + l.ServicesHeight + l.DetailsHeight + l.UsageHeight
+	if total != 50 {
+		t.Errorf("panel heights sum to %d, want 50", total)
+	}
+}
+
+func TestLayoutResizeWithoutUsage(t *testing.T) {
+	l := Layout{}.Resize(40, 50, false)
+
+	if l.UsageHeight != 0 {
+		t.Errorf("UsageHeight: got %d, want 0", l.UsageHeight)
+	}
+
+	total := l.TabsHeight + l.WorktreeHeight + l.ServicesHeight + l.DetailsHeight
+	if total != 50 {
+		t.Errorf("panel heights sum to %d, want 50", total)
+	}
+}
+
+func TestLayoutResizeUsageCapped(t *testing.T) {
+	// With very small height, usage should be capped at panels_h/4
+	l := Layout{}.Resize(40, 10, true)
+
+	if l.UsageHeight > 10/4 {
+		t.Errorf("UsageHeight %d should be capped at %d for small terminals", l.UsageHeight, 10/4)
 	}
 }

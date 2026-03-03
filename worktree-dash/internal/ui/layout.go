@@ -17,9 +17,10 @@ type Layout struct {
 	ServicesHeight int
 	DetailsHeight  int
 	StatusHeight   int
+	UsageHeight    int
 }
 
-func (l Layout) Resize(w, h int) Layout {
+func (l Layout) Resize(w, h int, usage_visible bool) Layout {
 	l.Width = w
 	l.Height = h
 	l.StatusHeight = 0
@@ -27,6 +28,17 @@ func (l Layout) Resize(w, h int) Layout {
 	panels_h := h - l.StatusHeight
 	if panels_h < 8 {
 		panels_h = 8
+	}
+
+	// Reserve space for usage panel when visible (5 lines: 2 border + 3 inner)
+	if usage_visible {
+		l.UsageHeight = 5
+		if l.UsageHeight > panels_h/4 {
+			l.UsageHeight = panels_h / 4
+		}
+		panels_h -= l.UsageHeight
+	} else {
+		l.UsageHeight = 0
 	}
 
 	// 4 panels: tabs 20%, worktrees 30%, services 25%, details 25%

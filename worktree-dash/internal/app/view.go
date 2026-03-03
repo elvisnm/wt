@@ -64,8 +64,15 @@ func (m Model) View() string {
 		m.cfg,
 	)
 
-	left_col := lipgloss.JoinVertical(lipgloss.Left,
-		tabs_panel, worktree_panel, services_panel, details_panel)
+	var left_col string
+	if m.usage_visible {
+		usage_panel := ui.RenderUsagePanel(m.usage_data, m.usage_err, m.width, m.layout.UsageHeight)
+		left_col = lipgloss.JoinVertical(lipgloss.Left,
+			tabs_panel, worktree_panel, services_panel, details_panel, usage_panel)
+	} else {
+		left_col = lipgloss.JoinVertical(lipgloss.Left,
+			tabs_panel, worktree_panel, services_panel, details_panel)
+	}
 
 	// Picker overlay — rendered within the left pane
 	if m.picker_open {

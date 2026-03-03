@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elvisnm/wt/internal/claude"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/sentinel"
@@ -24,7 +26,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.layout = m.layout.Resize(msg.Width, msg.Height)
+		m.layout = m.layout.Resize(msg.Width, msg.Height, m.usage_visible)
 		m.ready = true
 		// In pane layout mode, tmux handles right pane resize natively.
 		// Resize background session windows to match the new right pane dimensions.
@@ -117,6 +119,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tick_after(3*time.Second, "stats")
 
+	case MsgUsageUpdated:
+		m.usage_data = msg.Usage
+		m.usage_err = msg.Err
+		if msg.Token != "" {
+			m.usage_token = msg.Token
+		}
+		// On 401, clear cached token so next tick re-fetches from keychain
+		if errors.Is(msg.Err, claude.ErrUnauthorized) {
+			m.usage_token = ""
+		}
+		if m.usage_visible {
+			return m, tick_after(60*time.Second, "usage")
+		}
+		return m, nil
+
 	case MsgServicesUpdated:
 		sel := m.selected_worktree()
 		sel_name := "<nil>"
@@ -205,6 +222,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.refresh_services()
 			}
 			return m, tick_after(5*time.Second, "services")
+		case "usage":
+			if m.usage_visible && m.usage_token != "" {
+				return m, cmd_fetch_usage(m.usage_token)
+			}
+			return m, nil
 		case "spin":
 			if m.activity != "" {
 				m.spin_frame++
@@ -644,6 +666,8 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggle_skip_worktree()
 	case "H":
 		return m.play_heihei()
+	case "U":
+		return m.toggle_usage()
 	}
 
 	switch m.focus {
@@ -2174,6 +2198,20 @@ func (m Model) play_heihei() (tea.Model, tea.Cmd) {
 	}
 
 	return m, tick_after(100*time.Millisecond, "render")
+}
+
+func (m Model) toggle_usage() (tea.Model, tea.Cmd) {
+	m.usage_visible = !m.usage_visible
+	m.layout = m.layout.Resize(m.width, m.height, m.usage_visible)
+
+	if !m.usage_visible {
+		return m, nil
+	}
+
+	// Fire async fetch — cmd_fetch_usage handles token acquisition if needed.
+	// The MsgUsageUpdated handler schedules the next 60s tick, so no tick here
+	// (avoids duplicate tick chains on rapid toggle).
+	return m, cmd_fetch_usage(m.usage_token)
 }
 
 // open_db_picker shows the database operations picker
