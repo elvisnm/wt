@@ -74,6 +74,17 @@ func (m Model) View() string {
 		panels = append(panels, usage_panel)
 	}
 
+	if m.tasks_visible {
+		tasks_panel := ui.RenderTasksPanel(
+			m.tasks_list, m.tasks_cursor,
+			m.tasks_detail, m.tasks_detail_scroll,
+			m.width, m.layout.TasksHeight,
+			m.focus == PanelTasks,
+			m.tasks_err,
+		)
+		panels = append(panels, tasks_panel)
+	}
+
 	left_col := lipgloss.JoinVertical(lipgloss.Left, panels...)
 
 	// Picker overlay — rendered within the left pane

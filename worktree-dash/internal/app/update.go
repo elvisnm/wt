@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elvisnm/wt/internal/beads"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/sentinel"
@@ -24,7 +25,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.layout = m.layout.Resize(msg.Width, msg.Height, m.details_visible, m.usage_visible)
+		m.recalc_layout()
 		m.ready = true
 		// In pane layout mode, tmux handles right pane resize natively.
 		// Resize background session windows to match the new right pane dimensions.
@@ -127,6 +128,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tick_after(60*time.Second, "usage")
 		}
 		return m, nil
+
+	case MsgTasksLoaded:
+		m.tasks_list = msg.Tasks
+		m.tasks_err = msg.Err
+		if m.tasks_visible {
+			m.recalc_layout()
+		}
+		return m, nil
+
+	case MsgTaskDetailLoaded:
+		if msg.Err != nil {
+			m.tasks_err = msg.Err
+			return m, nil
+		}
+		m.tasks_detail = msg.Task
+		m.tasks_detail_scroll = 0
+		if m.tasks_visible {
+			m.recalc_layout()
+		}
+		return m, nil
+
+	case MsgTaskActionDone:
+		if msg.Err != nil {
+			m.tasks_err = msg.Err
+			return m, nil
+		}
+		return m, cmd_fetch_tasks()
 
 	case MsgServicesUpdated:
 		sel := m.selected_worktree()
@@ -572,6 +600,11 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, Keys.Escape):
+		if m.focus == PanelTasks && m.tasks_detail != nil {
+			m.tasks_detail = nil
+			m.recalc_layout()
+			return m, nil
+		}
 		if m.focus == PanelTerminal {
 			m.focus = m.prev_focus
 		} else if m.focus != PanelWorktrees {
@@ -661,6 +694,8 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.play_heihei()
 	case "U":
 		return m.toggle_usage()
+	case "T":
+		return m.toggle_tasks()
 	}
 
 	switch m.focus {
@@ -672,6 +707,8 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handle_services_key(msg)
 	case PanelTerminal:
 		return m.handle_terminal_key(msg)
+	case PanelTasks:
+		return m.handle_tasks_key(msg)
 	}
 
 	return m, nil
@@ -2197,7 +2234,7 @@ func (m Model) play_heihei() (tea.Model, tea.Cmd) {
 
 func (m Model) toggle_details() (tea.Model, tea.Cmd) {
 	m.details_visible = !m.details_visible
-	m.layout = m.layout.Resize(m.width, m.height, m.details_visible, m.usage_visible)
+	m.recalc_layout()
 
 	// If details was hidden and focus was on it, move to services
 	if !m.details_visible && m.focus == PanelDetails {
@@ -2208,7 +2245,7 @@ func (m Model) toggle_details() (tea.Model, tea.Cmd) {
 
 func (m Model) toggle_usage() (tea.Model, tea.Cmd) {
 	m.usage_visible = !m.usage_visible
-	m.layout = m.layout.Resize(m.width, m.height, m.details_visible, m.usage_visible)
+	m.recalc_layout()
 
 	if !m.usage_visible {
 		return m, nil
@@ -2220,11 +2257,23 @@ func (m Model) toggle_usage() (tea.Model, tea.Cmd) {
 	return m, cmd_fetch_usage(m.usage_token)
 }
 
+// panel_visible returns whether a panel should be included in cycling.
+func (m *Model) panel_visible(p Panel) bool {
+	switch p {
+	case PanelDetails:
+		return m.details_visible
+	case PanelTasks:
+		return m.tasks_visible
+	default:
+		return true
+	}
+}
+
 // next_panel cycles focus forward, skipping hidden panels.
 func (m *Model) next_panel() {
 	for i := 0; i < PanelCount; i++ {
 		m.focus = (m.focus + 1) % PanelCount
-		if m.focus != PanelDetails || m.details_visible {
+		if m.panel_visible(m.focus) {
 			return
 		}
 	}
@@ -2234,7 +2283,7 @@ func (m *Model) next_panel() {
 func (m *Model) prev_panel() {
 	for i := 0; i < PanelCount; i++ {
 		m.focus = (m.focus - 1 + PanelCount) % PanelCount
-		if m.focus != PanelDetails || m.details_visible {
+		if m.panel_visible(m.focus) {
 			return
 		}
 	}
@@ -2441,4 +2490,124 @@ func (m Model) run_remove_worktree(wt worktree.Worktree, force bool) (Model, tea
 	)
 }
 
+// --- Beads tasks panel ---
 
+func (m Model) toggle_tasks() (tea.Model, tea.Cmd) {
+	m.tasks_visible = !m.tasks_visible
+	m.recalc_layout()
+
+	if !m.tasks_visible {
+		if m.focus == PanelTasks {
+			m.focus = PanelServices
+		}
+		return m, nil
+	}
+
+	// Reset state, focus panel, and fetch
+	m.tasks_cursor = 0
+	m.tasks_detail = nil
+	m.tasks_detail_scroll = 0
+	m.tasks_err = nil
+	m.focus = PanelTasks
+	return m, cmd_fetch_tasks()
+}
+
+func (m Model) handle_tasks_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.tasks_detail != nil {
+		return m.handle_tasks_detail_key(msg)
+	}
+	return m.handle_tasks_list_key(msg)
+}
+
+func (m Model) handle_tasks_list_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, Keys.Up):
+		if m.tasks_cursor > 0 {
+			m.tasks_cursor--
+		}
+		return m, nil
+
+	case key.Matches(msg, Keys.Down):
+		if m.tasks_cursor < len(m.tasks_list)-1 {
+			m.tasks_cursor++
+		}
+		return m, nil
+
+	case key.Matches(msg, Keys.Enter):
+		if m.tasks_cursor >= 0 && m.tasks_cursor < len(m.tasks_list) {
+			id := m.tasks_list[m.tasks_cursor].ID
+			return m, cmd_fetch_task_detail(id)
+		}
+		return m, nil
+	}
+
+	task := m.selected_task()
+	if task == nil {
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "c":
+		id := task.ID
+		title := task.Title
+		m.confirm_open = true
+		m.confirm_prompt = fmt.Sprintf("Close task %s?\n%s", id, title)
+		m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
+			return *mdl, func() tea.Msg {
+				err := beads.CloseTask(id)
+				return MsgTaskActionDone{Err: err}
+			}
+		}
+		return m, nil
+	case "d":
+		id := task.ID
+		title := task.Title
+		m.confirm_open = true
+		m.confirm_prompt = fmt.Sprintf("Delete task %s?\n%s", id, title)
+		m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
+			return *mdl, func() tea.Msg {
+				err := beads.DeleteTask(id)
+				return MsgTaskActionDone{Err: err}
+			}
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m Model) selected_task() *beads.Task {
+	if m.tasks_cursor >= 0 && m.tasks_cursor < len(m.tasks_list) {
+		t := m.tasks_list[m.tasks_cursor]
+		return &t
+	}
+	return nil
+}
+
+func (m Model) handle_tasks_detail_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	max_scroll := 0
+	if m.tasks_detail != nil {
+		inner_h := m.layout.TasksHeight - 2
+		total := ui.TasksContentHeight(m.tasks_list, m.tasks_detail)
+		max_scroll = total - inner_h
+		if max_scroll < 0 {
+			max_scroll = 0
+		}
+	}
+
+	switch {
+	case key.Matches(msg, Keys.Up):
+		if m.tasks_detail_scroll > 0 {
+			m.tasks_detail_scroll--
+		}
+		return m, nil
+
+	case key.Matches(msg, Keys.Down):
+		if m.tasks_detail_scroll < max_scroll {
+			m.tasks_detail_scroll++
+		}
+		return m, nil
+	}
+
+	return m, nil
+}

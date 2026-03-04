@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elvisnm/wt/internal/beads"
 	"github.com/elvisnm/wt/internal/claude"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/docker"
@@ -30,9 +31,10 @@ const (
 	PanelWorktrees
 	PanelServices
 	PanelDetails
+	PanelTasks
 )
 
-const PanelCount = 4
+const PanelCount = 5
 
 // Model is the root Bubbletea model
 type Model struct {
@@ -105,6 +107,14 @@ type Model struct {
 	usage_err     error
 	usage_token   string
 
+	// Beads tasks panel
+	tasks_visible       bool
+	tasks_list          []beads.Task
+	tasks_cursor        int
+	tasks_detail        *beads.Task
+	tasks_detail_scroll int
+	tasks_err           error
+
 	// HeiHei easter egg
 	heihei_audio   []byte
 	heihei_tmpfile string
@@ -115,6 +125,16 @@ type Model struct {
 	cfg           *config.Config
 
 	layout ui.Layout
+}
+
+// recalc_layout recomputes layout dimensions with current visibility state.
+func (m *Model) recalc_layout() {
+	m.layout = m.layout.Resize(m.width, m.height, ui.ResizeOpts{
+		DetailsVisible: m.details_visible,
+		UsageVisible:   m.usage_visible,
+		TasksVisible:   m.tasks_visible,
+		TasksContent:   ui.TasksContentHeight(m.tasks_list, m.tasks_detail),
+	})
 }
 
 // cleanup_temp_files removes any temporary files created during the session.
@@ -163,7 +183,7 @@ func NewModelWithLayout(server *terminal.TmuxServer, pl *terminal.PaneLayout) Mo
 		cfg:             cfg,
 		term_mgr:        mgr,
 		pane_layout:     pl,
-		details_visible: true,
+		// details_visible defaults to false (zero value)
 	}
 }
 
@@ -197,6 +217,15 @@ type MsgUsageUpdated struct {
 	Usage *claude.Usage
 	Err   error
 }
+type MsgTasksLoaded struct {
+	Tasks []beads.Task
+	Err   error
+}
+type MsgTaskDetailLoaded struct {
+	Task *beads.Task
+	Err  error
+}
+type MsgTaskActionDone struct{ Err error }
 type MsgTick struct{ Kind string }
 type MsgSessionOpened struct{ Err error }
 type MsgResultClear struct{}
@@ -291,6 +320,20 @@ func cmd_fetch_usage(token string) tea.Cmd {
 		// Retry with the new access token
 		usage, err = claude.FetchUsage(refreshed.AccessToken)
 		return MsgUsageUpdated{Token: refreshed.AccessToken, Usage: usage, Err: err}
+	}
+}
+
+func cmd_fetch_tasks() tea.Cmd {
+	return func() tea.Msg {
+		tasks, err := beads.FetchTasks()
+		return MsgTasksLoaded{Tasks: tasks, Err: err}
+	}
+}
+
+func cmd_fetch_task_detail(id string) tea.Cmd {
+	return func() tea.Msg {
+		task, err := beads.FetchDetail(id)
+		return MsgTaskDetailLoaded{Task: task, Err: err}
 	}
 }
 

@@ -83,6 +83,7 @@ The dashboard discovers worktrees by reading `workflow.config.js` from the repo 
 | `L` | LAN access toggle (on/off) |
 | `X` | Admin account toggle (set/unset) |
 | `M` | Maintenance (prune/autostop/rebuild) |
+| `T` | Beads tasks overlay |
 
 ### Services Panel
 

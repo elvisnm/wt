@@ -126,6 +126,7 @@ Real-time container stats via `docker stats`. Integrated terminal sessions for s
 | `Shift+X` | Toggle admin accounts | `admin` |
 | `Shift+L` | Toggle LAN mode | `lan` |
 | `Shift+M` | Open maintenance picker | — |
+| `Shift+T` | Open tasks overlay | — |
 
 **Worktree panel:**
 

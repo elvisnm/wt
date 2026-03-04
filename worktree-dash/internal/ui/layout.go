@@ -18,9 +18,18 @@ type Layout struct {
 	DetailsHeight  int
 	StatusHeight   int
 	UsageHeight    int
+	TasksHeight    int
 }
 
-func (l Layout) Resize(w, h int, details_visible, usage_visible bool) Layout {
+// ResizeOpts holds panel visibility and content sizing hints.
+type ResizeOpts struct {
+	DetailsVisible bool
+	UsageVisible   bool
+	TasksVisible   bool
+	TasksContent   int // desired inner content lines for tasks panel
+}
+
+func (l Layout) Resize(w, h int, opts ResizeOpts) Layout {
 	l.Width = w
 	l.Height = h
 	l.StatusHeight = 0
@@ -30,8 +39,8 @@ func (l Layout) Resize(w, h int, details_visible, usage_visible bool) Layout {
 		panels_h = 8
 	}
 
-	// Reserve space for usage panel when visible (5 lines: 2 border + 3 inner)
-	if usage_visible {
+	// Reserve space for fixed-height bottom panels first (usage, tasks)
+	if opts.UsageVisible {
 		l.UsageHeight = 5
 		if l.UsageHeight > panels_h/4 {
 			l.UsageHeight = panels_h / 4
@@ -41,12 +50,34 @@ func (l Layout) Resize(w, h int, details_visible, usage_visible bool) Layout {
 		l.UsageHeight = 0
 	}
 
+	if opts.TasksVisible {
+		// Dynamic height: content lines + 2 for border, capped at 40% of remaining space
+		content := opts.TasksContent
+		if content < 1 {
+			content = 1
+		}
+		l.TasksHeight = content + 2
+		max_tasks := panels_h * 40 / 100
+		if max_tasks < 4 {
+			max_tasks = 4
+		}
+		if l.TasksHeight > max_tasks {
+			l.TasksHeight = max_tasks
+		}
+		if l.TasksHeight < 4 {
+			l.TasksHeight = 4
+		}
+		panels_h -= l.TasksHeight
+	} else {
+		l.TasksHeight = 0
+	}
+
 	l.TabsHeight = panels_h * 20 / 100
 	if l.TabsHeight < 4 {
 		l.TabsHeight = 4
 	}
 
-	if details_visible {
+	if opts.DetailsVisible {
 		// 4 panels: tabs 20%, worktrees 30%, services 25%, details 25%
 		l.WorktreeHeight = panels_h * 30 / 100
 		l.ServicesHeight = panels_h * 25 / 100

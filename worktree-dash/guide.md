@@ -37,12 +37,13 @@
 
 ╭─ More ──────────────────────────────────────────────────╮
 │                                                         │
-│   Shift+B  database       Shift+A  aws credentials     │
-│   Shift+D  details        Shift+U  claude usage         │
-│   Shift+M  maintenance    Shift+X  toggle admin         │
-│   Shift+L  toggle LAN     Shift+K  skip-worktree        │
+│   Shift+B  database       Shift+A  AWS credentials     │
+│   Shift+D  details        Shift+T  tasks                │
+│   Shift+U  claude usage   Shift+X  toggle admin         │
+│   Shift+M  maintenance    Shift+K  skip-worktree        │
+│   Shift+L  toggle LAN                                   │
 │                                                         │
-│   d  details  i  info   r  restart  u  start  t  stop   │
+│   i  info   r  restart   u  start   t  stop              │
 │                                                         │
 ╰─────────────────────────────────────────────────────────╯
 

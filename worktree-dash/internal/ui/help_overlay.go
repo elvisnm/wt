@@ -45,7 +45,6 @@ func HelpSections() []HelpSection {
 				{Key: "r", Desc: "Restart container"},
 				{Key: "t", Desc: "Stop container"},
 				{Key: "u", Desc: "Start container"},
-				{Key: "d", Desc: "Toggle details"},
 				{Key: "i", Desc: "Info"},
 			{Key: "x", Desc: "Remove worktree"},
 			},
@@ -59,14 +58,24 @@ func HelpSections() []HelpSection {
 			},
 		},
 		{
+			Title: "Tasks (Shift+T)",
+			Items: []HintPair{
+				{Key: "j/k", Desc: "Navigate tasks"},
+				{Key: "Enter", Desc: "Task detail"},
+				{Key: "c", Desc: "Close task"},
+				{Key: "d", Desc: "Delete task"},
+			},
+		},
+		{
 			Title: "Operations",
 			Items: []HintPair{
-				{Key: "A", Desc: "AWS keys"},
-				{Key: "B", Desc: "Database picker"},
-				{Key: "D", Desc: "Details toggle"},
-				{Key: "L", Desc: "LAN toggle"},
-				{Key: "X", Desc: "Admin toggle"},
-				{Key: "U", Desc: "Claude usage"},
+				{Key: "Shift+A", Desc: "AWS Keys"},
+				{Key: "Shift+B", Desc: "Database picker"},
+				{Key: "Shift+D", Desc: "Details toggle"},
+				{Key: "Shift+L", Desc: "LAN toggle"},
+				{Key: "Shift+X", Desc: "Admin toggle"},
+				{Key: "Shift+T", Desc: "Tasks"},
+				{Key: "Shift+U", Desc: "Claude usage"},
 			},
 		},
 		{
@@ -87,7 +96,7 @@ func RenderHelpModal(max_w, max_h int) string {
 	key_style := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(FocusBorderColor).
-		Width(8).
+		Width(10).
 		Align(lipgloss.Right)
 
 	desc_style := lipgloss.NewStyle().
@@ -116,7 +125,7 @@ func RenderHelpModal(max_w, max_h int) string {
 
 	content := strings.Join(all_lines, "\n")
 
-	overlay_w := 40
+	overlay_w := 44
 	if overlay_w > max_w-4 {
 		overlay_w = max_w - 4
 	}

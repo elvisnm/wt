@@ -66,7 +66,7 @@ func TestLayoutResize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := Layout{}.Resize(tt.w, tt.h, true, false)
+			l := Layout{}.Resize(tt.w, tt.h, ResizeOpts{DetailsVisible: true})
 			tt.checks(t, l)
 		})
 	}
@@ -228,7 +228,7 @@ func TestTabStatusIndicatorPlain(t *testing.T) {
 }
 
 func TestLayoutResizeWithUsage(t *testing.T) {
-	l := Layout{}.Resize(40, 50, true, true)
+	l := Layout{}.Resize(40, 50, ResizeOpts{DetailsVisible: true, UsageVisible: true})
 
 	if l.UsageHeight != 5 {
 		t.Errorf("UsageHeight: got %d, want 5", l.UsageHeight)
@@ -241,7 +241,7 @@ func TestLayoutResizeWithUsage(t *testing.T) {
 }
 
 func TestLayoutResizeWithoutUsage(t *testing.T) {
-	l := Layout{}.Resize(40, 50, true, false)
+	l := Layout{}.Resize(40, 50, ResizeOpts{DetailsVisible: true})
 
 	if l.UsageHeight != 0 {
 		t.Errorf("UsageHeight: got %d, want 0", l.UsageHeight)
@@ -255,7 +255,7 @@ func TestLayoutResizeWithoutUsage(t *testing.T) {
 
 func TestLayoutResizeUsageCapped(t *testing.T) {
 	// With very small height, usage should be capped at panels_h/4
-	l := Layout{}.Resize(40, 10, true, true)
+	l := Layout{}.Resize(40, 10, ResizeOpts{DetailsVisible: true, UsageVisible: true})
 
 	if l.UsageHeight > 10/4 {
 		t.Errorf("UsageHeight %d should be capped at %d for small terminals", l.UsageHeight, 10/4)
@@ -263,7 +263,7 @@ func TestLayoutResizeUsageCapped(t *testing.T) {
 }
 
 func TestLayoutResizeDetailsHidden(t *testing.T) {
-	l := Layout{}.Resize(40, 50, false, false)
+	l := Layout{}.Resize(40, 50, ResizeOpts{})
 
 	if l.DetailsHeight != 0 {
 		t.Errorf("DetailsHeight: got %d, want 0", l.DetailsHeight)

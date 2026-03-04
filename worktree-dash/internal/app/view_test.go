@@ -6,6 +6,7 @@ import (
 
 	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/terminal"
+	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,7 +25,7 @@ func test_model_full() Model {
 			{Name: "test-wt", Alias: "test", Branch: "feat/test", Type: worktree.TypeDocker, Running: true, Health: "healthy", ContainerExists: true},
 		},
 	}
-	m.layout = m.layout.Resize(60, 40, true, false)
+	m.layout = m.layout.Resize(60, 40, ui.ResizeOpts{DetailsVisible: true})
 	return m
 }
 

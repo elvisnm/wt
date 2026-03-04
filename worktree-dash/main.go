@@ -828,13 +828,14 @@ func renderGuide() string {
 		guideKey("w") + " worktrees",
 		guideKey("s") + " services      jump directly",
 		guideKey("a") + " active tabs",
-		guideKey("d") + " details",
 	}, w))
 
 	// More
 	sections = append(sections, guideBox("More", []string{
-		guideKey("Shift+A") + " aws keys    " + guideKey("Shift+X") + " admin",
+		guideKey("Shift+A") + " AWS keys    " + guideKey("Shift+X") + " admin",
+		guideKey("Shift+B") + " database    " + guideKey("Shift+D") + " details",
 		guideKey("Shift+L") + " LAN mode    " + guideKey("Shift+U") + " Claude usage",
+		guideKey("Shift+T") + " tasks       " + guideKey("Shift+M") + " maintenance",
 		ansiDim + strings.Repeat("─", 42) + ansiReset,
 		guideKey("i") + " info  " + guideKey("r") + " restart  " + guideKey("u") + " start  " + guideKey("t") + " stop",
 	}, w))
@@ -846,11 +847,7 @@ func renderGuide() string {
 		guideCenterLine(ansiDim+"Press "+ansiReset+guideKey("?")+ansiDim+" for all keybindings"+ansiReset, w),
 	})
 
-	// Flatten
-	var lines []string
-	for _, sec := range sections {
-		lines = append(lines, sec...)
-	}
+	lines := flattenSections(sections)
 
 	// Vertical centering
 	contentHeight := len(lines)
@@ -896,43 +893,74 @@ func runGuide() {
 	}
 }
 
-// renderHelp renders all keybindings with box-drawing characters, centered in the terminal.
+// flattenSections concatenates multiple []string slices into one.
+func flattenSections(sections [][]string) []string {
+	var out []string
+	for _, s := range sections {
+		out = append(out, s...)
+	}
+	return out
+}
+
+// mergeColumns places two line slices side by side with a gap, padding the shorter one.
+func mergeColumns(left, right []string, colWidth, gap int) []string {
+	n := len(left)
+	if len(right) > n {
+		n = len(right)
+	}
+	spacer := strings.Repeat(" ", gap)
+	var out []string
+	for i := 0; i < n; i++ {
+		l := ""
+		if i < len(left) {
+			l = left[i]
+		}
+		r := ""
+		if i < len(right) {
+			r = right[i]
+		}
+		out = append(out, guidePadRight(l, colWidth)+spacer+r)
+	}
+	return out
+}
+
+// renderHelp renders all keybindings in a two-column layout, centered in the terminal.
 func renderHelp() string {
 	termWidth, termHeight := termSize()
 
-	w := 56
-	if termWidth < w+4 {
-		w = termWidth - 4
+	colW := 46
+	gap := 3
+	totalW := colW*2 + gap
+
+	// Narrow fallback for small terminals
+	if termWidth < totalW+4 {
+		colW = (termWidth - 4 - gap) / 2
+		if colW < 30 {
+			colW = 30
+		}
+		totalW = colW*2 + gap
 	}
 
-	var sections [][]string
+	// --- Left column: Navigation, Active Tabs, Worktrees ---
+	var leftSecs [][]string
 
-	// Title
-	sections = append(sections, []string{
-		guideCenterLine(ansiBold+ansiCyan+"wt — Keybindings"+ansiReset, w),
-		"",
-	})
-
-	// Navigation
-	sections = append(sections, helpBox("Navigation", []string{
+	leftSecs = append(leftSecs, helpBox("Navigation", []string{
 		guideKey("j") + " / " + guideKey("k") + "       navigate list",
 		guideKey("<") + " / " + guideKey(">") + "       switch panel",
-		guideKey("a/w/s/d") + "     jump to panel",
+		guideKey("a/w/s") + "       jump to panel",
 		guideKey("Tab") + "         next panel",
 		guideKey("1") + "-" + guideKey("9") + "         jump to tab N",
 		guideKey("Esc") + "         back / close",
-	}, w))
+	}, colW))
 
-	// Active Tabs
-	sections = append(sections, helpBox("Active Tabs", []string{
+	leftSecs = append(leftSecs, helpBox("Active Tabs", []string{
 		guideKey("Enter") + "       focus terminal",
 		guideKey("h") + " / " + guideKey("l") + "       prev / next tab",
 		guideKey("f") + "           fullscreen",
 		guideKey("x") + "           close tab",
-	}, w))
+	}, colW))
 
-	// Worktrees
-	sections = append(sections, helpBox("Worktrees", []string{
+	leftSecs = append(leftSecs, helpBox("Worktrees", []string{
 		guideKey("Enter") + "       action menu",
 		guideKey("b") + "           bash shell",
 		guideKey("c") + "           claude code",
@@ -944,42 +972,64 @@ func renderHelp() string {
 		guideKey("r") + "           restart container",
 		guideKey("u") + "           start container",
 		guideKey("t") + "           stop container",
-	}, w))
+	}, colW))
 
-	// Services
-	sections = append(sections, helpBox("Services", []string{
+	leftLines := flattenSections(leftSecs)
+
+	// --- Right column: Services, Tasks, Operations, Tmux ---
+	var rightSecs [][]string
+
+	rightSecs = append(rightSecs, helpBox("Services", []string{
 		guideKey("Enter") + "       preview logs",
 		guideKey("l") + "           pin logs (tab)",
 		guideKey("r") + "           restart service",
-	}, w))
+	}, colW))
 
-	// Operations
-	sections = append(sections, helpBox("Operations", []string{
-		guideKey("Shift+A") + "     aws keys",
-		guideKey("Shift+X") + "     admin toggle",
+	rightSecs = append(rightSecs, helpBox("Tasks (Shift+T)", []string{
+		guideKey("j") + " / " + guideKey("k") + "       navigate tasks",
+		guideKey("Enter") + "       task detail",
+		guideKey("c") + "           close task",
+		guideKey("d") + "           delete task",
+	}, colW))
+
+	rightSecs = append(rightSecs, helpBox("Operations", []string{
+		guideKey("Shift+A") + "     AWS Keys",
+		guideKey("Shift+B") + "     database picker",
+		guideKey("Shift+D") + "     details toggle",
+		guideKey("Shift+K") + "     skip-worktree",
 		guideKey("Shift+L") + "     LAN toggle",
+		guideKey("Shift+M") + "     maintenance",
+		guideKey("Shift+T") + "     tasks",
 		guideKey("Shift+U") + "     Claude usage",
-	}, w))
+		guideKey("Shift+X") + "     admin toggle",
+	}, colW))
 
-	// Tmux
-	sections = append(sections, helpBox("Tmux  (prefix = Ctrl+])", []string{
+	rightSecs = append(rightSecs, helpBox("Tmux  (prefix = Ctrl+])", []string{
 		guideKey("prefix+q") + "    return to dashboard",
 		guideKey("prefix+f") + "    toggle fullscreen",
 		guideKey("prefix+1-9") + "  jump to tab N",
-	}, w))
+	}, colW))
+
+	rightLines := flattenSections(rightSecs)
+
+	// --- Assemble: title + columns + footer ---
+	var lines []string
+
+	// Title
+	lines = append(lines,
+		guideCenterLine(ansiBold+ansiCyan+"wt — Keybindings"+ansiReset, totalW),
+		"",
+	)
+
+	// Merge columns
+	lines = append(lines, mergeColumns(leftLines, rightLines, colW, gap)...)
 
 	// Footer
-	sections = append(sections, []string{
+	lines = append(lines,
 		"",
-		guideCenterLine(ansiDim+versionLabel()+ansiReset, w),
-		guideCenterLine(ansiDim+"Press "+ansiReset+guideKey("Esc")+ansiDim+" to close"+ansiReset, w),
-	})
-
-	// Flatten
-	var lines []string
-	for _, sec := range sections {
-		lines = append(lines, sec...)
-	}
+		guideCenterLine(ansiDim+versionLabel()+ansiReset, totalW),
+		guideCenterLine(ansiDim+"Press "+ansiReset+guideKey("Esc")+ansiDim+" to close"+ansiReset, totalW),
+	)
 
 	// Vertical centering
 	contentHeight := len(lines)
@@ -989,7 +1039,7 @@ func renderHelp() string {
 	}
 
 	// Horizontal centering
-	leftPad := (termWidth - w) / 2
+	leftPad := (termWidth - totalW) / 2
 	if leftPad < 0 {
 		leftPad = 0
 	}
