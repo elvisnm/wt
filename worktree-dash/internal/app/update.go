@@ -24,7 +24,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.layout = m.layout.Resize(msg.Width, msg.Height, m.usage_visible)
+		m.layout = m.layout.Resize(msg.Width, msg.Height, m.details_visible, m.usage_visible)
 		m.ready = true
 		// In pane layout mode, tmux handles right pane resize natively.
 		// Resize background session windows to match the new right pane dimensions.
@@ -563,12 +563,12 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, Keys.Tab):
 		m.close_preview()
-		m.focus = (m.focus + 1) % PanelCount
+		m.next_panel()
 		return m, nil
 
 	case key.Matches(msg, Keys.ShiftTab):
 		m.close_preview()
-		m.focus = (m.focus - 1 + PanelCount) % PanelCount
+		m.prev_panel()
 		return m, nil
 
 	case key.Matches(msg, Keys.Escape):
@@ -581,22 +581,22 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, Keys.TabPrev):
 		m.close_preview()
-		m.focus = (m.focus - 1 + PanelCount) % PanelCount
+		m.prev_panel()
 		return m, nil
 
 	case key.Matches(msg, Keys.TabNext):
 		m.close_preview()
-		m.focus = (m.focus + 1) % PanelCount
+		m.next_panel()
 		return m, nil
 
 	case key.Matches(msg, Keys.PanelLeft):
 		m.close_preview()
-		m.focus = (m.focus - 1 + PanelCount) % PanelCount
+		m.prev_panel()
 		return m, nil
 
 	case key.Matches(msg, Keys.PanelRight):
 		m.close_preview()
-		m.focus = (m.focus + 1) % PanelCount
+		m.next_panel()
 		return m, nil
 	}
 
@@ -618,9 +618,6 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "s":
 		m.focus = PanelServices
-		return m, nil
-	case "d":
-		m.focus = PanelDetails
 		return m, nil
 	}
 
@@ -644,8 +641,10 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			debug_log("[aws] Shift+A pressed: opening aws-keys")
 			return m.open_aws_keys()
 		}
-	case "D":
+	case "B":
 		return m.open_db_picker()
+	case "D":
+		return m.toggle_details()
 	case "X":
 		if m.cfg == nil || m.cfg.FeatureEnabled("admin") {
 			return m.toggle_admin()
@@ -775,6 +774,8 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.open_claude(*wt)
 	case "z":
 		return m.open_local_shell(*wt)
+	case "d":
+		return m.toggle_details()
 	case "l":
 		return m.open_logs(*wt)
 	case "i":
@@ -1004,7 +1005,7 @@ func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, Keys.Tab):
 		m.picker_open = false
-		m.focus = (m.focus + 1) % PanelCount
+		m.next_panel()
 		return m, nil
 
 	case key.Matches(msg, Keys.Up):
@@ -2194,9 +2195,20 @@ func (m Model) play_heihei() (tea.Model, tea.Cmd) {
 	return m, tick_after(100*time.Millisecond, "render")
 }
 
+func (m Model) toggle_details() (tea.Model, tea.Cmd) {
+	m.details_visible = !m.details_visible
+	m.layout = m.layout.Resize(m.width, m.height, m.details_visible, m.usage_visible)
+
+	// If details was hidden and focus was on it, move to services
+	if !m.details_visible && m.focus == PanelDetails {
+		m.focus = PanelServices
+	}
+	return m, nil
+}
+
 func (m Model) toggle_usage() (tea.Model, tea.Cmd) {
 	m.usage_visible = !m.usage_visible
-	m.layout = m.layout.Resize(m.width, m.height, m.usage_visible)
+	m.layout = m.layout.Resize(m.width, m.height, m.details_visible, m.usage_visible)
 
 	if !m.usage_visible {
 		return m, nil
@@ -2206,6 +2218,26 @@ func (m Model) toggle_usage() (tea.Model, tea.Cmd) {
 	// The MsgUsageUpdated handler schedules the next 60s tick, so no tick here
 	// (avoids duplicate tick chains on rapid toggle).
 	return m, cmd_fetch_usage(m.usage_token)
+}
+
+// next_panel cycles focus forward, skipping hidden panels.
+func (m *Model) next_panel() {
+	for i := 0; i < PanelCount; i++ {
+		m.focus = (m.focus + 1) % PanelCount
+		if m.focus != PanelDetails || m.details_visible {
+			return
+		}
+	}
+}
+
+// prev_panel cycles focus backward, skipping hidden panels.
+func (m *Model) prev_panel() {
+	for i := 0; i < PanelCount; i++ {
+		m.focus = (m.focus - 1 + PanelCount) % PanelCount
+		if m.focus != PanelDetails || m.details_visible {
+			return
+		}
+	}
 }
 
 // open_db_picker shows the database operations picker

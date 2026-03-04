@@ -52,7 +52,7 @@ The dashboard discovers worktrees by reading `workflow.config.js` from the repo 
 | `Tab` / `Shift+Tab` | Cycle panels forward/back |
 | `Left` / `Right` | Switch panel |
 | `<` / `>` | Switch panel |
-| `a` / `w` / `s` / `d` | Jump to panel (Active Tabs / Worktrees / Services / Details) |
+| `a` / `w` / `s` | Jump to panel (Active Tabs / Worktrees / Services) |
 | `PgUp` / `PgDn` | Scroll page up/down |
 | `?` | Show keybindings help |
 | `q` / `Ctrl+C` | Quit |
@@ -70,6 +70,7 @@ The dashboard discovers worktrees by reading `workflow.config.js` from the repo 
 | `i` | Show worktree info |
 | `b` | Open shell (bash) in container |
 | `c` | Open Claude in container |
+| `d` | Toggle Details panel |
 | `l` | Preview logs |
 
 ### Global Operations

@@ -96,6 +96,9 @@ type Model struct {
 	// Deferred esbuild: alias to open esbuild watch for after next discovery
 	pending_esbuild_alias string
 
+	// Details panel toggle
+	details_visible bool
+
 	// Claude usage panel
 	usage_visible bool
 	usage_data    *claude.Usage
@@ -153,13 +156,14 @@ func NewModelWithLayout(server *terminal.TmuxServer, pl *terminal.PaneLayout) Mo
 	mgr.SetPaneLayout(pl)
 
 	return Model{
-		focus:         PanelWorktrees,
-		cursor:        0,
-		repo_root:     repo_root,
-		worktrees_dir: wt_dir,
-		cfg:           cfg,
-		term_mgr:      mgr,
-		pane_layout:   pl,
+		focus:           PanelWorktrees,
+		cursor:          0,
+		repo_root:       repo_root,
+		worktrees_dir:   wt_dir,
+		cfg:             cfg,
+		term_mgr:        mgr,
+		pane_layout:     pl,
+		details_visible: true,
 	}
 }
 

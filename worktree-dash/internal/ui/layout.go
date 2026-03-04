@@ -20,7 +20,7 @@ type Layout struct {
 	UsageHeight    int
 }
 
-func (l Layout) Resize(w, h int, usage_visible bool) Layout {
+func (l Layout) Resize(w, h int, details_visible, usage_visible bool) Layout {
 	l.Width = w
 	l.Height = h
 	l.StatusHeight = 0
@@ -41,14 +41,22 @@ func (l Layout) Resize(w, h int, usage_visible bool) Layout {
 		l.UsageHeight = 0
 	}
 
-	// 4 panels: tabs 20%, worktrees 30%, services 25%, details 25%
 	l.TabsHeight = panels_h * 20 / 100
 	if l.TabsHeight < 4 {
 		l.TabsHeight = 4
 	}
-	l.WorktreeHeight = panels_h * 30 / 100
-	l.ServicesHeight = panels_h * 25 / 100
-	l.DetailsHeight = panels_h - l.TabsHeight - l.WorktreeHeight - l.ServicesHeight
+
+	if details_visible {
+		// 4 panels: tabs 20%, worktrees 30%, services 25%, details 25%
+		l.WorktreeHeight = panels_h * 30 / 100
+		l.ServicesHeight = panels_h * 25 / 100
+		l.DetailsHeight = panels_h - l.TabsHeight - l.WorktreeHeight - l.ServicesHeight
+	} else {
+		// 3 panels: tabs 20%, worktrees 35%, services remainder
+		l.WorktreeHeight = panels_h * 35 / 100
+		l.ServicesHeight = panels_h - l.TabsHeight - l.WorktreeHeight
+		l.DetailsHeight = 0
+	}
 
 	return l
 }

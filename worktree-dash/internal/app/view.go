@@ -55,24 +55,26 @@ func (m Model) View() string {
 		m.focus == PanelServices,
 	)
 
-	// Details panel (bottom)
-	details_panel := ui.RenderDetailsPanel(
-		selected_wt,
-		m.width, m.layout.DetailsHeight,
-		m.details_scroll, m.spin_frame,
-		m.focus == PanelDetails,
-		m.cfg,
-	)
+	// Build left column panels
+	panels := []string{tabs_panel, worktree_panel, services_panel}
 
-	var left_col string
+	if m.details_visible {
+		details_panel := ui.RenderDetailsPanel(
+			selected_wt,
+			m.width, m.layout.DetailsHeight,
+			m.details_scroll, m.spin_frame,
+			m.focus == PanelDetails,
+			m.cfg,
+		)
+		panels = append(panels, details_panel)
+	}
+
 	if m.usage_visible {
 		usage_panel := ui.RenderUsagePanel(m.usage_data, m.usage_err, m.width, m.layout.UsageHeight)
-		left_col = lipgloss.JoinVertical(lipgloss.Left,
-			tabs_panel, worktree_panel, services_panel, details_panel, usage_panel)
-	} else {
-		left_col = lipgloss.JoinVertical(lipgloss.Left,
-			tabs_panel, worktree_panel, services_panel, details_panel)
+		panels = append(panels, usage_panel)
 	}
+
+	left_col := lipgloss.JoinVertical(lipgloss.Left, panels...)
 
 	// Picker overlay — rendered within the left pane
 	if m.picker_open {

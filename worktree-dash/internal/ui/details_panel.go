@@ -45,7 +45,7 @@ var minimal_services = map[string]bool{
 }
 
 func RenderDetailsPanel(wt *worktree.Worktree, width, height, scroll, spin_frame int, focused bool, cfg *config.Config) string {
-	title := TitleStyle(focused).Render(" d - Details ")
+	title := TitleStyle(focused).Render(" D - Details ")
 	style := PanelStyle(width, height, focused)
 	inner_w := width - 4
 

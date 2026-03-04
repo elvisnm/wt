@@ -19,7 +19,7 @@ func HelpSections() []HelpSection {
 			Items: []HintPair{
 				{Key: "j/k", Desc: "Navigate list"},
 				{Key: "</>", Desc: "Switch panel"},
-				{Key: "a/w/s/d", Desc: "Jump to panel"},
+				{Key: "a/w/s", Desc: "Jump to panel"},
 			{Key: "1-9", Desc: "Jump to tab N"},
 				{Key: "Tab", Desc: "Next panel"},
 				{Key: "Esc", Desc: "Back / close"},
@@ -45,6 +45,7 @@ func HelpSections() []HelpSection {
 				{Key: "r", Desc: "Restart container"},
 				{Key: "t", Desc: "Stop container"},
 				{Key: "u", Desc: "Start container"},
+				{Key: "d", Desc: "Toggle details"},
 				{Key: "i", Desc: "Info"},
 			{Key: "x", Desc: "Remove worktree"},
 			},
@@ -61,6 +62,8 @@ func HelpSections() []HelpSection {
 			Title: "Operations",
 			Items: []HintPair{
 				{Key: "A", Desc: "AWS keys"},
+				{Key: "B", Desc: "Database picker"},
+				{Key: "D", Desc: "Details toggle"},
 				{Key: "L", Desc: "LAN toggle"},
 				{Key: "X", Desc: "Admin toggle"},
 				{Key: "U", Desc: "Claude usage"},

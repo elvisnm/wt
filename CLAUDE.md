@@ -117,11 +117,12 @@ Real-time container stats via `docker stats`. Integrated terminal sessions for s
 | `w` | Jump to Worktrees panel | — |
 | `s` | Jump to Services panel | — |
 | `a` | Jump to Terminal (active) panel | — |
-| `d` | Jump to Details panel | — |
 | `1`–`9` | Jump to tab N | — |
 | `Shift+A` | Open AWS keys | `awsCredentials` |
-| `Shift+D` | Open database picker | — |
+| `Shift+B` | Open database picker | — |
+| `Shift+D` | Toggle Details panel | — |
 | `Shift+K` | Toggle skip-worktree | `git.skipWorktree` |
+| `Shift+U` | Toggle Claude usage | — |
 | `Shift+X` | Toggle admin accounts | `admin` |
 | `Shift+L` | Toggle LAN mode | `lan` |
 | `Shift+M` | Open maintenance picker | — |
@@ -133,6 +134,7 @@ Real-time container stats via `docker stats`. Integrated terminal sessions for s
 | `Enter` | Open action picker | — |
 | `b` | Open bash shell | — |
 | `c` | Open Claude Code | — |
+| `d` | Toggle Details panel | — |
 | `z` | Open local shell (zsh) | — |
 | `l` | Open logs | — |
 | `n` | Open create wizard | — |

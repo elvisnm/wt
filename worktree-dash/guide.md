@@ -31,17 +31,18 @@
 │                                                         │
 │     [ Worktrees │ Services │ Terminal ]                  │
 │       Tab / Shift+Tab to cycle                          │
-│       w   s   a   d   to jump directly                   │
+│       w   s   a   to jump directly                       │
 │                                                         │
 ╰─────────────────────────────────────────────────────────╯
 
 ╭─ More ──────────────────────────────────────────────────╮
 │                                                         │
-│   Shift+D  database       Shift+A  aws credentials     │
+│   Shift+B  database       Shift+A  aws credentials     │
+│   Shift+D  details        Shift+U  claude usage         │
 │   Shift+M  maintenance    Shift+X  toggle admin         │
 │   Shift+L  toggle LAN     Shift+K  skip-worktree        │
 │                                                         │
-│   i  info   r  restart    u  start   t  stop            │
+│   d  details  i  info   r  restart  u  start  t  stop   │
 │                                                         │
 ╰─────────────────────────────────────────────────────────╯
 
