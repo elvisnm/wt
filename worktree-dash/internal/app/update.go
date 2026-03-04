@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elvisnm/wt/internal/claude"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/sentinel"
@@ -125,10 +123,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Token != "" {
 			m.usage_token = msg.Token
 		}
-		// On 401, clear cached token so next tick re-fetches from keychain
-		if errors.Is(msg.Err, claude.ErrUnauthorized) {
-			m.usage_token = ""
-		}
 		if m.usage_visible {
 			return m, tick_after(60*time.Second, "usage")
 		}
@@ -223,7 +217,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tick_after(5*time.Second, "services")
 		case "usage":
-			if m.usage_visible && m.usage_token != "" {
+			if m.usage_visible {
 				return m, cmd_fetch_usage(m.usage_token)
 			}
 			return m, nil

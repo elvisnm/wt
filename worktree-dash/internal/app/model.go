@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -242,17 +243,50 @@ func cmd_fetch_stats(wts []worktree.Worktree, cfg *config.Config) tea.Cmd {
 }
 
 // cmd_fetch_usage fetches usage data. If token is empty, fetches it from keychain first.
+// On 401, attempts to refresh the token and retry once.
 func cmd_fetch_usage(token string) tea.Cmd {
 	return func() tea.Msg {
+		// Fetch full token set upfront so refresh token is available on 401
+		var refresh_token string
 		if token == "" {
-			var err error
-			token, err = claude.FetchToken()
+			tokens, err := claude.FetchTokens()
 			if err != nil {
 				return MsgUsageUpdated{Err: err}
 			}
+			token = tokens.AccessToken
+			refresh_token = tokens.RefreshToken
 		}
+
 		usage, err := claude.FetchUsage(token)
-		return MsgUsageUpdated{Token: token, Usage: usage, Err: err}
+		if !errors.Is(err, claude.ErrUnauthorized) {
+			return MsgUsageUpdated{Token: token, Usage: usage, Err: err}
+		}
+
+		// 401 — try refreshing the token
+		if refresh_token == "" {
+			// Token was cached (not fetched this call) — read refresh token from keychain
+			tokens, fetch_err := claude.FetchTokens()
+			if fetch_err != nil {
+				return MsgUsageUpdated{Err: fmt.Errorf("token expired, keychain read failed: %w", fetch_err)}
+			}
+			refresh_token = tokens.RefreshToken
+		}
+		if refresh_token == "" {
+			return MsgUsageUpdated{Err: fmt.Errorf("token expired, no refresh token available")}
+		}
+
+		refreshed, refresh_err := claude.RefreshAccessToken(refresh_token)
+		if refresh_err != nil {
+			return MsgUsageUpdated{Err: fmt.Errorf("token refresh failed: %w", refresh_err)}
+		}
+
+		if write_err := claude.WriteTokens(refreshed); write_err != nil {
+			debug_log("[usage] keychain write failed after token refresh: %v", write_err)
+		}
+
+		// Retry with the new access token
+		usage, err = claude.FetchUsage(refreshed.AccessToken)
+		return MsgUsageUpdated{Token: refreshed.AccessToken, Usage: usage, Err: err}
 	}
 }
 
