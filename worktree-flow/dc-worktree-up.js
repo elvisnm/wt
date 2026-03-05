@@ -667,11 +667,11 @@ function main() {
     }
 
     // Build library packages (e.g. packages/db) so dist/ exists for dev servers
-    if (fs.existsSync(pkg_path)) {
+    if (fs.existsSync(path.join(worktree_path, 'turbo.json'))) {
       try {
         execSync('pnpm turbo build --filter="./packages/*"', { cwd: worktree_path, stdio: 'inherit' });
       } catch (e) {
-        // Non-fatal: turbo may not be available or no packages to build
+        // Non-fatal: no packages to build
       }
     }
 
