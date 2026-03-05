@@ -282,36 +282,50 @@ func cmd_fetch_usage(token string) tea.Cmd {
 		// Fetch full token set upfront so refresh token is available on 401
 		var refresh_token string
 		if token == "" {
+			debug_log("[usage] no cached token, reading from keychain")
 			tokens, err := claude.FetchTokens()
 			if err != nil {
+				debug_log("[usage] keychain read failed: %v", err)
 				return MsgUsageUpdated{Err: err}
 			}
 			token = tokens.AccessToken
 			refresh_token = tokens.RefreshToken
+			debug_log("[usage] got token from keychain (expires_at=%d)", tokens.ExpiresAt)
 		}
 
+		debug_log("[usage] fetching usage data")
 		usage, err := claude.FetchUsage(token)
 		if !errors.Is(err, claude.ErrUnauthorized) {
+			if err != nil {
+				debug_log("[usage] fetch error: %v", err)
+			} else {
+				debug_log("[usage] fetch ok: 5h=%.1f%% 7d=%.1f%%", usage.FiveHour.Utilization*100, usage.SevenDay.Utilization*100)
+			}
 			return MsgUsageUpdated{Token: token, Usage: usage, Err: err}
 		}
 
 		// 401 — try refreshing the token
+		debug_log("[usage] got 401, attempting token refresh")
 		if refresh_token == "" {
 			// Token was cached (not fetched this call) — read refresh token from keychain
 			tokens, fetch_err := claude.FetchTokens()
 			if fetch_err != nil {
+				debug_log("[usage] keychain read for refresh failed: %v", fetch_err)
 				return MsgUsageUpdated{Err: fmt.Errorf("token expired, keychain read failed: %w", fetch_err)}
 			}
 			refresh_token = tokens.RefreshToken
 		}
 		if refresh_token == "" {
+			debug_log("[usage] no refresh token available")
 			return MsgUsageUpdated{Err: fmt.Errorf("token expired, no refresh token available")}
 		}
 
 		refreshed, refresh_err := claude.RefreshAccessToken(refresh_token)
 		if refresh_err != nil {
+			debug_log("[usage] token refresh failed: %v", refresh_err)
 			return MsgUsageUpdated{Err: fmt.Errorf("token refresh failed: %w", refresh_err)}
 		}
+		debug_log("[usage] token refreshed successfully")
 
 		if write_err := claude.WriteTokens(refreshed); write_err != nil {
 			debug_log("[usage] keychain write failed after token refresh: %v", write_err)
@@ -319,6 +333,11 @@ func cmd_fetch_usage(token string) tea.Cmd {
 
 		// Retry with the new access token
 		usage, err = claude.FetchUsage(refreshed.AccessToken)
+		if err != nil {
+			debug_log("[usage] retry fetch error: %v", err)
+		} else {
+			debug_log("[usage] retry fetch ok: 5h=%.1f%% 7d=%.1f%%", usage.FiveHour.Utilization*100, usage.SevenDay.Utilization*100)
+		}
 		return MsgUsageUpdated{Token: refreshed.AccessToken, Usage: usage, Err: err}
 	}
 }

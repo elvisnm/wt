@@ -196,7 +196,7 @@ func WriteTokens(tokens *Tokens) error {
 
 // FetchUsage calls the Anthropic usage API and returns current utilization.
 func FetchUsage(token string) (*Usage, error) {
-	req, err := http.NewRequest("GET", "https://api.anthropic.com/api/oauth/usage", nil)
+	req, err := http.NewRequest("GET", "https://platform.claude.com/api/oauth/usage", nil)
 	if err != nil {
 		return nil, err
 	}
