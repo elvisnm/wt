@@ -82,6 +82,14 @@ func (pl *PaneLayout) ConfigureBindings() {
 		ts.Run("bind-key", key, "send-keys", "-t", "wt:0.0", fmt.Sprintf("M-%d", i))
 	}
 
+	// Focus indicator: green divider when right pane (terminal) is active,
+	// dim gray when left pane (dashboard) is active.
+	// after-select-pane hook fires on every pane focus change.
+	// #{pane_index}: "0" = falsy (dashboard), "1" = truthy (terminal)
+	// Set BOTH border styles so the entire divider changes color uniformly.
+	ts.Run("set-hook", "-g", "after-select-pane",
+		`if-shell -F "#{pane_index}" "set -g pane-border-style fg=colour34 ; set -g pane-active-border-style fg=colour34" "set -g pane-border-style fg=colour240 ; set -g pane-active-border-style fg=colour240"`)
+
 	// Block C-k on the dashboard pane (pane 0). iTerm2 Cmd+K sends C-k to the
 	// terminal process. Without this, it clears the bubbletea display.
 	// Allow C-k through only on pane 1 (terminal sessions like zsh).

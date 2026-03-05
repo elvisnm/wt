@@ -121,7 +121,7 @@ func (ts *TmuxServer) EnsureStarted(width, height int) error {
 		{"set-option", "-g", "aggressive-resize", "on"},
 		{"set-option", "-g", "escape-time", "200"},
 		{"set-option", "-g", "mouse", "on"},
-		// Pane border color — matches left panel border (colour240)
+		// Pane border defaults (overridden by focus hook in ConfigureBindings)
 		{"set-option", "-g", "pane-border-style", "fg=colour240"},
 		{"set-option", "-g", "pane-active-border-style", "fg=colour240"},
 		// Set an obscure prefix key to avoid conflicts
