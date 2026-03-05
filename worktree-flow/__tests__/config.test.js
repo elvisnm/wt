@@ -1026,6 +1026,39 @@ describe('full integration: realistic config scenarios', () => {
     expect(config_mod.feature_enabled(cfg, 'awsCredentials')).toBe(false);
   });
 
+  test('config with PM2/localDev fields loads correctly', () => {
+    const config_obj = {
+      name: 'myapp',
+      services: {
+        ports: { app: 3001, api: 3004, socket: 3000 },
+        groups: {
+          core: ['app', 'api', 'socket'],
+        },
+        pm2: {
+          ecosystemConfig: 'ecosystem.dev.config.js',
+          debugPorts: { app: 9225, api: 9229 },
+          heapSizes: { app: 512, api: 512 },
+          envPassthrough: ['MYAPP_PATH', 'MYAPP_MONGO'],
+        },
+      },
+      features: {
+        localDev: true,
+      },
+    };
+
+    tmp = create_temp_config(config_obj);
+    const cfg = config_mod.load_config({ cwd: tmp.dir });
+
+    expect(cfg.features.localDev).toBe(true);
+    expect(cfg.services.groups).toEqual({ core: ['app', 'api', 'socket'] });
+    expect(cfg.services.pm2.debugPorts).toEqual({ app: 9225, api: 9229 });
+    expect(cfg.services.pm2.heapSizes).toEqual({ app: 512, api: 512 });
+    expect(cfg.services.pm2.envPassthrough).toEqual(['MYAPP_PATH', 'MYAPP_MONGO']);
+    expect(cfg.services.pm2._ecosystemConfigResolved).toBe(
+      path.resolve(tmp.dir, 'ecosystem.dev.config.js')
+    );
+  });
+
   test('shared strategy config (build-check style) loads correctly', () => {
     const config_obj = {
       name: 'bc',
@@ -1111,6 +1144,84 @@ describe('full integration: realistic config scenarios', () => {
     expect(cfg.dash.commands.shell).toEqual({ label: 'Shell', cmd: 'bash' });
     expect(cfg.dash.localDevCommand).toBe('pnpm dev');
     expect(cfg.git.skipWorktree).toEqual([]);
+    expect(cfg.features.localDev).toBe(false);
+    expect(cfg.services.groups).toBeNull();
+    expect(cfg.services.pm2.ecosystemConfig).toBeNull();
+    expect(cfg.services.pm2.debugPorts).toBeNull();
+    expect(cfg.services.pm2.heapSizes).toBeNull();
+    expect(cfg.services.pm2.envPassthrough).toBeNull();
+  });
+});
+
+// ── resolve_services ─────────────────────────────────────────────────────
+
+describe('resolve_services', () => {
+  const base_config = {
+    services: {
+      ports: { app: 3001, api: 3004, socket: 3000, sync: 3002, admin: 3050 },
+      modes: {
+        minimal: ['app', 'api', 'socket'],
+        full: null,
+      },
+      groups: {
+        core: ['app', 'api', 'socket'],
+        sync: ['sync'],
+        admin: ['admin'],
+      },
+    },
+  };
+
+  test('full mode returns all services', () => {
+    const result = config_mod.resolve_services(base_config, 'full');
+    expect(result).toEqual(new Set(['app', 'api', 'socket', 'sync', 'admin']));
+  });
+
+  test('null mode returns all services', () => {
+    const result = config_mod.resolve_services(base_config, null);
+    expect(result).toEqual(new Set(['app', 'api', 'socket', 'sync', 'admin']));
+  });
+
+  test('named mode returns mode list plus core group', () => {
+    const result = config_mod.resolve_services(base_config, 'minimal');
+    expect(result).toEqual(new Set(['app', 'api', 'socket']));
+  });
+
+  test('comma-separated groups expand correctly', () => {
+    const result = config_mod.resolve_services(base_config, 'core,admin');
+    expect(result).toEqual(new Set(['app', 'api', 'socket', 'admin']));
+  });
+
+  test('core group is always included with comma syntax', () => {
+    const result = config_mod.resolve_services(base_config, 'admin');
+    expect(result).toEqual(new Set(['app', 'api', 'socket', 'admin']));
+  });
+
+  test('individual service names work in comma syntax', () => {
+    const result = config_mod.resolve_services(base_config, 'core,sync');
+    expect(result.has('sync')).toBe(true);
+    expect(result.has('app')).toBe(true);
+  });
+
+  test('unknown tokens are ignored', () => {
+    const result = config_mod.resolve_services(base_config, 'core,nonexistent');
+    expect(result).toEqual(new Set(['app', 'api', 'socket']));
+  });
+
+  test('works without groups defined', () => {
+    const no_groups = {
+      services: {
+        ports: { app: 3001, api: 3004 },
+        modes: { minimal: ['app'], full: null },
+        groups: null,
+      },
+    };
+    const result = config_mod.resolve_services(no_groups, 'minimal');
+    expect(result).toEqual(new Set(['app']));
+  });
+
+  test('full returns all when mode list is null', () => {
+    const result = config_mod.resolve_services(base_config, 'full');
+    expect(result.size).toBe(5);
   });
 });
 
