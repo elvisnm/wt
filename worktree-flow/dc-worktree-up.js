@@ -677,7 +677,14 @@ function main() {
 
     if (options.open) open_in_cursor(worktree_path);
 
-    // Start dev server
+    // When running inside the dashboard (WT_INNER=1), skip the dev server —
+    // the dashboard will open a Dev tab after creation completes.
+    if (process.env.WT_INNER === '1') {
+      console.log('Worktree ready (dashboard will start dev server).');
+      return;
+    }
+
+    // Start dev server (standalone CLI usage)
     const path_var = config ? config_mod.env_var(config, 'projectPath') : 'PROJECT_PATH';
     const dev_cmd = config && config.dash && config.dash.localDevCommand ? config.dash.localDevCommand : 'pnpm dev';
     console.log(`Starting dev server (${dev_cmd})...`);

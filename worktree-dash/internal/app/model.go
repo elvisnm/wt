@@ -98,6 +98,9 @@ type Model struct {
 	// Deferred esbuild: alias to open esbuild watch for after next discovery
 	pending_esbuild_alias string
 
+	// Deferred dev server: alias to start dev server for after next discovery (local worktrees)
+	pending_dev_alias string
+
 	// Details panel toggle
 	details_visible bool
 
@@ -565,13 +568,33 @@ func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *t
 
 	switch check {
 	case "devTab":
+		// Check dashboard tabs first, collect unmatched for PM2 fallback
+		var fallback_paths map[string]string
 		for i := range wts {
-			if wts[i].Type == worktree.TypeLocal && term_mgr != nil {
-				dev_label := labels.Tab(labels.Dev, wts[i].Alias)
-				create_label := labels.Tab(labels.Create, wts[i].Alias)
-				wts[i].Running = term_mgr.IsLabelAlive(dev_label) ||
-					term_mgr.IsLabelAlive(create_label)
-				debug_log("[discovery]   %s running=%v (devTab)", wts[i].Alias, wts[i].Running)
+			if wts[i].Type != worktree.TypeLocal || term_mgr == nil {
+				continue
+			}
+			dev_label := labels.Tab(labels.Dev, wts[i].Alias)
+			create_label := labels.Tab(labels.Create, wts[i].Alias)
+			wts[i].Running = term_mgr.IsLabelAlive(dev_label) ||
+				term_mgr.IsLabelAlive(create_label)
+			if wts[i].Running {
+				debug_log("[discovery]   %s running=true (devTab)", wts[i].Alias)
+			} else {
+				if fallback_paths == nil {
+					fallback_paths = make(map[string]string)
+				}
+				fallback_paths[wts[i].Path] = wts[i].Name
+			}
+		}
+		// Fall back to PM2 for worktrees without a dashboard tab
+		if len(fallback_paths) > 0 {
+			running := pm2.FetchRunningWorktrees(fallback_paths)
+			for i := range wts {
+				if wts[i].Type == worktree.TypeLocal && !wts[i].Running && running[wts[i].Name] {
+					wts[i].Running = true
+					debug_log("[discovery]   %s running=true (pm2 fallback)", wts[i].Alias)
+				}
 			}
 		}
 	default: // "pm2"

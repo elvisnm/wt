@@ -460,9 +460,10 @@ async function main() {
     }
   }
 
-  // Signal dashboard that creation finished (alias on second line)
-  debug('main: writing sentinel=0 alias=' + (final_alias || ''));
-  fs.writeFileSync(SENTINEL_PATH, `0\n${final_alias || ''}`);
+  // Signal dashboard that creation finished (alias on second line, env type on third)
+  const env_type = use_docker ? 'docker' : 'local';
+  debug('main: writing sentinel=0 alias=' + (final_alias || '') + ' env=' + env_type);
+  fs.writeFileSync(SENTINEL_PATH, `0\n${final_alias || ''}\n${env_type}`);
   p.outro('Worktree created!');
 }
 

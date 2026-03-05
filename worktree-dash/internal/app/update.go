@@ -58,6 +58,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pending_esbuild_alias = ""
 		}
 
+		// Start deferred dev server for local worktrees created via dc-create
+		if m.pending_dev_alias != "" {
+			for _, wt := range m.worktrees {
+				if wt.Alias == m.pending_dev_alias && wt.Type == worktree.TypeLocal {
+					debug_log("[create] deferred dev server start for %s", wt.Alias)
+					m, _ = m.start_dev_server(wt)
+					break
+				}
+			}
+			m.pending_dev_alias = ""
+		}
+
 		// Signal the outer process that we're ready (unblocks tmux attach).
 		if first_load && m.pane_layout != nil {
 			m.pane_layout.Server().Run("wait-for", "-S", "wt-ready")
@@ -274,13 +286,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Always check the sentinel first — the pane may have already
 			// been reaped as dead before the file becomes visible on disk.
 			if sr := sentinel.Read(sentinel.Create); sr != nil {
-				lines := strings.SplitN(sr.Raw, "\n", 2)
+				lines := strings.SplitN(sr.Raw, "\n", 3)
 				exit_code := sr.ExitCode
 				created_alias := ""
+				env_type := ""
 				if len(lines) > 1 {
 					created_alias = strings.TrimSpace(lines[1])
 				}
-				debug_log("[create] sentinel found: exit_code=%d alias=%q", exit_code, created_alias)
+				if len(lines) > 2 {
+					env_type = strings.TrimSpace(lines[2])
+				}
+				debug_log("[create] sentinel found: exit_code=%d alias=%q env=%q", exit_code, created_alias, env_type)
 
 				// Close all Create tabs
 				m.term_mgr.CloseByLabel(labels.Create)
@@ -288,11 +304,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.term_mgr.CloseByLabel(labels.Tab(labels.Create, wt.Alias))
 				}
 
-				// Defer esbuild watch for host-build worktrees until after discovery
-				// refreshes the worktree list (the new worktree may not be in
-				// m.worktrees yet, or may not have HostBuild=true yet).
 				if exit_code == 0 && created_alias != "" {
-					m.pending_esbuild_alias = created_alias
+					if env_type == "local" {
+						// Defer dev server start for local worktrees until after discovery
+						m.pending_dev_alias = created_alias
+					} else {
+						// Defer esbuild watch for host-build worktrees until after discovery
+						// refreshes the worktree list (the new worktree may not be in
+						// m.worktrees yet, or may not have HostBuild=true yet).
+						m.pending_esbuild_alias = created_alias
+					}
 				}
 
 				m.focus_worktrees_if_empty()
