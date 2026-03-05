@@ -1,0 +1,102 @@
+lets work on a bug and in a improvement, create bd tasks for both:
+- bug - the d for delete task is not working or is not updateing the task list after deleting
+- the tasks list should update when a new task is added/removed or changed, so we are delivering the updated results to user all the time
+
+---
+
+try again, the main was outdated
+
+---
+
+I think the 30s is too much, it should refresh every 3 or 5s, what is the big deal here?
+
+---
+
+move to 3s
+
+---
+
+did you build it, can I test on the wt-dev?
+
+---
+
+what is the usage API 429: {"error":{"message":"... on usage panel?
+
+---
+
+are we hitting it frequently?
+
+---
+
+what we have to commit?
+
+---
+
+commit and push
+
+---
+
+can you check if entire already catch this prompt?
+
+---
+
+I still not being abble to reach the usage from claude - check the logs
+
+---
+
+[Request interrupted by user]
+
+---
+
+I ran it using wt-dev --debug we should have logs
+
+---
+
+check
+
+---
+
+can you check what the limit is? we need to adjust or app to update this accordantly, so we are not going to hit limits
+
+---
+
+no, I don't have any wt open
+
+---
+
+<task-notification>
+<task-id>bc96wgg5z</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-elvisnm-dev-wt/tasks/bc96wgg5z.output</output-file>
+<status>completed</status>
+<summary>Background command "Retry usage API after 60s wait" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-elvisnm-dev-wt/tasks/bc96wgg5z.output
+
+---
+
+I just opnened, and the usage is working normally, are you sure it is about rate limit?
+
+---
+
+check logs - looks like working, but are we going to hit the limits in the future again?
+
+---
+
+no, we should kept the debug logs only being visible when we use --debug as we have for other parts in the app
+
+---
+
+yes, commit and push
+
+---
+
+lets make some adjustments on the UI - I saw that we have "Loding..." on the Usage panel, we should always use the spinner on places were we have this "..." - the spinner is the one we use in the loading page
+
+---
+
+let's make this spinner orange collor as we have for the loading screem for example
+
+---
+
+let's commit and push the changes

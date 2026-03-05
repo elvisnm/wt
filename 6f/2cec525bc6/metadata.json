@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "6f2cec525bc6",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "worktree-dash/internal/app/update.go",
+    "worktree-dash/internal/app/view.go",
+    "worktree-dash/internal/ui/usage_panel.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6f/2cec525bc6/0/metadata.json",
+      "transcript": "/6f/2cec525bc6/0/full.jsonl",
+      "context": "/6f/2cec525bc6/0/context.md",
+      "content_hash": "/6f/2cec525bc6/0/content_hash.txt",
+      "prompt": "/6f/2cec525bc6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 33,
+    "cache_creation_tokens": 7122,
+    "cache_read_tokens": 2466375,
+    "output_tokens": 3997,
+    "api_call_count": 27
+  }
+}
