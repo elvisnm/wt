@@ -132,8 +132,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgTasksLoaded:
 		m.tasks_list = msg.Tasks
 		m.tasks_err = msg.Err
+		if m.tasks_cursor >= len(m.tasks_list) {
+			m.tasks_cursor = len(m.tasks_list) - 1
+			if m.tasks_cursor < 0 {
+				m.tasks_cursor = 0
+			}
+		}
 		if m.tasks_visible {
 			m.recalc_layout()
+			return m, tick_after(3*time.Second, "tasks")
 		}
 		return m, nil
 
@@ -247,6 +254,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "usage":
 			if m.usage_visible {
 				return m, cmd_fetch_usage(m.usage_token)
+			}
+			return m, nil
+		case "tasks":
+			if m.tasks_visible {
+				return m, cmd_fetch_tasks()
 			}
 			return m, nil
 		case "spin":
