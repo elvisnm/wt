@@ -262,7 +262,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "spin":
-			if m.activity != "" {
+			spinning := m.activity != "" ||
+				(m.usage_visible && m.usage_data == nil && m.usage_err == nil)
+			if spinning {
 				m.spin_frame++
 				return m, tick_after(80*time.Millisecond, "spin")
 			}
@@ -2266,7 +2268,8 @@ func (m Model) toggle_usage() (tea.Model, tea.Cmd) {
 	// Fire async fetch — cmd_fetch_usage handles token acquisition if needed.
 	// The MsgUsageUpdated handler schedules the next 60s tick, so no tick here
 	// (avoids duplicate tick chains on rapid toggle).
-	return m, cmd_fetch_usage(m.usage_token)
+	// Start spinner while loading.
+	return m, tea.Batch(cmd_fetch_usage(m.usage_token), tick_after(80*time.Millisecond, "spin"))
 }
 
 // panel_visible returns whether a panel should be included in cycling.

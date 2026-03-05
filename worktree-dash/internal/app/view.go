@@ -70,7 +70,7 @@ func (m Model) View() string {
 	}
 
 	if m.usage_visible {
-		usage_panel := ui.RenderUsagePanel(m.usage_data, m.usage_err, m.width, m.layout.UsageHeight)
+		usage_panel := ui.RenderUsagePanel(m.usage_data, m.usage_err, m.width, m.layout.UsageHeight, m.spin_frame)
 		panels = append(panels, usage_panel)
 	}
 

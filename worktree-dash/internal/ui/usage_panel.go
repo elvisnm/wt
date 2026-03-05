@@ -11,7 +11,7 @@ import (
 
 // RenderUsagePanel renders the Claude API usage panel.
 // This panel is display-only and does not participate in focus cycling.
-func RenderUsagePanel(usage *claude.Usage, err error, width, height int) string {
+func RenderUsagePanel(usage *claude.Usage, err error, width, height, spin_frame int) string {
 	if height < 3 {
 		return ""
 	}
@@ -27,7 +27,8 @@ func RenderUsagePanel(usage *claude.Usage, err error, width, height int) string 
 		err_style := lipgloss.NewStyle().Foreground(StoppedColor)
 		content = err_style.Render(truncate(err.Error(), inner_w))
 	case usage == nil:
-		content = lipgloss.NewStyle().Foreground(DimTextColor).Render("Loading...")
+		frame := SpinFrames[spin_frame%len(SpinFrames)]
+		content = lipgloss.NewStyle().Foreground(StartingColor).Render(frame + " Loading")
 	default:
 		line_5h := render_usage_line("5h", usage.FiveHour.Utilization, usage.FiveHour.ResetsAt, inner_w)
 		line_7d := render_usage_line("7d", usage.SevenDay.Utilization, usage.SevenDay.ResetsAt, inner_w)
