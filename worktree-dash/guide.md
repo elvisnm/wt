@@ -1,51 +1,31 @@
 ```
-╭─────────────────────────────────────────────────────────╮
-│                  wt — Quick Start                       │
-│                                                         │
-│   Select a worktree, then:                              │
-│                                                         │
-│     b  bash shell        c  claude code                 │
-│     l  logs              n  create new                  │
-╰─────────────────────────────────────────────────────────╯
+╭─ Worktree ─────────────────────────────╮  ╭─ Panels ──────────────────────────────────╮
+│                                         │  │                                           │
+│   Select a worktree, then press:        │  │   [ Worktrees │ Services │ Terminal ]      │
+│                                         │  │                                           │
+│     b  bash shell       c  claude code  │  │     Tab / Shift+Tab  cycle panels         │
+│     l  logs             n  create new   │  │                                           │
+│                                         │  │     w  worktrees                          │
+╰─────────────────────────────────────────╯  │     s  services      jump directly        │
+╭─ Terminal ─────────────────────────────╮   │     a  active tabs                        │
+│                                         │  │                                           │
+│   Sessions open in the right pane.      │  ╰───────────────────────────────────────────╯
+│   To get back:                          │  ╭─ More ────────────────────────────────────╮
+│                                         │  │                                           │
+│     Ctrl+] q  return to dashboard       │  │   Shift+A  AWS keys    Shift+X  admin     │
+│     Ctrl+] f  toggle fullscreen         │  │   Shift+B  database    Shift+D  details   │
+│                                         │  │   Shift+L  LAN mode    Shift+U  usage     │
+╰─────────────────────────────────────────╯  │   Shift+T  tasks       Shift+M  maint.    │
+╭─ Tabs ─────────────────────────────────╮   │   ──────────────────────────────────────   │
+│                                         │  │   i  info  r  restart  u  start  t  stop   │
+│   Each session becomes a tab.           │  │                                           │
+│                                         │  ╰───────────────────────────────────────────╯
+│     h / l     prev / next tab           │
+│     1-9       jump to tab N             │
+│     x         close tab                 │
+│                                         │
+╰─────────────────────────────────────────╯
 
-╭─ Terminal ──────────────────────────────────────────────╮
-│                                                         │
-│   Sessions open in the right pane. To get back:         │
-│                                                         │
-│     Ctrl+] q    return to dashboard                     │
-│     Ctrl+] f    toggle fullscreen                       │
-│                                                         │
-╰─────────────────────────────────────────────────────────╯
-
-╭─ Tabs ──────────────────────────────────────────────────╮
-│                                                         │
-│   Each session becomes a tab. Switch with:              │
-│                                                         │
-│     h / l       prev / next tab                         │
-│     1-9         jump to tab N                           │
-│     x           close tab                               │
-│                                                         │
-╰─────────────────────────────────────────────────────────╯
-
-╭─ Panels ────────────────────────────────────────────────╮
-│                                                         │
-│     [ Worktrees │ Services │ Terminal ]                  │
-│       Tab / Shift+Tab to cycle                          │
-│       w   s   a   to jump directly                       │
-│                                                         │
-╰─────────────────────────────────────────────────────────╯
-
-╭─ More ──────────────────────────────────────────────────╮
-│                                                         │
-│   Shift+B  database       Shift+A  AWS credentials     │
-│   Shift+D  details        Shift+T  tasks                │
-│   Shift+U  claude usage   Shift+X  toggle admin         │
-│   Shift+M  maintenance    Shift+K  skip-worktree        │
-│   Shift+L  toggle LAN                                   │
-│                                                         │
-│   i  info   r  restart   u  start   t  stop              │
-│                                                         │
-╰─────────────────────────────────────────────────────────╯
-
-              Press ? for all keybindings
+              wt — Quick Start
+           Press ? for all keybindings
 ```

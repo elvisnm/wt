@@ -780,47 +780,51 @@ func guideBox(title string, lines []string, width int) []string {
 func renderGuide() string {
 	termWidth, termHeight := termSize()
 
-	w := 56
-	if termWidth < w+4 {
-		w = termWidth - 4
+	colW := 46
+	gap := 3
+	totalW := colW*2 + gap
+
+	// Narrow fallback for small terminals
+	if termWidth < totalW+4 {
+		colW = (termWidth - 4 - gap) / 2
+		if colW < 30 {
+			colW = 30
+		}
+		totalW = colW*2 + gap
 	}
 
-	var sections [][]string
+	// --- Left column: Worktree, Terminal, Tabs ---
+	var leftSecs [][]string
 
-	// Title
-	sections = append(sections, []string{
-		guideCenterLine(ansiBold+ansiCyan+"wt — Quick Start"+ansiReset, w),
-		"",
-	})
-
-	// Worktree actions
-	sections = append(sections, guideBox("Worktree", []string{
+	leftSecs = append(leftSecs, guideBox("Worktree", []string{
 		"Select a worktree, then press:",
 		"",
 		guideKey("b") + "  bash shell       " + guideKey("c") + "  claude code",
 		guideKey("l") + "  logs             " + guideKey("n") + "  create new",
-	}, w))
+	}, colW))
 
-	// Terminal
-	sections = append(sections, guideBox("Terminal", []string{
+	leftSecs = append(leftSecs, guideBox("Terminal", []string{
 		"Sessions open in the right pane.",
 		"To get back:",
 		"",
 		guideKey("Ctrl+] q") + "  return to dashboard",
 		guideKey("Ctrl+] f") + "  toggle fullscreen",
-	}, w))
+	}, colW))
 
-	// Tabs
-	sections = append(sections, guideBox("Tabs", []string{
+	leftSecs = append(leftSecs, guideBox("Tabs", []string{
 		"Each session becomes a tab.",
 		"",
 		guideKey("h") + " / " + guideKey("l") + "     prev / next tab",
 		guideKey("1") + "-" + guideKey("9") + "       jump to tab N",
 		guideKey("x") + "         close tab",
-	}, w))
+	}, colW))
 
-	// Panels
-	sections = append(sections, guideBox("Panels", []string{
+	leftLines := flattenSections(leftSecs)
+
+	// --- Right column: Panels, More ---
+	var rightSecs [][]string
+
+	rightSecs = append(rightSecs, guideBox("Panels", []string{
 		ansiDim + "[" + ansiReset + " Worktrees " + ansiDim + "│" + ansiReset + " Services " + ansiDim + "│" + ansiReset + " Terminal " + ansiDim + "]" + ansiReset,
 		"",
 		guideKey("Tab") + " / " + guideKey("Shift+Tab") + "  cycle panels",
@@ -828,26 +832,37 @@ func renderGuide() string {
 		guideKey("w") + " worktrees",
 		guideKey("s") + " services      jump directly",
 		guideKey("a") + " active tabs",
-	}, w))
+	}, colW))
 
-	// More
-	sections = append(sections, guideBox("More", []string{
+	rightSecs = append(rightSecs, guideBox("More", []string{
 		guideKey("Shift+A") + " AWS keys    " + guideKey("Shift+X") + " admin",
 		guideKey("Shift+B") + " database    " + guideKey("Shift+D") + " details",
 		guideKey("Shift+L") + " LAN mode    " + guideKey("Shift+U") + " Claude usage",
 		guideKey("Shift+T") + " tasks       " + guideKey("Shift+M") + " maintenance",
 		ansiDim + strings.Repeat("─", 42) + ansiReset,
 		guideKey("i") + " info  " + guideKey("r") + " restart  " + guideKey("u") + " start  " + guideKey("t") + " stop",
-	}, w))
+	}, colW))
+
+	rightLines := flattenSections(rightSecs)
+
+	// --- Assemble: title + columns + footer ---
+	var lines []string
+
+	// Title
+	lines = append(lines,
+		guideCenterLine(ansiBold+ansiCyan+"wt — Quick Start"+ansiReset, totalW),
+		"",
+	)
+
+	// Merge columns
+	lines = append(lines, mergeColumns(leftLines, rightLines, colW, gap)...)
 
 	// Footer
-	sections = append(sections, []string{
+	lines = append(lines,
 		"",
-		guideCenterLine(ansiDim+"Version "+version+" - @elvisnm"+ansiReset, w),
-		guideCenterLine(ansiDim+"Press "+ansiReset+guideKey("?")+ansiDim+" for all keybindings"+ansiReset, w),
-	})
-
-	lines := flattenSections(sections)
+		guideCenterLine(ansiDim+"Version "+version+" - @elvisnm"+ansiReset, totalW),
+		guideCenterLine(ansiDim+"Press "+ansiReset+guideKey("?")+ansiDim+" for all keybindings"+ansiReset, totalW),
+	)
 
 	// Vertical centering
 	contentHeight := len(lines)
@@ -857,7 +872,7 @@ func renderGuide() string {
 	}
 
 	// Horizontal centering
-	leftPad := (termWidth - w) / 2
+	leftPad := (termWidth - totalW) / 2
 	if leftPad < 0 {
 		leftPad = 0
 	}
