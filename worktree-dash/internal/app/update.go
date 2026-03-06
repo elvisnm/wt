@@ -2437,27 +2437,37 @@ func pm2_process_names(entry config.DashServiceEntry, alias string) []string {
 }
 
 func (m Model) open_start_service_picker(wt worktree.Worktree) (Model, tea.Cmd) {
-	debug_log("[start_svc] open_start_service_picker: alias=%s services=%d cfg=%v", wt.Alias, len(m.services), m.cfg != nil)
+	return m.open_service_picker(wt, pickerStartService)
+}
+
+func (m Model) open_stop_service_picker(wt worktree.Worktree) (Model, tea.Cmd) {
+	return m.open_service_picker(wt, pickerStopService)
+}
+
+// open_service_picker builds a picker of services filtered by state.
+// For pickerStartService: shows services with any stopped process.
+// For pickerStopService: shows services with any running process.
+func (m Model) open_service_picker(wt worktree.Worktree, mode string) (Model, tea.Cmd) {
+	debug_log("[svc_picker] open: mode=%s alias=%s services=%d cfg=%v", mode, wt.Alias, len(m.services), m.cfg != nil)
 	if m.cfg == nil || len(m.cfg.Dash.Services.List) == 0 {
 		m.activity = "No services configured"
 		return m, nil
 	}
 
 	running := m.running_base_names(wt.Alias)
-	debug_log("[start_svc] running base names: %v", running)
+	want_running := mode == pickerStopService
 
 	var actions []ui.PickerAction
 	idx := 0
 	for _, entry := range m.cfg.Dash.Services.List {
-		// Check if all processes for this entry are running
-		all_running := true
+		match := false
 		for _, b := range entry.BaseProcesses() {
-			if !running[b] {
-				all_running = false
+			if running[b] == want_running {
+				match = true
 				break
 			}
 		}
-		if all_running {
+		if !match {
 			continue
 		}
 		if idx >= 26 {
@@ -2472,16 +2482,20 @@ func (m Model) open_start_service_picker(wt worktree.Worktree) (Model, tea.Cmd) 
 		idx++
 	}
 
-	debug_log("[start_svc] stopped services to offer: %d", len(actions))
+	debug_log("[svc_picker] %s: %d services to offer", mode, len(actions))
 	if len(actions) == 0 {
-		m.activity = "All services are already running"
+		if want_running {
+			m.activity = "No services are running"
+		} else {
+			m.activity = "All services are already running"
+		}
 		return m, nil
 	}
 
 	m.picker_actions = actions
 	m.picker_cursor = 0
 	m.picker_open = true
-	m.picker_context = pickerStartService
+	m.picker_context = mode
 	return m, nil
 }
 
@@ -2546,55 +2560,6 @@ func cmd_start_isolated_services(wt worktree.Worktree, pm2_names []string, cfg *
 		}
 		return MsgActionOutput{Output: last_out, Err: last_err}
 	}
-}
-
-func (m Model) open_stop_service_picker(wt worktree.Worktree) (Model, tea.Cmd) {
-	debug_log("[stop_svc] open_stop_service_picker: alias=%s services=%d cfg=%v", wt.Alias, len(m.services), m.cfg != nil)
-	if m.cfg == nil || len(m.cfg.Dash.Services.List) == 0 {
-		m.activity = "No services configured"
-		return m, nil
-	}
-
-	running := m.running_base_names(wt.Alias)
-	debug_log("[stop_svc] running base names: %v", running)
-
-	var actions []ui.PickerAction
-	idx := 0
-	for _, entry := range m.cfg.Dash.Services.List {
-		// Check if any process for this entry is running
-		any_running := false
-		for _, b := range entry.BaseProcesses() {
-			if running[b] {
-				any_running = true
-				break
-			}
-		}
-		if !any_running {
-			continue
-		}
-		if idx >= 26 {
-			break
-		}
-		key := string(rune('a' + idx))
-		actions = append(actions, ui.PickerAction{
-			Key:   key,
-			Label: entry.Name,
-			Desc:  fmt.Sprintf("port %d", entry.Port),
-		})
-		idx++
-	}
-
-	debug_log("[stop_svc] running services to offer: %d", len(actions))
-	if len(actions) == 0 {
-		m.activity = "No services are running"
-		return m, nil
-	}
-
-	m.picker_actions = actions
-	m.picker_cursor = 0
-	m.picker_open = true
-	m.picker_context = pickerStopService
-	return m, nil
 }
 
 func (m Model) execute_stop_service_action(action ui.PickerAction) (Model, tea.Cmd) {

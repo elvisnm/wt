@@ -155,6 +155,11 @@ func parse_services(procs []map[string]interface{}, wt_path string) []worktree.S
 
 		if has_env {
 			svc.Status = cmdutil.GetStringField(env_map, "status")
+			// Hide stopped processes from the services panel. Errored processes
+			// remain visible so users can see and investigate failures.
+			if svc.Status == "stopped" {
+				continue
+			}
 			if restart, ok := env_map["restart_time"].(float64); ok {
 				svc.RestartCount = int(restart)
 			}

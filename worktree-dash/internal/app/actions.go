@@ -93,8 +93,7 @@ func (m *Model) actions_for_worktree(wt worktree.Worktree) []ui.PickerAction {
 // "Start service" when all configured services are running, and
 // "Stop service" when no configured services are running.
 func (m *Model) filter_local_running_actions() []ui.PickerAction {
-	has_stopped := m.has_stopped_services()
-	has_running := m.has_running_services()
+	has_stopped, has_running := m.service_availability()
 	if has_stopped && has_running {
 		return ui.LocalRunningActions
 	}
@@ -111,34 +110,26 @@ func (m *Model) filter_local_running_actions() []ui.PickerAction {
 	return actions
 }
 
-func (m *Model) has_stopped_services() bool {
+// service_availability checks configured services against running PM2 processes
+// and returns whether any are stopped and whether any are running.
+func (m *Model) service_availability() (has_stopped, has_running bool) {
 	if m.cfg == nil || len(m.cfg.Dash.Services.List) == 0 {
-		return false
-	}
-	running := m.running_base_names(m.selected_alias())
-	for _, entry := range m.cfg.Dash.Services.List {
-		for _, b := range entry.BaseProcesses() {
-			if !running[b] {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (m *Model) has_running_services() bool {
-	if m.cfg == nil || len(m.cfg.Dash.Services.List) == 0 {
-		return false
+		return false, false
 	}
 	running := m.running_base_names(m.selected_alias())
 	for _, entry := range m.cfg.Dash.Services.List {
 		for _, b := range entry.BaseProcesses() {
 			if running[b] {
-				return true
+				has_running = true
+			} else {
+				has_stopped = true
+			}
+			if has_running && has_stopped {
+				return
 			}
 		}
 	}
-	return false
+	return
 }
 
 func (m *Model) selected_alias() string {
