@@ -1,6 +1,6 @@
 # wt — Worktree Toolkit
 
-A config-driven system for managing Docker-powered [git worktrees](https://git-scm.com/docs/git-worktree). Run multiple feature branches simultaneously, each in its own isolated container environment with dedicated ports, database, and domain.
+A config-driven system for managing isolated [git worktrees](https://git-scm.com/docs/git-worktree). Run multiple feature branches simultaneously — each in its own Docker container or local PM2 environment with dedicated ports, database, and domain.
 
 **Two components:**
 
@@ -25,7 +25,7 @@ your-project-worktrees/
 
 Each worktree gets:
 - A git worktree (isolated checkout of a branch)
-- Docker container(s) running your services
+- Isolated PM2 daemon (local mode) or Docker container(s)
 - Deterministic port offset (no collisions between worktrees)
 - Its own database (cloned from a source DB)
 - A domain (e.g., `feat-login.localhost`)
@@ -63,6 +63,9 @@ node worktree-flow/dc-create.js
 
 # Or direct
 node worktree-flow/dc-worktree-up.js feat/my-feature --from=origin/main --alias=my-feat
+
+# Or without Docker (local PM2)
+node worktree-flow/dc-worktree-up.js feat/my-feature --from=origin/main --no-docker
 ```
 
 ### 3. Manage worktrees
@@ -150,7 +153,7 @@ wt/
 
 - **Node.js** >= 18
 - **Go** >= 1.21 (for dashboard)
-- **Docker** with Docker Compose v2
+- **Docker** with Docker Compose v2 (for Docker worktrees; not needed for local mode)
 - **Git** with worktree support
 
 ## License
