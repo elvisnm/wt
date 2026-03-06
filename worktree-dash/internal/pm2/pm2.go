@@ -2,6 +2,7 @@ package pm2
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/elvisnm/wt/internal/cmdutil"
@@ -15,11 +16,115 @@ func FetchServices(wt_path string) []worktree.Service {
 		return nil
 	}
 
-	procs := fetch_procs()
+	procs := fetch_procs("")
 	if procs == nil {
 		return nil
 	}
 
+	return parse_services(procs, wt_path)
+}
+
+// FetchServicesWithHome runs `pm2 jlist` with an isolated PM2_HOME and returns
+// all processes (no pm_cwd filtering needed since the daemon is worktree-specific).
+func FetchServicesWithHome(pm2_home string) []worktree.Service {
+	if pm2_home == "" {
+		return nil
+	}
+
+	procs := fetch_procs(pm2_home)
+	if procs == nil {
+		return nil
+	}
+
+	return parse_services(procs, "")
+}
+
+// FetchRunningWorktrees runs `pm2 jlist` once and checks which of the given
+// worktree paths have at least one "online" process (matched by pm_cwd).
+func FetchRunningWorktrees(wt_paths map[string]string) map[string]bool {
+	if len(wt_paths) == 0 {
+		return nil
+	}
+
+	procs := fetch_procs("")
+	if procs == nil {
+		return nil
+	}
+
+	result := make(map[string]bool)
+
+	for _, proc := range procs {
+		env_map, has_env := get_env(proc)
+		if !has_env {
+			continue
+		}
+
+		status := cmdutil.GetStringField(env_map, "status")
+		if status != "online" {
+			continue
+		}
+
+		pm_cwd := cmdutil.GetStringField(env_map, "pm_cwd")
+		if pm_cwd == "" {
+			continue
+		}
+
+		for path, name := range wt_paths {
+			if strings.HasPrefix(pm_cwd, path) {
+				result[name] = true
+				break
+			}
+		}
+	}
+
+	return result
+}
+
+// StatusWithHome queries an isolated PM2 daemon and returns whether any process
+// is online, plus aggregate CPU% and memory strings. Single pm2 jlist call.
+func StatusWithHome(pm2_home string) (running bool, cpu string, mem string) {
+	procs := fetch_procs(pm2_home)
+	if procs == nil {
+		return false, "", ""
+	}
+
+	var total_cpu float64
+	var total_mem int64
+	for _, proc := range procs {
+		env_map, has_env := get_env(proc)
+		if has_env && cmdutil.GetStringField(env_map, "status") == "online" {
+			running = true
+		}
+		if monit_raw, ok := proc["monit"]; ok {
+			if monit, ok := monit_raw.(map[string]interface{}); ok {
+				if c, ok := monit["cpu"].(float64); ok {
+					total_cpu += c
+				}
+				if m, ok := monit["memory"].(float64); ok {
+					total_mem += int64(m)
+				}
+			}
+		}
+	}
+
+	if total_cpu > 0 || total_mem > 0 {
+		cpu = fmt.Sprintf("%.1f%%", total_cpu)
+		mem_mb := total_mem / 1024 / 1024
+		if mem_mb >= 1024 {
+			mem = fmt.Sprintf("%.1fGB", float64(mem_mb)/1024)
+		} else {
+			mem = fmt.Sprintf("%dMB", mem_mb)
+		}
+	}
+	return running, cpu, mem
+}
+
+// HomeEnv returns the PM2_HOME environment variable slice for an isolated daemon.
+func HomeEnv(pm2_home string) []string {
+	return []string{fmt.Sprintf("PM2_HOME=%s", pm2_home)}
+}
+
+func parse_services(procs []map[string]interface{}, wt_path string) []worktree.Service {
 	services := []worktree.Service{
 		{Name: "__all", DisplayName: "All services", Status: "online"},
 	}
@@ -30,14 +135,17 @@ func FetchServices(wt_path string) []worktree.Service {
 			continue
 		}
 
-		pm_cwd := ""
 		env_map, has_env := get_env(proc)
-		if has_env {
-			pm_cwd = cmdutil.GetStringField(env_map, "pm_cwd")
-		}
 
-		if !strings.HasPrefix(pm_cwd, wt_path) {
-			continue
+		// If wt_path is set, filter by pm_cwd
+		if wt_path != "" {
+			pm_cwd := ""
+			if has_env {
+				pm_cwd = cmdutil.GetStringField(env_map, "pm_cwd")
+			}
+			if !strings.HasPrefix(pm_cwd, wt_path) {
+				continue
+			}
 		}
 
 		svc := worktree.Service{
@@ -73,49 +181,15 @@ func FetchServices(wt_path string) []worktree.Service {
 	return services
 }
 
-// FetchRunningWorktrees runs `pm2 jlist` once and checks which of the given
-// worktree paths have at least one "online" process (matched by pm_cwd).
-func FetchRunningWorktrees(wt_paths map[string]string) map[string]bool {
-	if len(wt_paths) == 0 {
-		return nil
+func fetch_procs(pm2_home string) []map[string]interface{} {
+	var raw string
+	var err error
+
+	if pm2_home != "" {
+		raw, err = cmdutil.RunCmdEnv(HomeEnv(pm2_home), "pm2", "jlist")
+	} else {
+		raw, err = cmdutil.RunCmd("pm2", "jlist")
 	}
-
-	procs := fetch_procs()
-	if procs == nil {
-		return nil
-	}
-
-	result := make(map[string]bool)
-
-	for _, proc := range procs {
-		env_map, has_env := get_env(proc)
-		if !has_env {
-			continue
-		}
-
-		status := cmdutil.GetStringField(env_map, "status")
-		if status != "online" {
-			continue
-		}
-
-		pm_cwd := cmdutil.GetStringField(env_map, "pm_cwd")
-		if pm_cwd == "" {
-			continue
-		}
-
-		for path, name := range wt_paths {
-			if strings.HasPrefix(pm_cwd, path) {
-				result[name] = true
-				break
-			}
-		}
-	}
-
-	return result
-}
-
-func fetch_procs() []map[string]interface{} {
-	raw, err := cmdutil.RunCmd("pm2", "jlist")
 	if err != nil {
 		return nil
 	}

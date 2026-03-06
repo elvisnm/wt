@@ -2,6 +2,7 @@ package cmdutil
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -9,6 +10,17 @@ import (
 // RunCmd executes a command and returns trimmed stdout.
 func RunCmd(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// RunCmdEnv executes a command with extra environment variables and returns trimmed stdout.
+func RunCmdEnv(extra_env []string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), extra_env...)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err

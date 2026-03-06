@@ -11,6 +11,7 @@ import (
 	"github.com/elvisnm/wt/internal/beads"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/labels"
+	"github.com/elvisnm/wt/internal/pm2"
 	"github.com/elvisnm/wt/internal/sentinel"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/ui"
@@ -1477,7 +1478,11 @@ func cmd_service_action(action string, wt worktree.Worktree, svc worktree.Servic
 		if wt.Type == worktree.TypeDocker {
 			out, err = run_docker_cmd("exec", wt.Container, "pm2", action, pm2_target)
 		} else {
-			out, err = run_host_cmd("pm2", action, pm2_target)
+			if wt.IsolatedPM2 {
+				out, err = run_host_cmd_env(pm2.HomeEnv(wt.PM2Home()), "pm2", action, pm2_target)
+			} else {
+				out, err = run_host_cmd("pm2", action, pm2_target)
+			}
 		}
 		return MsgActionOutput{Output: out, Err: err}
 	}
@@ -1491,6 +1496,13 @@ func run_docker_cmd(args ...string) (string, error) {
 
 func run_host_cmd(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func run_host_cmd_env(env []string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
@@ -1776,9 +1788,27 @@ func (m Model) open_worktree_info() (Model, tea.Cmd) {
 	return m, nil
 }
 
-// start_dev_server opens a terminal tab running pnpm dev for a local worktree
+// start_dev_server opens a terminal tab running pnpm dev for a local worktree,
+// or starts PM2 services if the worktree has an isolated .pm2 directory.
 func (m Model) start_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 	debug_log("[services] start_dev_server: alias=%s path=%s", wt.Alias, wt.Path)
+
+	// For isolated PM2 worktrees, start PM2 directly (no tmux tab needed)
+	if wt.IsolatedPM2 {
+		ecosystem := filepath.Join(wt.Path, "ecosystem.worktree.config.js")
+		debug_log("[services] start_dev_server: using isolated PM2 at %s", wt.PM2Home())
+		m.activity = fmt.Sprintf("starting... %s", wt.Alias)
+		return m, tea.Sequence(
+			func() tea.Msg {
+				return MsgActionStarted{WtName: wt.Name, Status: "starting..."}
+			},
+			func() tea.Msg {
+				out, err := run_host_cmd_env(pm2.HomeEnv(wt.PM2Home()), "pm2", "start", ecosystem)
+				return MsgActionOutput{Output: out, Err: err}
+			},
+		)
+	}
+
 	// Reload AWS credentials so the spawned process inherits the latest keys
 	reload_aws_credentials()
 
@@ -1866,6 +1896,19 @@ func (m Model) run_stop_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 			func() tea.Msg {
 				kill_local_dev_processes(wt.Path)
 				return MsgActionOutput{}
+			},
+		)
+	}
+
+	// Check for isolated PM2_HOME
+	if wt.IsolatedPM2 {
+		return m, tea.Sequence(
+			func() tea.Msg {
+				return MsgActionStarted{WtName: wt.Name, Status: "stopping..."}
+			},
+			func() tea.Msg {
+				out, err := run_host_cmd_env(pm2.HomeEnv(wt.PM2Home()), "pm2", "kill")
+				return MsgActionOutput{Output: out, Err: err}
 			},
 		)
 	}
