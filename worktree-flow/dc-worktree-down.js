@@ -44,7 +44,8 @@ function parse_args(argv) {
 
 function remove_traefik_config(alias) {
   if (!alias) return;
-  const traefik_dir = config && config.docker.proxy._dynamicDirResolved
+  const traefik_dir = config && config.docker && config.docker.proxy
+    && config.docker.proxy._dynamicDirResolved
     ? config.docker.proxy._dynamicDirResolved
     : null;
   if (!traefik_dir) return;
@@ -147,6 +148,7 @@ function main() {
       pm2_cleanup(pm2_bin, home);
       console.log('PM2 services stopped.');
     }
+    remove_traefik_config(alias);
 
     if (!options.remove) {
       console.log(`Local worktree preserved at: ${worktree_path}`);
