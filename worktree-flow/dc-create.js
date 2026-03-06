@@ -289,26 +289,35 @@ async function main() {
 
   // Step 3: Environment
   const local_dev_cmd = config && config.dash && config.dash.localDevCommand ? config.dash.localDevCommand : 'pnpm dev';
-  const has_host_build = config && config.features.hostBuild;
-  const env_choice = await p.select({
-    message: 'Environment?',
-    options: [
-      { value: 'docker', label: 'Docker', hint: 'run services in container' },
-      ...(has_host_build
-        ? [{ value: 'host_build', label: 'Docker + Host Build', hint: 'container + esbuild on host' }]
-        : []),
-      { value: 'local', label: 'Local', hint: `plain worktree, run with ${local_dev_cmd}` },
-    ],
-  });
-  if (p.isCancel(env_choice)) { p.cancel('Cancelled.'); process.exit(0); }
+  const has_docker = config && config.docker && config.docker.composeStrategy;
+  const has_host_build = has_docker && config.features.hostBuild;
+
+  let env_choice;
+  if (!has_docker) {
+    env_choice = 'local';
+    debug('main: no docker strategy, defaulting to local');
+  } else {
+    env_choice = await p.select({
+      message: 'Environment?',
+      options: [
+        { value: 'docker', label: 'Docker', hint: 'run services in container' },
+        ...(has_host_build
+          ? [{ value: 'host_build', label: 'Docker + Host Build', hint: 'container + esbuild on host' }]
+          : []),
+        { value: 'local', label: 'Local', hint: `plain worktree, run with ${local_dev_cmd}` },
+      ],
+    });
+    if (p.isCancel(env_choice)) { p.cancel('Cancelled.'); process.exit(0); }
+  }
   debug('main: env_choice=' + env_choice);
 
   const is_host_build = env_choice === 'host_build';
   const use_docker = env_choice !== 'local';
 
+  // Service mode selection (both Docker and local)
   const default_mode = config && config.services.defaultMode ? config.services.defaultMode : Object.keys(config.services.modes)[0];
   let actual_mode = default_mode;
-  if (use_docker && config && Object.keys(config.services.modes).length > 1) {
+  if (config && Object.keys(config.services.modes).length > 1) {
     const mode_keys = Object.keys(config.services.modes);
     mode_keys.sort((a, b) => (a === default_mode ? -1 : b === default_mode ? 1 : 0));
     const mode_choice = await p.select({
@@ -323,7 +332,18 @@ async function main() {
     actual_mode = mode_choice;
   }
 
-  let final_alias = '';
+  // Alias (both Docker and local — used for PM2 namespacing and Traefik routing)
+  const default_alias = auto_alias(branch_name);
+  const alias_label = use_docker ? 'Alias (short name for container):' : 'Alias (short name for worktree):';
+  const alias = await p.text({
+    message: alias_label,
+    defaultValue: default_alias,
+    placeholder: default_alias,
+    validate: (v) => validate_alias(v || default_alias, existing_aliases),
+  });
+  if (p.isCancel(alias)) { p.cancel('Cancelled.'); process.exit(0); }
+  let final_alias = alias || default_alias;
+
   let db_choice = null;
   let seed_db = false;
   let selected_extras = [];
@@ -335,43 +355,31 @@ async function main() {
   const db_prefix = config && config.database ? (config.database.dbNamePrefix || 'db_') : 'db_';
   const db_default = config && config.database ? (config.database.defaultDb || 'db') : 'db';
 
+  if (has_local_db) {
+    const isolated_name = config ? config_mod.db_name(config, final_alias) : `${db_prefix}${final_alias.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+    db_choice = await p.select({
+      message: 'Database?',
+      options: [
+        { value: 'isolated', label: `Isolated (${isolated_name})`, hint: 'recommended' },
+        { value: 'shared', label: `Shared (${db_default})`, hint: 'use main database' },
+      ],
+    });
+    if (p.isCancel(db_choice)) { p.cancel('Cancelled.'); process.exit(0); }
+
+    const has_seed = config ? !!config.database.seedCommand : false;
+    if (db_choice === 'isolated' && has_seed) {
+      seed_db = await p.confirm({
+        message: `Seed from ${db_default}?`,
+        initialValue: true,
+      });
+      if (p.isCancel(seed_db)) { p.cancel('Cancelled.'); process.exit(0); }
+    }
+  }
+
   if (use_docker) {
     check_docker();
 
-    // Step 4: Alias
-    const default_alias = auto_alias(branch_name);
-    const alias = await p.text({
-      message: 'Alias (short name for container):',
-      defaultValue: default_alias,
-      placeholder: default_alias,
-      validate: (v) => validate_alias(v || default_alias, existing_aliases),
-    });
-    if (p.isCancel(alias)) { p.cancel('Cancelled.'); process.exit(0); }
-    final_alias = alias || default_alias;
-
-    // Step 5: Database (only for projects with a local database)
-    if (has_local_db) {
-      const isolated_name = config ? config_mod.db_name(config, final_alias) : `${db_prefix}${final_alias.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-      db_choice = await p.select({
-        message: 'Database?',
-        options: [
-          { value: 'isolated', label: `Isolated (${isolated_name})`, hint: 'recommended' },
-          { value: 'shared', label: `Shared (${db_default})`, hint: 'use main database' },
-        ],
-      });
-      if (p.isCancel(db_choice)) { p.cancel('Cancelled.'); process.exit(0); }
-
-      const has_seed = config ? !!config.database.seedCommand : false;
-      if (db_choice === 'isolated' && has_seed) {
-        seed_db = await p.confirm({
-          message: `Seed from ${db_default}?`,
-          initialValue: true,
-        });
-        if (p.isCancel(seed_db)) { p.cancel('Cancelled.'); process.exit(0); }
-      }
-    }
-
-    // Step 6: Additional options (config-driven)
+    // Additional options (config-driven, Docker only)
     const extra_options = get_extra_options();
     if (extra_options.length > 0) {
       const extras = await p.multiselect({
@@ -429,13 +437,24 @@ async function main() {
     });
     debug('main: dc-worktree-up completed (docker)');
   } else {
+    const flags = [`--from=${from_ref}`, '--no-docker', `--alias=${final_alias}`, `--mode=${actual_mode}`];
+    if (db_choice === 'shared') flags.push('--shared-db');
+    if (seed_db) flags.push('--seed');
+
+    const domain = config ? config_mod.domain_for(config, final_alias) : null;
+    const isolated_name = config ? config_mod.db_name(config, final_alias) : `${db_prefix}${final_alias.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+
     const summary_lines = [
       `Branch:   ${branch_name}`,
       `Base:     ${from_ref}`,
-      `Mode:     local (${local_dev_cmd})`,
-    ];
+      `Alias:    ${final_alias}`,
+      domain ? `Domain:   ${domain}` : null,
+      `Mode:     ${actual_mode} (local)`,
+      has_local_db ? `Database: ${db_choice === 'shared' ? `shared (${db_default})` : `isolated (${isolated_name})`}` : null,
+      seed_db ? 'Seed DB:  yes' : null,
+    ].filter(Boolean);
 
-    const cmd_line = `wt up ${branch_name} --from=${from_ref} --no-docker`;
+    const cmd_line = `wt up ${branch_name} ${flags.join(' ')}`;
     summary_lines.push('', `Command:  ${cmd_line}`);
 
     p.note(summary_lines.join('\n'), 'Summary');
@@ -444,14 +463,16 @@ async function main() {
     if (p.isCancel(confirmed) || !confirmed) { p.cancel('Cancelled.'); process.exit(0); }
 
     const up_script = path.join(scripts_dir, 'dc-worktree-up.js');
+    const args = [branch_name, ...flags];
+    debug('main: alias=' + final_alias + ' branch=' + branch_name);
+    debug('main: calling dc-worktree-up: node ' + up_script + ' ' + args.join(' '));
     try {
-      execSync(`node "${up_script}" "${branch_name}" "--from=${from_ref}" --no-docker`, {
+      execSync(`node "${up_script}" ${args.map((a) => `"${a}"`).join(' ')}`, {
         stdio: 'inherit',
         cwd: repo_root,
       });
     } catch (e) {
       if (e.signal === 'SIGINT') {
-        // Dev server stopped by user — write sentinel so dashboard closes the Create tab
         debug('main: SIGINT received, writing sentinel=1');
         fs.writeFileSync(SENTINEL_PATH, '1');
         process.exit(0);
