@@ -11,6 +11,7 @@ const {
 const { find_pm2, pm2_home, pm2_start, pm2_cleanup } = require('./lib/pm2');
 const { generate_config, OUTPUT_FILENAME } = require('./generate-ecosystem-config');
 const { generate_workspace } = require('./generate-workspace-config');
+const { write_traefik_config, is_traefik_routing } = require('./generate-docker-compose');
 
 const scripts_dir = __dirname;
 
@@ -689,6 +690,9 @@ function main() {
         const ecosystem_path = path.join(worktree_path, OUTPUT_FILENAME);
         fs.writeFileSync(ecosystem_path, ecosystem_content, 'utf8');
 
+        const wt_alias = auto_alias(target_branch);
+        write_traefik_config(wt_alias, config_mod.domain_for(config, wt_alias), port_offset);
+
         if (process.env.WT_INNER !== '1') {
           console.log('Starting PM2 services...');
           pm2_start({ pm2: pm2_bin, pm2_home: home, ecosystem_config: ecosystem_path, cwd: worktree_path });
@@ -810,13 +814,24 @@ function main() {
 
       // Print port summary
       const ports = config_mod.compute_ports(config, port_offset);
-      const domain = config_mod.domain_for(config, auto_alias(target_branch));
+      const worktree_alias = auto_alias(target_branch);
+      const domain = config_mod.domain_for(config, worktree_alias);
       console.log('');
       console.log(`Service mode: ${mode}`);
-      if (domain) console.log(`Domain: ${domain}`);
       console.log('Service Ports:');
       for (const svc of active_services) {
         if (ports[svc]) console.log(`  ${svc.padEnd(22)} ${ports[svc]}`);
+      }
+
+      const traefik_written = write_traefik_config(worktree_alias, domain, port_offset);
+      if (traefik_written && domain) {
+        is_traefik_routing().then((routing) => {
+          if (routing) {
+            console.log(`Domain: http://${domain}/`);
+          } else {
+            console.log(`Domain: http://${domain}/ (will activate when Traefik starts)`);
+          }
+        });
       }
     }
 

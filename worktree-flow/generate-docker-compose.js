@@ -279,16 +279,36 @@ http:
 }
 
 function find_traefik_dir() {
-  // Config-based: use resolved dynamic dir from proxy config
-  if (config && config.docker.proxy && config.docker.proxy._dynamicDirResolved) {
-    const dir = config.docker.proxy._dynamicDirResolved;
-    if (fs.existsSync(dir)) return dir;
+  if (!config || !config.docker || !config.docker.proxy || !config.docker.proxy._dynamicDirResolved) {
+    return null;
   }
-  // No config — cannot determine traefik dir
-  return null;
+  const dir = config.docker.proxy._dynamicDirResolved;
+  return fs.existsSync(dir) ? dir : null;
 }
 
-module.exports = { generate, generate_traefik_config, find_traefik_dir };
+function is_traefik_routing() {
+  const net = require('net');
+  return new Promise((resolve) => {
+    const sock = net.connect({ host: '127.0.0.1', port: 80, timeout: 500 });
+    sock.on('connect', () => { sock.destroy(); resolve(true); });
+    sock.on('timeout', () => { sock.destroy(); resolve(false); });
+    sock.on('error', () => { resolve(false); });
+  });
+}
+
+function write_traefik_config(alias, domain, port_offset) {
+  if (!domain) return false;
+  const dir = find_traefik_dir();
+  if (!dir) return false;
+  const safe_name = sanitize_name(alias);
+  const traefik_yaml = generate_traefik_config(safe_name, domain, safe_name, port_offset);
+  const traefik_path = path.join(dir, `${safe_name}.yml`);
+  fs.writeFileSync(traefik_path, traefik_yaml, 'utf8');
+  console.log(`Traefik config: ${traefik_path}`);
+  return true;
+}
+
+module.exports = { generate, generate_traefik_config, find_traefik_dir, is_traefik_routing, write_traefik_config };
 
 if (require.main === module) {
   main();
