@@ -106,8 +106,10 @@ function generate_config(config, worktree_path, worktree_name, port_offset, acti
       node_args_parts.push(`--max-old-space-size=${heap}`);
     }
 
-    // Start with source app definition if available, otherwise build minimal
+    // Start with source app definition if available; skip services with no script
     const source = source_apps && source_apps[service_name];
+    if (!source || !source.script) continue;
+
     const app = {
       name: pm2_name,
     };

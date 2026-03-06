@@ -58,11 +58,16 @@ function pm2_env_prefix(home_dir) {
 function pm2_start({ pm2, pm2_home: home, ecosystem_config, env, cwd }) {
   const prefix = pm2_env_prefix(home);
   const cmd = `${prefix}${pm2} start "${ecosystem_config}"`;
-  execSync(cmd, {
-    stdio: 'inherit',
-    cwd,
-    env: { ...process.env, ...env, PM2_HOME: home },
-  });
+  try {
+    execSync(cmd, {
+      stdio: 'inherit',
+      cwd,
+      env: { ...process.env, ...env, PM2_HOME: home },
+    });
+  } catch {
+    // PM2 returns non-zero even on partial success (e.g. some apps launched).
+    // Don't throw — caller can check pm2_list for actual status.
+  }
 }
 
 /**

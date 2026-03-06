@@ -2,7 +2,7 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { config, resolve_worktree_path, get_container_name, read_env } = require('./lib/utils');
-const { find_pm2, pm2_home, pm2_action, pm2_list } = require('./lib/pm2');
+const { find_pm2, pm2_home, pm2_action, pm2_list, pm2_process_name } = require('./lib/pm2');
 const { ALL_SERVICE_NAMES } = require('./service-ports');
 const { OUTPUT_FILENAME } = require('./generate-ecosystem-config');
 
@@ -100,8 +100,10 @@ function handle_local(worktree_path, name, action, service) {
     return;
   }
 
+  const worktree_suffix = path.basename(worktree_path);
+  const namespaced = pm2_process_name(service, worktree_suffix);
   const ecosystem_config = path.join(worktree_path, OUTPUT_FILENAME);
-  pm2_action(pm2_bin, home, action, service, {
+  pm2_action(pm2_bin, home, action, namespaced, {
     ecosystem_config: fs.existsSync(ecosystem_config) ? ecosystem_config : undefined,
   });
 

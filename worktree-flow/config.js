@@ -183,11 +183,36 @@ function find_config(start_dir) {
   while (dir !== root) {
     const candidate = path.join(dir, CONFIG_FILENAME);
     if (fs.existsSync(candidate)) {
-      return { configPath: candidate, repoRoot: dir };
+      return { configPath: candidate, repoRoot: resolve_repo_root(dir) };
     }
     dir = path.dirname(dir);
   }
   return null;
+}
+
+/**
+ * If `dir` is a git worktree (.git is a file pointing to the main repo),
+ * return the main repo root. Otherwise return `dir` as-is.
+ */
+function resolve_repo_root(dir) {
+  const git_path = path.join(dir, '.git');
+  try {
+    const stat = fs.statSync(git_path);
+    if (stat.isFile()) {
+      // .git file contains: gitdir: /path/to/main/.git/worktrees/<name>
+      const content = fs.readFileSync(git_path, 'utf8').trim();
+      const match = content.match(/^gitdir:\s*(.+)$/);
+      if (match) {
+        // Walk up from .git/worktrees/<name> to find the main repo root
+        const git_dir = path.resolve(dir, match[1]);
+        const worktrees_dir = path.dirname(git_dir);
+        if (path.basename(worktrees_dir) === 'worktrees') {
+          return path.dirname(path.dirname(worktrees_dir));
+        }
+      }
+    }
+  } catch {}
+  return dir;
 }
 
 // ── Env var template resolver ───────────────────────────────────────────

@@ -701,6 +701,12 @@ function main() {
     copy_env_files(repo_root, worktree_path);
     ensure_setup_symlinks(repo_root, worktree_path);
 
+    // Copy workflow.config.js so wt commands work inside the worktree
+    const config_src = path.join(repo_root, 'workflow.config.js');
+    if (fs.existsSync(config_src)) {
+      fs.copyFileSync(config_src, path.join(worktree_path, 'workflow.config.js'));
+    }
+
     // Install dependencies if node project
     const pkg_path = path.join(worktree_path, 'package.json');
     if (fs.existsSync(pkg_path)) {
@@ -724,7 +730,7 @@ function main() {
       }
     }
 
-    // Add PM2_HOME to env file for local PM2 isolation
+    // Generate .env.worktree for local worktree
     const use_local_dev = config && config_mod.feature_enabled(config, 'localDev')
       && config.services.pm2 && config.services.pm2.ecosystemConfig;
 
@@ -732,8 +738,11 @@ function main() {
       const home = pm2_home(worktree_path);
       const env_filename_local = config ? config.env.filename : '.env.worktree';
       const env_file_local = path.join(worktree_path, env_filename_local);
-      if (fs.existsSync(env_file_local)) {
-        update_env_key(env_file_local, 'PM2_HOME', home);
+
+      // Generate the env file if it doesn't exist
+      if (!fs.existsSync(env_file_local)) {
+        const create_env_script = path.join(scripts_dir, 'create-worktree-env.js');
+        execSync(`node "${create_env_script}" --auto --dir "${worktree_path}"`, { stdio: 'inherit' });
       }
 
       // Generate ecosystem config for this worktree

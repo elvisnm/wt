@@ -67,7 +67,17 @@ function main() {
     process.exit(1);
   }
 
-  const repo_root = run('git rev-parse --show-toplevel');
+  let repo_root;
+  if (config && config._repoRoot) {
+    repo_root = config._repoRoot;
+  } else {
+    try {
+      repo_root = run('git rev-parse --show-toplevel');
+    } catch {
+      console.error('Could not determine repository root. Run this from inside a git repo or ensure workflow.config.js is accessible.');
+      process.exit(1);
+    }
+  }
   const worktree_path = resolve_worktree_path(repo_root, options.name);
 
   if (!fs.existsSync(worktree_path)) {
@@ -132,8 +142,7 @@ function main() {
     // Local (non-Docker) worktree — stop PM2 if running
     const home = pm2_home(worktree_path);
     if (fs.existsSync(home)) {
-      const repo_root_for_pm2 = run('git rev-parse --show-toplevel');
-      const pm2_bin = find_pm2(repo_root_for_pm2);
+      const pm2_bin = find_pm2(repo_root);
       console.log('Stopping local PM2 services...');
       pm2_cleanup(pm2_bin, home);
       console.log('PM2 services stopped.');
