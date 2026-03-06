@@ -2,8 +2,9 @@ package app
 
 // Picker context constants (app-internal state).
 const (
-	pickerWorktree    = "worktree"
-	pickerDB          = "db"
-	pickerMaintenance = "maintenance"
-	pickerRemove      = "remove"
+	pickerWorktree     = "worktree"
+	pickerDB           = "db"
+	pickerMaintenance  = "maintenance"
+	pickerRemove       = "remove"
+	pickerStartService = "start_service"
 )

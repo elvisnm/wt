@@ -235,7 +235,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activity = fmt.Sprintf("Error: %v", msg.Err)
 			}
 		}
-		return m, m.cmd_discover()
+		return m, tea.Batch(m.cmd_discover(), m.refresh_services())
 
 	case MsgOpenBuildAfterStart:
 		m.actions_pending = nil
@@ -820,7 +820,7 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, Keys.Enter):
 		wt := m.selected_worktree()
 		if wt != nil {
-			m.picker_actions = actions_for_worktree(*wt)
+			m.picker_actions = m.actions_for_worktree(*wt)
 			m.picker_cursor = 0
 			m.picker_open = true
 			m.picker_context = pickerWorktree
@@ -1020,6 +1020,15 @@ func (m Model) handle_services_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activity = fmt.Sprintf("Restarting %s...", svc.DisplayName)
 			return m, cmd_service_action("restart", *wt, svc, m.cfg)
 		}
+	case "t":
+		if m.is_static_local(*wt) {
+			return m, m.show_result("Per-service stop not available")
+		}
+		if m.service_cursor >= 0 && m.service_cursor < len(m.services) {
+			svc := m.services[m.service_cursor]
+			m.activity = fmt.Sprintf("Stopping %s...", svc.DisplayName)
+			return m, cmd_service_action("stop", *wt, svc, m.cfg)
+		}
 	}
 
 	return m, nil
@@ -1121,6 +1130,8 @@ func (m Model) dispatch_picker(action ui.PickerAction) (Model, tea.Cmd) {
 		return m.execute_maintenance_action(action)
 	case pickerRemove:
 		return m.execute_remove_action(action)
+	case pickerStartService:
+		return m.execute_start_service_action(action)
 	default:
 		return m.execute_picker_action(action)
 	}
@@ -1171,6 +1182,8 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 			return m.start_host_build(*wt)
 		}
 		return m, cmd_docker_action("start", *wt, m.repo_root, m.cfg)
+	case "o":
+		return m.open_start_service_picker(*wt)
 	case "i":
 		return m.open_worktree_info()
 	case "x":
@@ -1477,13 +1490,29 @@ func cmd_service_action(action string, wt worktree.Worktree, svc worktree.Servic
 		var err error
 		if wt.Type == worktree.TypeDocker {
 			out, err = run_docker_cmd("exec", wt.Container, "pm2", action, pm2_target)
-		} else {
-			if wt.IsolatedPM2 {
-				out, err = run_host_cmd_env(pm2.HomeEnv(wt.PM2Home()), "pm2", action, pm2_target)
+		} else if wt.IsolatedPM2 {
+			env := pm2.HomeEnv(wt.PM2Home())
+			if action == "start" {
+				// Regenerate ecosystem with all services so --only can target any process
+				repo_root := ""
+				if cfg != nil {
+					repo_root = cfg.RepoRoot
+				}
+				scripts_dir := flow_scripts_dir(repo_root, cfg)
+				gen_script := filepath.Join(scripts_dir, "generate-ecosystem-config.js")
+				debug_log("[service_action] regenerating ecosystem: node %s --dir %s --mode full", gen_script, wt.Path)
+				run_host_cmd("node", gen_script, "--dir", wt.Path, "--mode", "full")
+
+				ecosystem := filepath.Join(wt.Path, "ecosystem.worktree.config.js")
+				debug_log("[service_action] start via ecosystem: %s --only %s", ecosystem, pm2_target)
+				out, err = run_host_cmd_env(env, "pm2", "start", ecosystem, "--only", pm2_target, "--update-env")
 			} else {
-				out, err = run_host_cmd("pm2", action, pm2_target)
+				out, err = run_host_cmd_env(env, "pm2", action, pm2_target)
 			}
+		} else {
+			out, err = run_host_cmd("pm2", action, pm2_target)
 		}
+		debug_log("[service_action] %s %s: out=%q err=%v", action, pm2_target, out, err)
 		return MsgActionOutput{Output: out, Err: err}
 	}
 }
@@ -2368,7 +2397,153 @@ func (m *Model) prev_panel() {
 	}
 }
 
-// open_db_picker shows the database operations picker
+// running_base_names returns a set of base service names (without worktree suffix)
+// from the currently fetched m.services. PM2 names like "app-feat-test" become "app".
+func (m *Model) running_base_names(alias string) map[string]bool {
+	running := make(map[string]bool)
+	suffix := ""
+	if alias != "" {
+		suffix = "-" + alias
+	}
+	for _, svc := range m.services {
+		if svc.Status != "online" {
+			continue
+		}
+		name := svc.Name
+		if suffix != "" && strings.HasSuffix(name, suffix) {
+			name = strings.TrimSuffix(name, suffix)
+		}
+		running[name] = true
+	}
+	return running
+}
+
+// pm2_process_names returns the PM2 process names for a config service entry,
+// namespaced with the worktree alias (e.g. "app" -> "app-feat-test").
+func pm2_process_names(entry config.DashServiceEntry, alias string) []string {
+	bases := entry.BaseProcesses()
+	if alias == "" {
+		return bases
+	}
+	names := make([]string, len(bases))
+	for i, b := range bases {
+		names[i] = b + "-" + alias
+	}
+	return names
+}
+
+func (m Model) open_start_service_picker(wt worktree.Worktree) (Model, tea.Cmd) {
+	debug_log("[start_svc] open_start_service_picker: alias=%s services=%d cfg=%v", wt.Alias, len(m.services), m.cfg != nil)
+	if m.cfg == nil || len(m.cfg.Dash.Services.List) == 0 {
+		m.activity = "No services configured"
+		return m, nil
+	}
+
+	running := m.running_base_names(wt.Alias)
+	debug_log("[start_svc] running base names: %v", running)
+
+	var actions []ui.PickerAction
+	idx := 0
+	for _, entry := range m.cfg.Dash.Services.List {
+		// Check if all processes for this entry are running
+		all_running := true
+		for _, b := range entry.BaseProcesses() {
+			if !running[b] {
+				all_running = false
+				break
+			}
+		}
+		if all_running {
+			continue
+		}
+		if idx >= 26 {
+			break
+		}
+		key := string(rune('a' + idx))
+		actions = append(actions, ui.PickerAction{
+			Key:   key,
+			Label: entry.Name,
+			Desc:  fmt.Sprintf("port %d", entry.Port),
+		})
+		idx++
+	}
+
+	debug_log("[start_svc] stopped services to offer: %d", len(actions))
+	if len(actions) == 0 {
+		m.activity = "All services are already running"
+		return m, nil
+	}
+
+	m.picker_actions = actions
+	m.picker_cursor = 0
+	m.picker_open = true
+	m.picker_context = pickerStartService
+	return m, nil
+}
+
+func (m Model) execute_start_service_action(action ui.PickerAction) (Model, tea.Cmd) {
+	debug_log("[start_svc] execute: label=%s key=%s", action.Label, action.Key)
+	wt := m.selected_worktree()
+	if wt == nil {
+		return m, nil
+	}
+
+	// Find the config entry to get the actual PM2 process names
+	var pm2_names []string
+	for _, entry := range m.cfg.Dash.Services.List {
+		if entry.Name == action.Label {
+			pm2_names = pm2_process_names(entry, wt.Alias)
+			break
+		}
+	}
+
+	if len(pm2_names) == 0 {
+		return m, nil
+	}
+
+	m.activity = fmt.Sprintf("Starting %s...", action.Label)
+
+	// For isolated PM2, regenerate ecosystem once then start all processes
+	if wt.IsolatedPM2 {
+		return m, cmd_start_isolated_services(*wt, pm2_names, m.cfg)
+	}
+
+	// Non-isolated: start each process individually
+	var cmds []tea.Cmd
+	for _, name := range pm2_names {
+		svc := worktree.Service{Name: name, DisplayName: name}
+		cmds = append(cmds, cmd_service_action("start", *wt, svc, m.cfg))
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// cmd_start_isolated_services regenerates the ecosystem config once, then
+// starts all named processes via pm2 --only.
+func cmd_start_isolated_services(wt worktree.Worktree, pm2_names []string, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		repo_root := ""
+		if cfg != nil {
+			repo_root = cfg.RepoRoot
+		}
+		scripts_dir := flow_scripts_dir(repo_root, cfg)
+		gen_script := filepath.Join(scripts_dir, "generate-ecosystem-config.js")
+		debug_log("[start_svc] regenerating ecosystem once: node %s --dir %s --mode full", gen_script, wt.Path)
+		run_host_cmd("node", gen_script, "--dir", wt.Path, "--mode", "full")
+
+		ecosystem := filepath.Join(wt.Path, "ecosystem.worktree.config.js")
+		env := pm2.HomeEnv(wt.PM2Home())
+
+		var last_out string
+		var last_err error
+		for _, name := range pm2_names {
+			debug_log("[start_svc] start via ecosystem: %s --only %s", ecosystem, name)
+			last_out, last_err = run_host_cmd_env(env, "pm2", "start", ecosystem, "--only", name, "--update-env")
+			debug_log("[start_svc] start %s: out=%q err=%v", name, last_out, last_err)
+		}
+		return MsgActionOutput{Output: last_out, Err: last_err}
+	}
+}
+
 func (m Model) open_db_picker() (tea.Model, tea.Cmd) {
 	wt := m.selected_worktree()
 	if wt == nil || !wt.Running || wt.Type != worktree.TypeDocker {

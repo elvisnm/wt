@@ -67,10 +67,10 @@ type MsgActionOutput struct {
 	Err    error
 }
 
-func actions_for_worktree(wt worktree.Worktree) []ui.PickerAction {
+func (m *Model) actions_for_worktree(wt worktree.Worktree) []ui.PickerAction {
 	if wt.Type == worktree.TypeLocal {
 		if wt.Running {
-			return ui.LocalRunningActions
+			return m.filter_local_running_actions()
 		}
 		return ui.LocalActions
 	}
@@ -87,6 +87,42 @@ func actions_for_worktree(wt worktree.Worktree) []ui.PickerAction {
 		return ui.WorktreeActions
 	}
 	return ui.StoppedActions
+}
+
+// filter_local_running_actions returns LocalRunningActions, excluding
+// "Start service" when all configured services are already running.
+func (m *Model) filter_local_running_actions() []ui.PickerAction {
+	if m.has_stopped_services() {
+		return ui.LocalRunningActions
+	}
+	actions := make([]ui.PickerAction, 0, len(ui.LocalRunningActions)-1)
+	for _, a := range ui.LocalRunningActions {
+		if a.Label == "Start service" {
+			continue
+		}
+		actions = append(actions, a)
+	}
+	return actions
+}
+
+func (m *Model) has_stopped_services() bool {
+	if m.cfg == nil || len(m.cfg.Dash.Services.List) == 0 {
+		return false
+	}
+	wt := m.selected_worktree()
+	alias := ""
+	if wt != nil {
+		alias = wt.Alias
+	}
+	running := m.running_base_names(alias)
+	for _, entry := range m.cfg.Dash.Services.List {
+		for _, b := range entry.BaseProcesses() {
+			if !running[b] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func cmd_docker_action(action string, wt worktree.Worktree, repo_root string, cfg *config.Config) tea.Cmd {

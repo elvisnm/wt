@@ -493,12 +493,8 @@ func merge_pm2_into_static(static_svcs []worktree.Service, pm2_svcs []worktree.S
 	if cfg != nil {
 		for i, entry := range cfg.Dash.Services.List {
 			static_idx := i + 1 // +1 for __all at index 0
-			if len(entry.Processes) > 0 {
-				for _, proc := range entry.Processes {
-					pm2_to_static[proc] = static_idx
-				}
-			} else {
-				pm2_to_static[entry.Name] = static_idx
+			for _, proc := range entry.BaseProcesses() {
+				pm2_to_static[proc] = static_idx
 			}
 		}
 	}

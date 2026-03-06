@@ -98,6 +98,11 @@ func (m Model) View() string {
 			}
 		case pickerMaintenance:
 			picker_title = labels.Maintenance
+		case pickerStartService:
+			picker_title = "Start Service"
+			if selected_wt != nil {
+				picker_title = labels.Tab("Start Service", selected_wt.Alias)
+			}
 		case pickerRemove:
 			picker_title = labels.Remove
 			if selected_wt != nil {

@@ -166,6 +166,15 @@ type DashServiceEntry struct {
 	Processes []string `json:"processes"` // PM2 process names when different from Name
 }
 
+// BaseProcesses returns the PM2 process base names for this entry.
+// Falls back to []string{Name} when Processes is empty.
+func (e DashServiceEntry) BaseProcesses() []string {
+	if len(e.Processes) > 0 {
+		return e.Processes
+	}
+	return []string{e.Name}
+}
+
 type DashDockerSvc struct {
 	Manager string `json:"manager"`
 }

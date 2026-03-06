@@ -13,56 +13,113 @@ import (
 // ── actions_for_worktree ─────────────────────────────────────────────────
 
 func TestActionsForWorktree_DockerRunning(t *testing.T) {
+	m := &Model{}
 	wt := worktree.Worktree{Type: worktree.TypeDocker, Running: true, ContainerExists: true}
-	got := actions_for_worktree(wt)
+	got := m.actions_for_worktree(wt)
 	if &got[0] != &ui.WorktreeActions[0] {
 		t.Error("expected WorktreeActions for running docker worktree")
 	}
 }
 
 func TestActionsForWorktree_DockerStopped(t *testing.T) {
+	m := &Model{}
 	wt := worktree.Worktree{Type: worktree.TypeDocker, Running: false, ContainerExists: true}
-	got := actions_for_worktree(wt)
+	got := m.actions_for_worktree(wt)
 	if &got[0] != &ui.StoppedActions[0] {
 		t.Error("expected StoppedActions for stopped docker worktree")
 	}
 }
 
-func TestActionsForWorktree_LocalRunning(t *testing.T) {
+func TestActionsForWorktree_LocalRunning_NoConfig(t *testing.T) {
+	m := &Model{}
 	wt := worktree.Worktree{Type: worktree.TypeLocal, Running: true}
-	got := actions_for_worktree(wt)
-	if &got[0] != &ui.LocalRunningActions[0] {
-		t.Error("expected LocalRunningActions for running local worktree")
+	got := m.actions_for_worktree(wt)
+	// No config means no stopped services → "Start service" option excluded
+	for _, a := range got {
+		if a.Key == "o" {
+			t.Error("expected no 'Start service' action without config")
+		}
+	}
+}
+
+func TestActionsForWorktree_LocalRunning_WithStoppedServices(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Dash.Services.List = []config.DashServiceEntry{
+		{Name: "app", Port: 3001},
+		{Name: "api", Port: 3004},
+	}
+	m := &Model{
+		cfg: cfg,
+		services: []worktree.Service{
+			{Name: "app", Status: "online"},
+		},
+	}
+	wt := worktree.Worktree{Type: worktree.TypeLocal, Running: true}
+	got := m.actions_for_worktree(wt)
+	found := false
+	for _, a := range got {
+		if a.Key == "o" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'Start service' action when stopped services exist")
+	}
+}
+
+func TestActionsForWorktree_LocalRunning_AllRunning(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Dash.Services.List = []config.DashServiceEntry{
+		{Name: "app", Port: 3001},
+		{Name: "api", Port: 3004},
+	}
+	m := &Model{
+		cfg: cfg,
+		services: []worktree.Service{
+			{Name: "app", Status: "online"},
+			{Name: "api", Status: "online"},
+		},
+	}
+	wt := worktree.Worktree{Type: worktree.TypeLocal, Running: true}
+	got := m.actions_for_worktree(wt)
+	for _, a := range got {
+		if a.Key == "o" {
+			t.Error("expected no 'Start service' action when all services running")
+		}
 	}
 }
 
 func TestActionsForWorktree_LocalStopped(t *testing.T) {
+	m := &Model{}
 	wt := worktree.Worktree{Type: worktree.TypeLocal, Running: false}
-	got := actions_for_worktree(wt)
+	got := m.actions_for_worktree(wt)
 	if &got[0] != &ui.LocalActions[0] {
 		t.Error("expected LocalActions for stopped local worktree")
 	}
 }
 
 func TestActionsForWorktree_NoContainer(t *testing.T) {
+	m := &Model{}
 	wt := worktree.Worktree{Type: worktree.TypeDocker, ContainerExists: false}
-	got := actions_for_worktree(wt)
+	got := m.actions_for_worktree(wt)
 	if &got[0] != &ui.LocalActions[0] {
 		t.Error("expected LocalActions when container does not exist")
 	}
 }
 
 func TestActionsForWorktree_HostBuildRunning(t *testing.T) {
+	m := &Model{}
 	wt := worktree.Worktree{Type: worktree.TypeDocker, Running: true, ContainerExists: true, HostBuild: true}
-	got := actions_for_worktree(wt)
+	got := m.actions_for_worktree(wt)
 	if &got[0] != &ui.HostBuildRunningActions[0] {
 		t.Error("expected HostBuildRunningActions for running host-build worktree")
 	}
 }
 
 func TestActionsForWorktree_HostBuildStopped(t *testing.T) {
+	m := &Model{}
 	wt := worktree.Worktree{Type: worktree.TypeDocker, Running: false, ContainerExists: true, HostBuild: true}
-	got := actions_for_worktree(wt)
+	got := m.actions_for_worktree(wt)
 	if &got[0] != &ui.HostBuildStoppedActions[0] {
 		t.Error("expected HostBuildStoppedActions for stopped host-build worktree")
 	}
