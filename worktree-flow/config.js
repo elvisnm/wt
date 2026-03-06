@@ -109,6 +109,7 @@ const DEFAULTS = {
 
   setup: {
     symlinks: [], // paths to symlink into each worktree on creation: [{ src, dst }]
+    copyFiles: [], // files to copy from repo root into each worktree (relative paths)
   },
 
   git: {

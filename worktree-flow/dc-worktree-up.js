@@ -226,6 +226,33 @@ function ensure_setup_symlinks(repo_root, worktree_path) {
   }
 }
 
+function copy_setup_files(repo_root, worktree_path) {
+  const files = config && config.setup && config.setup.copyFiles
+    ? config.setup.copyFiles
+    : [];
+
+  if (files.length === 0) return;
+
+  let copied = 0;
+  for (const rel of files) {
+    const src = path.join(repo_root, rel);
+    const dst = path.join(worktree_path, rel);
+
+    if (!fs.existsSync(src)) continue;
+
+    try {
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+      copied++;
+    } catch (e) {
+      console.warn(`Warning: Could not copy ${rel}: ${e.message}`);
+    }
+  }
+  if (copied > 0) {
+    console.log(`Copied ${copied} setup file(s) from repo root.`);
+  }
+}
+
 // ── Env file copying (shared strategy) ──────────────────────────────────
 
 function copy_env_files(repo_root, worktree_path) {
@@ -623,6 +650,7 @@ function main() {
       console.log(`Worktree already exists at: ${worktree_path} (no-docker)`);
       ensure_git_exclude(worktree_path);
       ensure_setup_symlinks(repo_root, worktree_path);
+      copy_setup_files(repo_root, worktree_path);
 
       // Restart PM2 services if localDev is enabled
       const use_local_dev = config && config_mod.feature_enabled(config, 'localDev')
@@ -700,6 +728,7 @@ function main() {
     console.log(`Worktree created at: ${worktree_path}`);
     copy_env_files(repo_root, worktree_path);
     ensure_setup_symlinks(repo_root, worktree_path);
+    copy_setup_files(repo_root, worktree_path);
 
     // Copy workflow.config.js so wt commands work inside the worktree
     const config_src = path.join(repo_root, 'workflow.config.js');
