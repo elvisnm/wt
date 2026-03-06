@@ -117,6 +117,28 @@ services: {
 | `primary` | first service | Primary service for health checks, URLs, exec |
 | `quickLinks` | `[]` | Links shown in dashboard details |
 
+#### services.pm2
+
+PM2 ecosystem configuration for local worktrees. Only used with `--no-docker`.
+
+```js
+services: {
+  pm2: {
+    ecosystemConfig: 'ecosystem.config.cjs',
+    debugPorts: { app: 9229, api: 9230 },
+    heapSizes: { app: 512, cache_server: 512 },
+    envPassthrough: ['MYAPP_PATH', 'MYAPP_DATABASE_URL'],
+  },
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `ecosystemConfig` | `null` | Source ecosystem file in repo root. `null` disables PM2 generation |
+| `debugPorts` | `{}` | Base `--inspect` ports per service. Offset applied automatically |
+| `heapSizes` | `{}` | `--max-old-space-size` per service (MB) |
+| `envPassthrough` | `[]` | Env vars from `.env.worktree` to pass through to PM2 processes |
+
 ### portOffset
 
 ```js
@@ -134,6 +156,8 @@ portOffset: {
 | `min` | `100` | Minimum offset value |
 | `range` | `2000` | Offset range: `(hash % range) + min` |
 | `autoResolve` | `true` | Auto-increment on port collision |
+
+Port offsets apply to both Docker worktrees (host port mapping) and local worktrees (services listen on offset ports directly).
 
 ### database
 
@@ -204,6 +228,28 @@ env: {
 
 The `{PREFIX}` template in `vars` values gets replaced with `env.prefix` at load time. So `'{PREFIX}_PATH'` with prefix `'MYAPP'` becomes `'MYAPP_PATH'`.
 
+#### env.localDefaults
+
+Templated environment variables written to `.env.worktree` for local (non-Docker) worktrees. Templates support `{name}`, `{path}`, `{domain}`, `{appPort}`.
+
+```js
+env: {
+  localDefaults: {
+    'MYAPP_REDIS_PREFIX': 'wt:{name}:',
+    'MYAPP_DOMAIN': '{domain}',
+    'MYAPP_APP_URL': 'http://{domain}:{appPort}/',
+    'PM2_HOME': '{path}/.pm2',
+  },
+}
+```
+
+| Template | Replaced with |
+|---|---|
+| `{name}` | Worktree name (directory basename) |
+| `{path}` | Absolute path to worktree |
+| `{domain}` | Domain from `docker.proxy.domainTemplate` |
+| `{appPort}` | Primary port + offset |
+
 ### features
 
 ```js
@@ -230,6 +276,7 @@ features: {
 | `prune` | `true` | Orphaned volume cleanup |
 | `imagesFix` | `false` | Image URL fixing in DB |
 | `rebuildBase` | `false` | Base image rebuild command |
+| `localDev` | `false` | Enable local (non-Docker) worktree support with PM2 isolation |
 | `devHeap` | `null` | Node.js heap size in MB |
 
 ### dash
@@ -287,6 +334,7 @@ dash: {
 | PM2 everywhere (generate strategy, monolith container) | Omit `dash.services` entirely |
 | Shared compose (separate containers, no PM2) | `manager: 'static'`, `runningCheck: 'devTab'` |
 | Local: turbo/vite, Docker: PM2 inside container | `manager: 'static'`, `runningCheck: 'devTab'`, `docker: { manager: 'pm2' }` |
+| Local PM2 with isolated PM2_HOME | `manager: 'static'` or omit, enable `features.localDev` |
 
 ### paths
 
@@ -303,6 +351,27 @@ paths: {
 | `flowScripts` | `null` | Directory with worktree-flow scripts. `null` = `scripts/worktree` |
 | `dockerOverrides` | `null` | Directory copied into each worktree. `null` = disabled |
 | `buildScript` | `null` | Build script for host-build mode. `null` = disabled |
+
+### setup
+
+```js
+setup: {
+  symlinks: [
+    { src: '../.claude/commands', dst: '.claude/commands' },
+  ],
+  copyFiles: [
+    'scripts/port-config.js',
+    'globals.js',
+  ],
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `symlinks` | `[]` | Paths to symlink into each worktree on creation. `{ src, dst }` |
+| `copyFiles` | `[]` | Files to copy from repo root into each worktree on creation (relative paths) |
+
+`copyFiles` is useful when local worktrees need files from the main branch that may not exist on the worktree's branch (e.g., port offset support files).
 
 ## Config Loading
 

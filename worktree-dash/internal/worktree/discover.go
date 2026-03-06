@@ -41,10 +41,13 @@ func Discover(worktrees_dir string, existing []Worktree, cfg *config.Config) []W
 			env_filename = cfg.Env.Filename
 		}
 		has_env := file_exists(filepath.Join(full_path, env_filename))
-		has_docker := has_compose || has_env
+		has_pm2_home := file_exists(filepath.Join(full_path, ".pm2"))
 		has_git := file_exists(filepath.Join(full_path, ".git"))
 
-		if !has_docker && !has_git {
+		// Docker requires a compose file; .env.worktree alone with .pm2 is local
+		has_docker := has_compose || (has_env && !has_pm2_home)
+
+		if !has_docker && !has_git && !has_env {
 			continue
 		}
 
@@ -52,13 +55,41 @@ func Discover(worktrees_dir string, existing []Worktree, cfg *config.Config) []W
 		branch := read_branch(full_path)
 
 		if !has_docker {
-			results = append(results, Worktree{
-				Path:   full_path,
-				Name:   name,
-				Type:   TypeLocal,
-				Alias:  name,
-				Branch: branch,
-			})
+			wt := Worktree{
+				Path:        full_path,
+				Name:        name,
+				Type:        TypeLocal,
+				Alias:       name,
+				Branch:      branch,
+				IsolatedPM2: has_pm2_home,
+			}
+
+			// Read metadata from .env.worktree if present
+			if has_env {
+				alias_var := "WORKTREE_ALIAS"
+				if cfg != nil {
+					if v := cfg.WorktreeVar("alias"); v != "" {
+						alias_var = v
+					}
+				}
+				if a := read_env_file(full_path, env_filename, alias_var); a != "" {
+					wt.Alias = a
+				}
+				wt.Offset = read_offset(full_path, cfg)
+				if cfg != nil {
+					wt.Domain = cfg.DomainFor(wt.Alias)
+				}
+			}
+
+			// Preserve runtime state from previous discovery
+			if prev, ok := existing_map[full_path]; ok {
+				wt.Running = prev.Running
+				wt.CPU = prev.CPU
+				wt.Mem = prev.Mem
+				wt.Uptime = prev.Uptime
+			}
+
+			results = append(results, wt)
 			continue
 		}
 

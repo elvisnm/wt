@@ -159,11 +159,31 @@ All mode switches are seamless — no manual cleanup required.
 
 Flags can be combined: `pnpm dc:up feat/abc --host-build --shared-db --lan`
 
-### Native Worktrees
+### Local Worktrees (no Docker)
+
+Create worktrees that run services locally with PM2 isolation — no Docker required.
 
 ```bash
-pnpm worktree <name> --from=<ref> --no-docker    # create without Docker
-pnpm worktree:remove <name>                       # remove a worktree
+pnpm dc:up feat/my-feature --from=origin/canary --no-docker
+```
+
+Each local worktree gets:
+- Isolated PM2 daemon (`PM2_HOME=<worktree>/.pm2`)
+- Deterministic port offset (multiple worktrees run simultaneously)
+- Generated ecosystem config for PM2
+- `.env.worktree` with local defaults (Redis prefix, domain, app URL)
+- Files from `setup.copyFiles` copied from repo root
+
+Manage services:
+```bash
+pnpm dc:service <name> list              # show PM2 services
+pnpm dc:service <name> restart <svc>     # restart a service
+```
+
+Stop and remove:
+```bash
+pnpm dc:down <name>                      # stop PM2 daemon
+pnpm dc:down <name> --remove             # remove worktree
 ```
 
 ### Git Helpers
@@ -240,5 +260,8 @@ To update later: `cd ~/apps/worktree-dash && git pull && make build`.
 - PM2 services capped at 2048 MB each. Increase Docker Desktop RAM to 12GB+ if needed
 - If file watching is slow, use `--poll` to switch PM2 to polling mode
 - Requires Docker Desktop with the shared infrastructure stack running (Mongo, Redis, Traefik)
+- Local worktrees (--no-docker) use isolated PM2 daemons — no Docker needed
+- Port offsets work the same way for local worktrees (services listen on offset ports)
+- The TUI dashboard manages both Docker and local worktrees from the same interface
 
 For architecture details, port configuration, env vars, and internals, see [DOCKER-README.md](./DOCKER-README.md).

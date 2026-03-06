@@ -60,6 +60,7 @@ node worktree-flow/dc-worktree-up.js <name> [options]
 | `--lan` | Enable LAN access via nip.io domain |
 | `--host-build` | Run frontend build on host |
 | `--no-host-build` | Disable host-build mode |
+| `--no-docker` | Create worktree without Docker (local PM2 mode) |
 
 **What it does:**
 1. Creates git worktree (new branch or checkout of existing)
@@ -69,6 +70,15 @@ node worktree-flow/dc-worktree-up.js <name> [options]
 5. Starts Docker containers
 6. Waits for health check (generate strategy)
 7. Optionally seeds database, sets up LAN, opens editor
+
+**For `--no-docker` (local mode):**
+1. Creates git worktree
+2. Computes port offset
+3. Copies `setup.copyFiles` from repo root
+4. Writes `.env.worktree` with local defaults
+5. Generates PM2 ecosystem config (if `services.pm2` configured)
+6. Installs dependencies
+7. Starts PM2 services with isolated `PM2_HOME`
 
 ### `dc-worktree-down.js` — Stop or remove a worktree
 
@@ -82,7 +92,7 @@ node worktree-flow/dc-worktree-down.js <name> [options]
 | `--delete-branch` | Also delete the local git branch |
 | `--force` | Force remove even with uncommitted changes |
 
-Without `--remove`, just stops the container. With `--remove`, tears down everything: containers, volumes, Traefik config, git worktree, and optionally the branch.
+Without `--remove`, just stops the container. With `--remove`, tears down everything: containers, volumes, Traefik config, git worktree, and optionally the branch. For local worktrees, stops the PM2 daemon (`pm2 kill` with `PM2_HOME`).
 
 ### `dc-restart.js` — Restart container
 
@@ -183,7 +193,7 @@ Converts absolute image URLs to relative paths in the database. Only available w
 node worktree-flow/dc-service.js <name> <action> <service>
 ```
 
-Actions: `start`, `stop`, `restart`. Manages individual PM2 services inside a generate-strategy container.
+Actions: `start`, `stop`, `restart`. Manages individual PM2 services inside a Docker container or local worktree (using `PM2_HOME` for isolated worktrees).
 
 ### `dc-admin.js` — Toggle admin accounts
 

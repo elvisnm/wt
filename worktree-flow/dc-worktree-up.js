@@ -8,6 +8,9 @@ const {
   config, config_mod, run, auto_alias, has_ref, compute_auto_offset,
   resolve_worktrees_dir, update_env_key, remove_env_key,
 } = require('./lib/utils');
+const { find_pm2, pm2_home, pm2_start, pm2_cleanup } = require('./lib/pm2');
+const { generate_config, OUTPUT_FILENAME } = require('./generate-ecosystem-config');
+const { generate_workspace } = require('./generate-workspace-config');
 
 const scripts_dir = __dirname;
 
@@ -220,6 +223,33 @@ function ensure_setup_symlinks(repo_root, worktree_path) {
   }
   if (created > 0) {
     console.log(`Created ${created} setup symlink(s).`);
+  }
+}
+
+function copy_setup_files(repo_root, worktree_path) {
+  const files = config && config.setup && config.setup.copyFiles
+    ? config.setup.copyFiles
+    : [];
+
+  if (files.length === 0) return;
+
+  let copied = 0;
+  for (const rel of files) {
+    const src = path.join(repo_root, rel);
+    const dst = path.join(worktree_path, rel);
+
+    if (!fs.existsSync(src)) continue;
+
+    try {
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+      copied++;
+    } catch (e) {
+      console.warn(`Warning: Could not copy ${rel}: ${e.message}`);
+    }
+  }
+  if (copied > 0) {
+    console.log(`Copied ${copied} setup file(s) from repo root.`);
   }
 }
 
@@ -619,6 +649,53 @@ function main() {
     if (options.no_docker) {
       console.log(`Worktree already exists at: ${worktree_path} (no-docker)`);
       ensure_git_exclude(worktree_path);
+      ensure_setup_symlinks(repo_root, worktree_path);
+      copy_setup_files(repo_root, worktree_path);
+
+      // Restart PM2 services if localDev is enabled
+      const use_local_dev = config && config_mod.feature_enabled(config, 'localDev')
+        && config.services.pm2 && config.services.pm2.ecosystemConfig;
+      if (use_local_dev) {
+        const home = pm2_home(worktree_path);
+        const pm2_bin = find_pm2(repo_root);
+
+        // Stop existing PM2 daemon first
+        pm2_cleanup(pm2_bin, home);
+
+        // Regenerate ecosystem config
+        const port_offset = find_free_offset(compute_auto_offset(worktree_path));
+        const mode = options.mode || config.services.defaultMode || 'full';
+        const active_services = config_mod.resolve_services(config, mode);
+        const passthrough = config.services.pm2.envPassthrough || [];
+        const env_overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development' };
+        const env_file_local = path.join(worktree_path, config.env.filename || '.env.worktree');
+        if (fs.existsSync(env_file_local)) {
+          const content = fs.readFileSync(env_file_local, 'utf8');
+          for (const line of content.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const idx = trimmed.indexOf('=');
+            if (idx === -1) continue;
+            const key = trimmed.slice(0, idx).trim();
+            if (passthrough.includes(key) || key.startsWith('WORKTREE_') || key === 'PM2_HOME') {
+              env_overrides[key] = trimmed.slice(idx + 1).trim();
+            }
+          }
+        }
+        const ecosystem_content = generate_config(
+          config, worktree_path, target_branch.replace(/\//g, '-'),
+          port_offset, active_services, env_overrides,
+        );
+        const ecosystem_path = path.join(worktree_path, OUTPUT_FILENAME);
+        fs.writeFileSync(ecosystem_path, ecosystem_content, 'utf8');
+
+        if (process.env.WT_INNER !== '1') {
+          console.log('Starting PM2 services...');
+          pm2_start({ pm2: pm2_bin, pm2_home: home, ecosystem_config: ecosystem_path, cwd: worktree_path });
+          console.log('PM2 services restarted.');
+        }
+      }
+
       if (options.open) open_in_cursor(worktree_path);
       return;
     }
@@ -651,6 +728,13 @@ function main() {
     console.log(`Worktree created at: ${worktree_path}`);
     copy_env_files(repo_root, worktree_path);
     ensure_setup_symlinks(repo_root, worktree_path);
+    copy_setup_files(repo_root, worktree_path);
+
+    // Copy workflow.config.js so wt commands work inside the worktree
+    const config_src = path.join(repo_root, 'workflow.config.js');
+    if (fs.existsSync(config_src)) {
+      fs.copyFileSync(config_src, path.join(worktree_path, 'workflow.config.js'));
+    }
 
     // Install dependencies if node project
     const pkg_path = path.join(worktree_path, 'package.json');
@@ -675,6 +759,67 @@ function main() {
       }
     }
 
+    // Generate .env.worktree for local worktree
+    const use_local_dev = config && config_mod.feature_enabled(config, 'localDev')
+      && config.services.pm2 && config.services.pm2.ecosystemConfig;
+
+    if (use_local_dev) {
+      const home = pm2_home(worktree_path);
+      const env_filename_local = config ? config.env.filename : '.env.worktree';
+      const env_file_local = path.join(worktree_path, env_filename_local);
+
+      // Generate the env file if it doesn't exist
+      if (!fs.existsSync(env_file_local)) {
+        const create_env_script = path.join(scripts_dir, 'create-worktree-env.js');
+        execSync(`node "${create_env_script}" --auto --dir "${worktree_path}"`, { stdio: 'inherit' });
+      }
+
+      // Generate ecosystem config for this worktree
+      const port_offset = find_free_offset(compute_auto_offset(worktree_path));
+      const mode = options.mode || config.services.defaultMode || 'full';
+      const active_services = config_mod.resolve_services(config, mode);
+
+      // Build env overrides from passthrough keys + env file
+      const passthrough = config.services.pm2.envPassthrough || [];
+      const env_overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development' };
+      if (fs.existsSync(env_file_local)) {
+        const content = fs.readFileSync(env_file_local, 'utf8');
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const idx = trimmed.indexOf('=');
+          if (idx === -1) continue;
+          const key = trimmed.slice(0, idx).trim();
+          if (passthrough.includes(key) || key.startsWith('WORKTREE_') || key === 'PM2_HOME') {
+            env_overrides[key] = trimmed.slice(idx + 1).trim();
+          }
+        }
+      }
+
+      const ecosystem_content = generate_config(
+        config, worktree_path, target_branch.replace(/\//g, '-'),
+        port_offset, active_services, env_overrides,
+      );
+      const ecosystem_path = path.join(worktree_path, OUTPUT_FILENAME);
+      fs.writeFileSync(ecosystem_path, ecosystem_content, 'utf8');
+      console.log(`Generated ${OUTPUT_FILENAME}`);
+
+      // Generate VS Code workspace file
+      generate_workspace(worktree_path, config, port_offset, active_services, env_overrides);
+      console.log('Generated devbox.code-workspace');
+
+      // Print port summary
+      const ports = config_mod.compute_ports(config, port_offset);
+      const domain = config_mod.domain_for(config, auto_alias(target_branch));
+      console.log('');
+      console.log(`Service mode: ${mode}`);
+      if (domain) console.log(`Domain: ${domain}`);
+      console.log('Service Ports:');
+      for (const svc of active_services) {
+        if (ports[svc]) console.log(`  ${svc.padEnd(22)} ${ports[svc]}`);
+      }
+    }
+
     if (options.open) open_in_cursor(worktree_path);
 
     // When running inside the dashboard (WT_INNER=1), skip the dev server —
@@ -684,11 +829,26 @@ function main() {
       return;
     }
 
-    // Start dev server (standalone CLI usage)
-    const path_var = config ? config_mod.env_var(config, 'projectPath') : 'PROJECT_PATH';
-    const dev_cmd = config && config.dash && config.dash.localDevCommand ? config.dash.localDevCommand : 'pnpm dev';
-    console.log(`Starting dev server (${dev_cmd})...`);
-    execSync(dev_cmd, { cwd: worktree_path, stdio: 'inherit', env: { ...process.env, [path_var]: worktree_path } });
+    // Start services
+    if (use_local_dev) {
+      const home = pm2_home(worktree_path);
+      const pm2_bin = find_pm2(repo_root);
+      const ecosystem_path = path.join(worktree_path, OUTPUT_FILENAME);
+      console.log('Starting PM2 services...');
+      pm2_start({
+        pm2: pm2_bin,
+        pm2_home: home,
+        ecosystem_config: ecosystem_path,
+        cwd: worktree_path,
+      });
+      console.log('PM2 services started.');
+    } else {
+      // Fallback: start dev server directly (standalone CLI usage)
+      const path_var = config ? config_mod.env_var(config, 'projectPath') : 'PROJECT_PATH';
+      const dev_cmd = config && config.dash && config.dash.localDevCommand ? config.dash.localDevCommand : 'pnpm dev';
+      console.log(`Starting dev server (${dev_cmd})...`);
+      execSync(dev_cmd, { cwd: worktree_path, stdio: 'inherit', env: { ...process.env, [path_var]: worktree_path } });
+    }
     return;
   }
 

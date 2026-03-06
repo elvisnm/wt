@@ -57,6 +57,13 @@ const DEFAULTS = {
     defaultMode: null,
     primary: null,
     quickLinks: [],
+    groups: null, // { core: ['app', 'api'], sync: ['sync_server'], ... }
+    pm2: {
+      ecosystemConfig: null, // path to ecosystem config (e.g. 'ecosystem.dev.config.js')
+      debugPorts: null,      // { app: 9225, api: 9229, ... }
+      heapSizes: null,       // { app: 512, api: 512, ... } (MB)
+      envPassthrough: null,  // ['MY_PATH', 'MY_MONGO', ...] env keys to forward to PM2
+    },
   },
 
   portOffset: {
@@ -95,10 +102,14 @@ const DEFAULTS = {
       poll: 'WORKTREE_POLL',
       devHeap: 'WORKTREE_DEV_HEAP',
     },
+    // Extra env vars to generate in .env.worktree for local (non-Docker) worktrees.
+    // Values support templates: {name}, {alias}, {offset}, {path}, {domain}, {appPort}
+    localDefaults: null, // e.g. { 'MY_REDIS_PREFIX': 'wt:{name}:', 'MY_APP_URL': 'http://{domain}:{appPort}/' }
   },
 
   setup: {
     symlinks: [], // paths to symlink into each worktree on creation: [{ src, dst }]
+    copyFiles: [], // files to copy from repo root into each worktree (relative paths)
   },
 
   git: {
@@ -115,6 +126,7 @@ const DEFAULTS = {
     imagesFix: false,
     rebuildBase: false,
     devHeap: null,
+    localDev: false, // enable PM2-based local (non-Docker) worktree management
   },
 
   dash: {
@@ -172,11 +184,36 @@ function find_config(start_dir) {
   while (dir !== root) {
     const candidate = path.join(dir, CONFIG_FILENAME);
     if (fs.existsSync(candidate)) {
-      return { configPath: candidate, repoRoot: dir };
+      return { configPath: candidate, repoRoot: resolve_repo_root(dir) };
     }
     dir = path.dirname(dir);
   }
   return null;
+}
+
+/**
+ * If `dir` is a git worktree (.git is a file pointing to the main repo),
+ * return the main repo root. Otherwise return `dir` as-is.
+ */
+function resolve_repo_root(dir) {
+  const git_path = path.join(dir, '.git');
+  try {
+    const stat = fs.statSync(git_path);
+    if (stat.isFile()) {
+      // .git file contains: gitdir: /path/to/main/.git/worktrees/<name>
+      const content = fs.readFileSync(git_path, 'utf8').trim();
+      const match = content.match(/^gitdir:\s*(.+)$/);
+      if (match) {
+        // Walk up from .git/worktrees/<name> to find the main repo root
+        const git_dir = path.resolve(dir, match[1]);
+        const worktrees_dir = path.dirname(git_dir);
+        if (path.basename(worktrees_dir) === 'worktrees') {
+          return path.dirname(path.dirname(worktrees_dir));
+        }
+      }
+    }
+  } catch {}
+  return dir;
 }
 
 // ── Env var template resolver ───────────────────────────────────────────
@@ -307,6 +344,13 @@ function load_config(options = {}) {
     merged.paths._buildScriptResolved = path.resolve(repoRoot, merged.paths.buildScript);
   }
 
+  // Resolve PM2 ecosystem config path
+  if (merged.services.pm2 && merged.services.pm2.ecosystemConfig) {
+    merged.services.pm2._ecosystemConfigResolved = path.resolve(
+      repoRoot, merged.services.pm2.ecosystemConfig
+    );
+  }
+
   // ── Attach metadata ────────────────────────────────────────────────
 
   merged._repoRoot = repoRoot;
@@ -418,6 +462,62 @@ function services_for_mode(config, mode) {
 }
 
 /**
+ * Resolve a service mode/group spec into a flat set of service names.
+ *
+ * Accepts:
+ *   - 'full' or null  -> all services (from services.ports keys)
+ *   - 'minimal'       -> services.modes.minimal list
+ *   - any mode name   -> services.modes[mode] list
+ *   - comma-separated -> expand each token as group name or service name
+ *
+ * When services.groups is defined, group names are expanded to their members.
+ * If a 'core' group exists, its services are always included.
+ *
+ * @param {object} config
+ * @param {string} [mode] - Mode name, preset, or comma-separated groups/services
+ * @returns {Set<string>} Set of service names
+ */
+function resolve_services(config, mode) {
+  const all_names = Object.keys(config.services.ports);
+  const groups = config.services.groups;
+
+  if (!mode || mode === 'full') {
+    return new Set(all_names);
+  }
+
+  // Check if it's a named mode first
+  if (config.services.modes && config.services.modes[mode]) {
+    const mode_list = config.services.modes[mode];
+    if (mode_list === null) return new Set(all_names);
+    const result = new Set(mode_list);
+    // Always include core group if defined
+    if (groups && groups.core) {
+      for (const name of groups.core) result.add(name);
+    }
+    return result;
+  }
+
+  // Comma-separated group/service names
+  const tokens = mode.split(',').map((s) => s.trim()).filter(Boolean);
+  const result = new Set();
+
+  for (const token of tokens) {
+    if (groups && groups[token]) {
+      for (const name of groups[token]) result.add(name);
+    } else if (all_names.includes(token)) {
+      result.add(token);
+    }
+  }
+
+  // Always include core group if defined
+  if (groups && groups.core) {
+    for (const name of groups.core) result.add(name);
+  }
+
+  return result;
+}
+
+/**
  * Check if a feature is enabled.
  */
 function feature_enabled(config, feature_name) {
@@ -483,6 +583,7 @@ module.exports = {
   env_var,
   worktree_var,
   services_for_mode,
+  resolve_services,
   feature_enabled,
   get_compose_info,
 };

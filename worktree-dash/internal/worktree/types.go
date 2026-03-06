@@ -26,6 +26,9 @@ type Worktree struct {
 	Offset    int
 	Ports     map[string]int
 
+	// Local worktree isolation
+	IsolatedPM2 bool // true when worktree has its own .pm2 directory
+
 	// Runtime state
 	Running         bool
 	ContainerExists bool
@@ -35,6 +38,12 @@ type Worktree struct {
 	CPU             string
 	Mem             string
 	MemPct          string
+}
+
+// PM2Home returns the path to the isolated PM2 home directory.
+// Only meaningful when IsolatedPM2 is true.
+func (wt *Worktree) PM2Home() string {
+	return wt.Path + "/.pm2"
 }
 
 // Service represents a PM2 service inside a container

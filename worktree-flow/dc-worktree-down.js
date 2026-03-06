@@ -1,7 +1,8 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { config, config_mod, run, has_ref, resolve_worktree_path, read_env, sanitize_name } = require('./lib/utils');
+const { config, config_mod, run, has_ref, resolve_worktree_path, read_env, read_env_multi, sanitize_name } = require('./lib/utils');
+const { find_pm2, pm2_home, pm2_cleanup } = require('./lib/pm2');
 
 function parse_args(argv) {
   const options = {
@@ -66,7 +67,17 @@ function main() {
     process.exit(1);
   }
 
-  const repo_root = run('git rev-parse --show-toplevel');
+  let repo_root;
+  if (config && config._repoRoot) {
+    repo_root = config._repoRoot;
+  } else {
+    try {
+      repo_root = run('git rev-parse --show-toplevel');
+    } catch {
+      console.error('Could not determine repository root. Run this from inside a git repo or ensure workflow.config.js is accessible.');
+      process.exit(1);
+    }
+  }
   const worktree_path = resolve_worktree_path(repo_root, options.name);
 
   if (!fs.existsSync(worktree_path)) {
@@ -127,9 +138,21 @@ function main() {
       console.log(`To restart: pnpm dc:up ${options.name}`);
       return;
     }
-  } else if (!options.remove) {
-    console.log('This is a local worktree (no Docker). Use --remove to delete it.');
-    return;
+  } else {
+    // Local (non-Docker) worktree — stop PM2 if running
+    const home = pm2_home(worktree_path);
+    if (fs.existsSync(home)) {
+      const pm2_bin = find_pm2(repo_root);
+      console.log('Stopping local PM2 services...');
+      pm2_cleanup(pm2_bin, home);
+      console.log('PM2 services stopped.');
+    }
+
+    if (!options.remove) {
+      console.log(`Local worktree preserved at: ${worktree_path}`);
+      console.log(`To restart: wt up ${options.name}`);
+      return;
+    }
   }
 
   const remove_cmd = options.force ? 'worktree remove --force' : 'worktree remove';

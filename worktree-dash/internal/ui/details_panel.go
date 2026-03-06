@@ -170,6 +170,22 @@ func build_detail_lines(wt *worktree.Worktree, inner_w, spin_frame int, cfg *con
 			lines = append(lines, detail_line("Status",
 				lipgloss.NewStyle().Foreground(StoppedColor).Render("stopped"), inner_w))
 		}
+
+		// App URL — local worktrees use localhost with offset port
+		var app_port int
+		if cfg != nil {
+			app_port = cfg.PrimaryPort() + wt.Offset
+		} else {
+			app_port = 3001 + wt.Offset
+		}
+		url := fmt.Sprintf("http://localhost:%d/", app_port)
+		lines = append(lines, detail_line("URL",
+			lipgloss.NewStyle().Foreground(HintColor).Render(url), inner_w))
+
+		if wt.Running {
+			lines = append(lines, detail_line("CPU", wt.CPU, inner_w))
+			lines = append(lines, detail_line("Memory", wt.Mem, inner_w))
+		}
 	}
 
 	lines = append(lines, "")
@@ -275,13 +291,35 @@ func build_port_lines(wt *worktree.Worktree, cfg *config.Config) []string {
 	return lines
 }
 
+// detail_line returns one or more lines for a label:value pair.
+// If the value is too long, it wraps onto indented continuation lines.
 func detail_line(label, value string, max_w int) string {
-	line := fmt.Sprintf("%s %s",
-		label_style.Render(label+":"),
-		value_style.Render(value),
-	)
-	if lipgloss.Width(line) > max_w {
-		line = lipgloss.NewStyle().MaxWidth(max_w).Render(line)
+	rendered_label := label_style.Render(label + ":")
+	label_w := lipgloss.Width(rendered_label) + 1 // +1 for the space
+	avail := max_w - label_w
+	if avail < 10 {
+		avail = 10
 	}
-	return line
+
+	if lipgloss.Width(value) <= avail {
+		return fmt.Sprintf("%s %s", rendered_label, value_style.Render(value))
+	}
+
+	// Wrap value across multiple lines
+	var lines []string
+	indent := strings.Repeat(" ", label_w)
+	remaining := value
+	for len(remaining) > 0 {
+		chunk := remaining
+		if len(chunk) > avail {
+			chunk = remaining[:avail]
+		}
+		remaining = remaining[len(chunk):]
+		if len(lines) == 0 {
+			lines = append(lines, fmt.Sprintf("%s %s", rendered_label, value_style.Render(chunk)))
+		} else {
+			lines = append(lines, fmt.Sprintf("%s%s", indent, value_style.Render(chunk)))
+		}
+	}
+	return strings.Join(lines, "\n")
 }

@@ -5,7 +5,8 @@ This guide walks through adding wt to an existing project.
 ## Prerequisites
 
 - Node.js >= 18
-- Docker with Compose v2
+- Docker with Compose v2 (required for Docker worktrees but optional for local mode)
+- PM2 (`npm install -g pm2`) for local worktrees
 - Git
 - Your project has a git repository
 
@@ -107,6 +108,29 @@ Best for: multi-container setups, existing compose workflows, monorepos.
 
 See [Docker Strategies](docker-strategies.md) for full details on both approaches.
 
+### Option C: Local (no Docker)
+
+Run worktrees directly on the host with PM2 managing services. Each worktree gets an isolated PM2 daemon via `PM2_HOME`.
+
+```js
+features: {
+  localDev: true,
+},
+
+services: {
+  pm2: {
+    ecosystemConfig: 'ecosystem.config.cjs',
+  },
+},
+```
+
+Best for: projects that don't need Docker isolation, fast startup, lower resource usage.
+
+Create with:
+```bash
+node worktree-flow/dc-worktree-up.js feat/my-feature --from=origin/main --no-docker
+```
+
 ## Step 3: Add Package Scripts (Optional)
 
 If your project uses npm/pnpm, add convenience scripts to `package.json`:
@@ -161,6 +185,15 @@ pnpm dc:info my-feat
 
 # Open a shell
 pnpm dc:bash my-feat
+```
+
+For local worktrees:
+```bash
+# Check PM2 status
+PM2_HOME=<worktree-path>/.pm2 pm2 list
+
+# View logs
+PM2_HOME=<worktree-path>/.pm2 pm2 logs
 ```
 
 ## Next Steps

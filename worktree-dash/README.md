@@ -32,3 +32,11 @@ From your project repo:
 ```bash
 pnpm dash
 ```
+
+## Features
+
+- Real-time container stats (CPU, memory, uptime) for Docker worktrees
+- PM2 service management for both Docker and local worktrees
+- Local worktree support: start/stop/restart with isolated PM2_HOME
+- URL, CPU, and memory display for local worktrees in the details panel
+- Integrated terminal sessions (shell, logs, Claude)
