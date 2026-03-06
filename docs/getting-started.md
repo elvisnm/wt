@@ -12,6 +12,18 @@ This guide walks through adding wt to an existing project.
 
 ## Step 1: Generate a Config
 
+**Option A: From a project template** (recommended when one exists)
+
+If your project ships a `workflow.config.js.<name>` template (e.g., `workflow.config.js.skulabs`), initialize from it:
+
+```bash
+wt init --custom=<name>
+```
+
+This copies the template to `workflow.config.js` and auto-personalizes machine-specific values (like the Claude binary path). Use `--force` to overwrite an existing config.
+
+**Option B: Auto-detect from scratch**
+
 From the wt directory, run the init wizard targeting your project:
 
 ```bash

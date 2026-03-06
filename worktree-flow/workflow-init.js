@@ -11,6 +11,7 @@
  *   --force                   Overwrite existing workflow.config.js
  *   --dry-run                 Print what would be generated, don't write
  *   --personalize             Detect and update user-specific values (claude path)
+ *   --custom=<name>           Copy workflow.config.js.<name> and auto-personalize
  *
  * Default directory is CWD.
  */
@@ -1086,6 +1087,65 @@ async function personalize(target_dir) {
   p.outro('Done');
 }
 
+// ── Custom Template Mode ─────────────────────────────────────────────────────
+
+/**
+ * Copy workflow.config.js.<name> to workflow.config.js and auto-personalize.
+ */
+async function init_from_custom(target_dir, name, force) {
+  const p = await import('@clack/prompts');
+
+  const template_path = path.join(target_dir, `${CONFIG_FILENAME}.${name}`);
+  const config_path = path.join(target_dir, CONFIG_FILENAME);
+
+  if (!file_exists(template_path)) {
+    p.log.error(`Template not found: ${CONFIG_FILENAME}.${name}`);
+    process.exit(1);
+  }
+
+  if (file_exists(config_path) && !force) {
+    p.log.error(`${CONFIG_FILENAME} already exists. Use --force to overwrite.`);
+    process.exit(1);
+  }
+
+  p.intro(`wt init --custom=${name}`);
+
+  // Copy template
+  fs.copyFileSync(template_path, config_path);
+  p.log.success(`Copied ${CONFIG_FILENAME}.${name} → ${CONFIG_FILENAME}`);
+
+  // Auto-personalize claude path
+  let config_text = read_text(config_path);
+  let config;
+  try {
+    delete require.cache[require.resolve(config_path)];
+    config = require(config_path);
+  } catch (err) {
+    p.log.warn(`Could not parse config for personalization: ${err.message}`);
+    p.outro('Done (copied without personalization)');
+    return;
+  }
+
+  const claude_path = detect_claude();
+  const current_claude = config && config.dash && config.dash.commands
+    && config.dash.commands.claude && config.dash.commands.claude.cmd;
+
+  if (claude_path && claude_path !== current_claude) {
+    const claude_re = /(claude:\s*\{[^}]*?cmd:\s*)(["'])([^"']*?)\2/;
+    if (claude_re.test(config_text)) {
+      config_text = config_text.replace(claude_re, `$1$2${claude_path}$2`);
+      fs.writeFileSync(config_path, config_text, 'utf8');
+      p.log.success(`Updated claude path → ${claude_path}`);
+    }
+  } else if (claude_path) {
+    p.log.info('Claude path already correct');
+  } else {
+    p.log.warn('Could not detect claude binary — update manually');
+  }
+
+  p.outro('Done');
+}
+
 // ── CLI Entry Point ──────────────────────────────────────────────────────────
 
 async function main() {
@@ -1096,14 +1156,22 @@ async function main() {
   let dry_run = false;
   let do_personalize = false;
 
+  let custom_name = null;
+
   for (const arg of args) {
     if (arg === '--force') { force = true; continue; }
     if (arg === '--dry-run') { dry_run = true; continue; }
     if (arg === '--personalize') { do_personalize = true; continue; }
+    if (arg.startsWith('--custom=')) { custom_name = arg.replace('--custom=', ''); continue; }
     if (!arg.startsWith('-') && !target_dir) { target_dir = arg; continue; }
   }
 
   target_dir = path.resolve(target_dir || process.cwd());
+
+  // Custom mode: copy template and auto-personalize
+  if (custom_name) {
+    return init_from_custom(target_dir, custom_name, force);
+  }
 
   // Personalize mode: update user-specific values in existing config
   if (do_personalize) {
@@ -1215,6 +1283,7 @@ module.exports = {
   assemble_config,
   generate_config_file,
   personalize,
+  init_from_custom,
 };
 
 // Run CLI when executed directly

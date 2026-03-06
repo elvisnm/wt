@@ -274,7 +274,19 @@ An interactive menu (powered by `@clack/prompts`) that groups all commands into 
 ### `workflow-init.js` — Generate workflow.config.js
 
 ```bash
-node worktree-flow/workflow-init.js [target-dir]
+wt init [target-dir]                # auto-detect and generate config
+wt init --custom=<name>             # copy workflow.config.js.<name> and auto-personalize
+wt init --custom=<name> --force     # overwrite existing config
+wt init --personalize               # update machine-specific values in existing config
 ```
 
-Interactive wizard that detects your project type and generates a complete `workflow.config.js`. Detects: Node.js, Go, Rust, Python. Finds existing docker-compose files. Prompts for all config options.
+| Flag | Description |
+|---|---|
+| `--custom=<name>` | Copy `workflow.config.js.<name>` template and auto-personalize (claude path) |
+| `--personalize` | Update machine-specific values in an existing config |
+| `--force` | Overwrite existing `workflow.config.js` |
+| `--dry-run` | Print what would be generated without writing |
+
+**From a template:** Use `--custom=<name>` when the project ships a committed template (e.g., `workflow.config.js.skulabs`). This copies the template and auto-detects machine-specific values like the Claude binary path.
+
+**From scratch:** Without flags, runs an interactive wizard that detects the project type (Node.js, Go, Rust, Python), finds docker-compose files, and generates a complete config.
