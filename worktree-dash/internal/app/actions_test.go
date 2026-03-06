@@ -34,10 +34,13 @@ func TestActionsForWorktree_LocalRunning_NoConfig(t *testing.T) {
 	m := &Model{}
 	wt := worktree.Worktree{Type: worktree.TypeLocal, Running: true}
 	got := m.actions_for_worktree(wt)
-	// No config means no stopped services → "Start service" option excluded
+	// No config means no services → both "Start service" and "Stop service" excluded
 	for _, a := range got {
-		if a.Key == "o" {
+		if a.Label == "Start service" {
 			t.Error("expected no 'Start service' action without config")
+		}
+		if a.Label == "Stop service" {
+			t.Error("expected no 'Stop service' action without config")
 		}
 	}
 }
@@ -56,14 +59,21 @@ func TestActionsForWorktree_LocalRunning_WithStoppedServices(t *testing.T) {
 	}
 	wt := worktree.Worktree{Type: worktree.TypeLocal, Running: true}
 	got := m.actions_for_worktree(wt)
-	found := false
+	found_start := false
+	found_stop := false
 	for _, a := range got {
-		if a.Key == "o" {
-			found = true
+		if a.Label == "Start service" {
+			found_start = true
+		}
+		if a.Label == "Stop service" {
+			found_stop = true
 		}
 	}
-	if !found {
+	if !found_start {
 		t.Error("expected 'Start service' action when stopped services exist")
+	}
+	if !found_stop {
+		t.Error("expected 'Stop service' action when running services exist")
 	}
 }
 
@@ -83,9 +93,18 @@ func TestActionsForWorktree_LocalRunning_AllRunning(t *testing.T) {
 	wt := worktree.Worktree{Type: worktree.TypeLocal, Running: true}
 	got := m.actions_for_worktree(wt)
 	for _, a := range got {
-		if a.Key == "o" {
+		if a.Label == "Start service" {
 			t.Error("expected no 'Start service' action when all services running")
 		}
+	}
+	found_stop := false
+	for _, a := range got {
+		if a.Label == "Stop service" {
+			found_stop = true
+		}
+	}
+	if !found_stop {
+		t.Error("expected 'Stop service' action when services are running")
 	}
 }
 

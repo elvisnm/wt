@@ -7,4 +7,5 @@ const (
 	pickerMaintenance  = "maintenance"
 	pickerRemove       = "remove"
 	pickerStartService = "start_service"
+	pickerStopService  = "stop_service"
 )

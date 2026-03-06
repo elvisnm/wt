@@ -1132,6 +1132,8 @@ func (m Model) dispatch_picker(action ui.PickerAction) (Model, tea.Cmd) {
 		return m.execute_remove_action(action)
 	case pickerStartService:
 		return m.execute_start_service_action(action)
+	case pickerStopService:
+		return m.execute_stop_service_action(action)
 	default:
 		return m.execute_picker_action(action)
 	}
@@ -1184,6 +1186,8 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 		return m, cmd_docker_action("start", *wt, m.repo_root, m.cfg)
 	case "o":
 		return m.open_start_service_picker(*wt)
+	case "p":
+		return m.open_stop_service_picker(*wt)
 	case "i":
 		return m.open_worktree_info()
 	case "x":
@@ -2542,6 +2546,84 @@ func cmd_start_isolated_services(wt worktree.Worktree, pm2_names []string, cfg *
 		}
 		return MsgActionOutput{Output: last_out, Err: last_err}
 	}
+}
+
+func (m Model) open_stop_service_picker(wt worktree.Worktree) (Model, tea.Cmd) {
+	debug_log("[stop_svc] open_stop_service_picker: alias=%s services=%d cfg=%v", wt.Alias, len(m.services), m.cfg != nil)
+	if m.cfg == nil || len(m.cfg.Dash.Services.List) == 0 {
+		m.activity = "No services configured"
+		return m, nil
+	}
+
+	running := m.running_base_names(wt.Alias)
+	debug_log("[stop_svc] running base names: %v", running)
+
+	var actions []ui.PickerAction
+	idx := 0
+	for _, entry := range m.cfg.Dash.Services.List {
+		// Check if any process for this entry is running
+		any_running := false
+		for _, b := range entry.BaseProcesses() {
+			if running[b] {
+				any_running = true
+				break
+			}
+		}
+		if !any_running {
+			continue
+		}
+		if idx >= 26 {
+			break
+		}
+		key := string(rune('a' + idx))
+		actions = append(actions, ui.PickerAction{
+			Key:   key,
+			Label: entry.Name,
+			Desc:  fmt.Sprintf("port %d", entry.Port),
+		})
+		idx++
+	}
+
+	debug_log("[stop_svc] running services to offer: %d", len(actions))
+	if len(actions) == 0 {
+		m.activity = "No services are running"
+		return m, nil
+	}
+
+	m.picker_actions = actions
+	m.picker_cursor = 0
+	m.picker_open = true
+	m.picker_context = pickerStopService
+	return m, nil
+}
+
+func (m Model) execute_stop_service_action(action ui.PickerAction) (Model, tea.Cmd) {
+	debug_log("[stop_svc] execute: label=%s key=%s", action.Label, action.Key)
+	wt := m.selected_worktree()
+	if wt == nil {
+		return m, nil
+	}
+
+	var pm2_names []string
+	for _, entry := range m.cfg.Dash.Services.List {
+		if entry.Name == action.Label {
+			pm2_names = pm2_process_names(entry, wt.Alias)
+			break
+		}
+	}
+
+	if len(pm2_names) == 0 {
+		return m, nil
+	}
+
+	m.activity = fmt.Sprintf("Stopping %s...", action.Label)
+
+	var cmds []tea.Cmd
+	for _, name := range pm2_names {
+		svc := worktree.Service{Name: name, DisplayName: name}
+		cmds = append(cmds, cmd_service_action("stop", *wt, svc, m.cfg))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m Model) open_db_picker() (tea.Model, tea.Cmd) {

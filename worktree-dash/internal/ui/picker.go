@@ -94,6 +94,7 @@ var LocalRunningActions = []PickerAction{
 	actionClaude,
 	{Key: "l", Label: labels.Logs, Desc: "Dev logs"},
 	{Key: "o", Label: "Start service", Desc: "Start a stopped service"},
+	{Key: "p", Label: "Stop service", Desc: "Stop a running service"},
 	{Key: "r", Label: "Restart", Desc: "Restart services"},
 	actionInfo,
 	{Key: "t", Label: "Stop", Desc: "Stop dev server"},

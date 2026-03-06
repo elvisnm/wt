@@ -90,14 +90,20 @@ func (m *Model) actions_for_worktree(wt worktree.Worktree) []ui.PickerAction {
 }
 
 // filter_local_running_actions returns LocalRunningActions, excluding
-// "Start service" when all configured services are already running.
+// "Start service" when all configured services are running, and
+// "Stop service" when no configured services are running.
 func (m *Model) filter_local_running_actions() []ui.PickerAction {
-	if m.has_stopped_services() {
+	has_stopped := m.has_stopped_services()
+	has_running := m.has_running_services()
+	if has_stopped && has_running {
 		return ui.LocalRunningActions
 	}
-	actions := make([]ui.PickerAction, 0, len(ui.LocalRunningActions)-1)
+	actions := make([]ui.PickerAction, 0, len(ui.LocalRunningActions))
 	for _, a := range ui.LocalRunningActions {
-		if a.Label == "Start service" {
+		if !has_stopped && a.Label == "Start service" {
+			continue
+		}
+		if !has_running && a.Label == "Stop service" {
 			continue
 		}
 		actions = append(actions, a)
@@ -109,12 +115,7 @@ func (m *Model) has_stopped_services() bool {
 	if m.cfg == nil || len(m.cfg.Dash.Services.List) == 0 {
 		return false
 	}
-	wt := m.selected_worktree()
-	alias := ""
-	if wt != nil {
-		alias = wt.Alias
-	}
-	running := m.running_base_names(alias)
+	running := m.running_base_names(m.selected_alias())
 	for _, entry := range m.cfg.Dash.Services.List {
 		for _, b := range entry.BaseProcesses() {
 			if !running[b] {
@@ -123,6 +124,28 @@ func (m *Model) has_stopped_services() bool {
 		}
 	}
 	return false
+}
+
+func (m *Model) has_running_services() bool {
+	if m.cfg == nil || len(m.cfg.Dash.Services.List) == 0 {
+		return false
+	}
+	running := m.running_base_names(m.selected_alias())
+	for _, entry := range m.cfg.Dash.Services.List {
+		for _, b := range entry.BaseProcesses() {
+			if running[b] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (m *Model) selected_alias() string {
+	if wt := m.selected_worktree(); wt != nil {
+		return wt.Alias
+	}
+	return ""
 }
 
 func cmd_docker_action(action string, wt worktree.Worktree, repo_root string, cfg *config.Config) tea.Cmd {
