@@ -86,6 +86,11 @@ type ServicesConfig struct {
 	DefaultMode string              `json:"defaultMode"`
 	Primary     string              `json:"primary"`
 	QuickLinks  []QuickLink         `json:"quickLinks"`
+	PM2         PM2Config           `json:"pm2"`
+}
+
+type PM2Config struct {
+	EcosystemConfig string `json:"ecosystemConfig"`
 }
 
 type QuickLink struct {
@@ -318,7 +323,7 @@ func (c *Config) applyDefaults() {
 	if c.Docker.Proxy.DynamicDir == "" && c.Docker.Proxy.Type == "traefik" {
 		c.Docker.Proxy.DynamicDir = "traefik/dynamic"
 	}
-	if c.Docker.Proxy.DomainTemplate == "" {
+	if c.Docker.Proxy.DomainTemplate == "" && c.Docker.Proxy.Type != "" {
 		c.Docker.Proxy.DomainTemplate = "{alias}.localhost"
 	}
 }
@@ -377,9 +382,10 @@ func (c *Config) ContainerPrefix() string {
 }
 
 // DomainFor returns the domain for a worktree alias using the proxy template.
+// Returns "" when no proxy is configured (port-based access only).
 func (c *Config) DomainFor(alias string) string {
 	if c.Docker.Proxy.DomainTemplate == "" {
-		return fmt.Sprintf("%s.localhost", alias)
+		return ""
 	}
 	return strings.ReplaceAll(c.Docker.Proxy.DomainTemplate, "{alias}", alias)
 }
@@ -487,6 +493,11 @@ func (c *Config) DockerServiceManager() string {
 		return c.Dash.Services.Docker.Manager
 	}
 	return c.Dash.Services.Manager
+}
+
+// PM2EcosystemConfig returns the ecosystem config filename from services.pm2.ecosystemConfig.
+func (c *Config) PM2EcosystemConfig() string {
+	return c.Services.PM2.EcosystemConfig
 }
 
 // ── Utilities ───────────────────────────────────────────────────────────

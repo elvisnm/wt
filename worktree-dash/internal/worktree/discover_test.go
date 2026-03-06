@@ -855,8 +855,8 @@ services:
 	if wt.Branch != "feat/docker-wt" {
 		t.Errorf("expected branch 'feat/docker-wt', got %q", wt.Branch)
 	}
-	if wt.Domain != "my-feat.localhost" {
-		t.Errorf("expected domain 'my-feat.localhost', got %q", wt.Domain)
+	if wt.Domain != "" {
+		t.Errorf("expected empty domain (no proxy config), got %q", wt.Domain)
 	}
 	// DB name: no config, no mongo url -> db_{safe_alias}
 	if wt.DBName != "db_my_feat" {

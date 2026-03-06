@@ -355,7 +355,7 @@ async function main() {
   const db_prefix = config && config.database ? (config.database.dbNamePrefix || 'db_') : 'db_';
   const db_default = config && config.database ? (config.database.defaultDb || 'db') : 'db';
 
-  if (has_local_db) {
+  if (has_local_db && use_docker) {
     const isolated_name = config ? config_mod.db_name(config, final_alias) : `${db_prefix}${final_alias.replace(/[^a-zA-Z0-9_]/g, '_')}`;
     db_choice = await p.select({
       message: 'Database?',
@@ -374,6 +374,8 @@ async function main() {
       });
       if (p.isCancel(seed_db)) { p.cancel('Cancelled.'); process.exit(0); }
     }
+  } else if (has_local_db) {
+    db_choice = 'shared';
   }
 
   if (use_docker) {

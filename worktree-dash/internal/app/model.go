@@ -379,30 +379,23 @@ func cmd_fetch_services(wt worktree.Worktree, cfg *config.Config) tea.Cmd {
 }
 
 func cmd_fetch_local_services(wt worktree.Worktree, cfg *config.Config) tea.Cmd {
-	manager := "pm2"
-	if cfg != nil {
-		manager = cfg.ServiceManager()
-	}
+	has_static := cfg != nil && len(cfg.Dash.Services.List) > 0
 	return func() tea.Msg {
-		debug_log("[services] fetch_local_services: %s manager=%s path=%s", wt.Alias, manager, wt.Path)
+		debug_log("[services] fetch_local_services: %s has_static=%v path=%s", wt.Alias, has_static, wt.Path)
 
 		var svcs []worktree.Service
-		switch manager {
-		case "static":
+		var pm2_svcs []worktree.Service
+		if wt.IsolatedPM2 {
+			pm2_svcs = pm2.FetchServicesWithHome(wt.PM2Home())
+		} else {
+			pm2_svcs = pm2.FetchServices(wt.Path)
+		}
+
+		if has_static {
 			svcs = build_static_services(cfg, &wt)
-			var pm2_svcs []worktree.Service
-			if wt.IsolatedPM2 {
-				pm2_svcs = pm2.FetchServicesWithHome(wt.PM2Home())
-			} else {
-				pm2_svcs = pm2.FetchServices(wt.Path)
-			}
 			svcs = merge_pm2_into_static(svcs, pm2_svcs, cfg)
-		default:
-			if wt.IsolatedPM2 {
-				svcs = pm2.FetchServicesWithHome(wt.PM2Home())
-			} else {
-				svcs = pm2.FetchServices(wt.Path)
-			}
+		} else {
+			svcs = pm2_svcs
 		}
 		debug_log("[services] fetch_local_services: %s returned %d services", wt.Alias, len(svcs))
 		return MsgServicesUpdated{Services: svcs}
@@ -421,8 +414,22 @@ func build_static_services(cfg *config.Config, wt *worktree.Worktree) []worktree
 		{Name: "__all", DisplayName: "All services", Status: "online"},
 	}
 
+	// Filter by worktree mode if set
+	var mode_filter map[string]bool
+	if wt != nil && wt.Mode != "" {
+		if mode_svcs := cfg.ServicesForMode(wt.Mode); mode_svcs != nil {
+			mode_filter = make(map[string]bool, len(mode_svcs))
+			for _, s := range mode_svcs {
+				mode_filter[s] = true
+			}
+		}
+	}
+
 	all_online := true
 	for _, entry := range cfg.Dash.Services.List {
+		if mode_filter != nil && !mode_filter[entry.Name] {
+			continue
+		}
 		svc := worktree.Service{
 			Name:        entry.Name,
 			DisplayName: entry.Name,
@@ -435,7 +442,7 @@ func build_static_services(cfg *config.Config, wt *worktree.Worktree) []worktree
 				// Query actual host port from Docker
 				port = docker_host_port(container_for_service(*wt, entry.Name, cfg), entry.Port)
 			} else {
-				port = entry.Port
+				port = entry.Port + wt.Offset
 			}
 			if port > 0 {
 				addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -571,42 +578,23 @@ func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *t
 	}
 	debug_log("[discovery] mark_local_running: method=%s", check)
 
-	// First pass: check isolated PM2_HOME worktrees (these have .pm2 dirs)
-	// and collect non-isolated worktrees for the legacy check.
-	var legacy_paths map[string]string
+	// Collect all local worktree paths for status checking
+	local_paths := make(map[string]string)
 	for i := range wts {
-		if wts[i].Type != worktree.TypeLocal {
-			continue
-		}
-		if wts[i].IsolatedPM2 {
-			running, cpu, mem := pm2.StatusWithHome(wts[i].PM2Home())
-			wts[i].Running = running
-			wts[i].CPU = cpu
-			wts[i].Mem = mem
-			if running {
-				debug_log("[discovery]   %s running=true (pm2_home)", wts[i].Alias)
-			}
-		} else {
-			if legacy_paths == nil {
-				legacy_paths = make(map[string]string)
-			}
-			legacy_paths[wts[i].Path] = wts[i].Name
+		if wts[i].Type == worktree.TypeLocal {
+			local_paths[wts[i].Path] = wts[i].Name
 		}
 	}
-
-	// Second pass: handle non-isolated worktrees with the configured method
-	if len(legacy_paths) == 0 {
+	if len(local_paths) == 0 {
 		return wts
 	}
 
 	switch check {
 	case "devTab":
+		// Check for running dev/create terminal tabs first
 		var fallback_paths map[string]string
 		for i := range wts {
-			if wts[i].Type != worktree.TypeLocal || wts[i].Running || term_mgr == nil {
-				continue
-			}
-			if _, ok := legacy_paths[wts[i].Path]; !ok {
+			if wts[i].Type != worktree.TypeLocal || term_mgr == nil {
 				continue
 			}
 			dev_label := labels.Tab(labels.Dev, wts[i].Alias)
@@ -622,21 +610,60 @@ func mark_local_running(wts []worktree.Worktree, cfg *config.Config, term_mgr *t
 				fallback_paths[wts[i].Path] = wts[i].Name
 			}
 		}
+		// Fallback: check PM2 for worktrees without a dev tab
 		if len(fallback_paths) > 0 {
-			running := pm2.FetchRunningWorktrees(fallback_paths)
+			// For isolated PM2, check each worktree's own PM2_HOME
 			for i := range wts {
-				if wts[i].Type == worktree.TypeLocal && !wts[i].Running && running[wts[i].Name] {
-					wts[i].Running = true
-					debug_log("[discovery]   %s running=true (pm2 fallback)", wts[i].Alias)
+				if wts[i].Type != worktree.TypeLocal || wts[i].Running {
+					continue
+				}
+				if wts[i].IsolatedPM2 {
+					running, cpu, mem := pm2.StatusWithHome(wts[i].PM2Home())
+					wts[i].Running = running
+					wts[i].CPU = cpu
+					wts[i].Mem = mem
+					if running {
+						debug_log("[discovery]   %s running=true (pm2_home fallback)", wts[i].Alias)
+					}
+					delete(fallback_paths, wts[i].Path)
+				}
+			}
+			// Non-isolated PM2 fallback
+			if len(fallback_paths) > 0 {
+				running := pm2.FetchRunningWorktrees(fallback_paths)
+				for i := range wts {
+					if wts[i].Type == worktree.TypeLocal && !wts[i].Running && running[wts[i].Name] {
+						wts[i].Running = true
+						debug_log("[discovery]   %s running=true (pm2 fallback)", wts[i].Alias)
+					}
 				}
 			}
 		}
 	default: // "pm2"
-		running := pm2.FetchRunningWorktrees(legacy_paths)
+		// For isolated PM2, check each worktree's own PM2_HOME
 		for i := range wts {
-			if wts[i].Type == worktree.TypeLocal && !wts[i].Running {
-				if _, ok := legacy_paths[wts[i].Path]; ok {
-					wts[i].Running = running[wts[i].Name]
+			if wts[i].Type != worktree.TypeLocal {
+				continue
+			}
+			if wts[i].IsolatedPM2 {
+				running, cpu, mem := pm2.StatusWithHome(wts[i].PM2Home())
+				wts[i].Running = running
+				wts[i].CPU = cpu
+				wts[i].Mem = mem
+				if running {
+					debug_log("[discovery]   %s running=true (pm2_home)", wts[i].Alias)
+				}
+				delete(local_paths, wts[i].Path)
+			}
+		}
+		// Non-isolated: global PM2 check
+		if len(local_paths) > 0 {
+			running := pm2.FetchRunningWorktrees(local_paths)
+			for i := range wts {
+				if wts[i].Type == worktree.TypeLocal && !wts[i].Running {
+					if _, ok := local_paths[wts[i].Path]; ok {
+						wts[i].Running = running[wts[i].Name]
+					}
 				}
 			}
 		}

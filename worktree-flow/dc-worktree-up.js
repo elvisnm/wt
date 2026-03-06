@@ -8,7 +8,7 @@ const {
   config, config_mod, run, auto_alias, has_ref, compute_auto_offset,
   resolve_worktrees_dir, update_env_key, remove_env_key,
 } = require('./lib/utils');
-const { find_pm2, pm2_home, pm2_start, pm2_cleanup } = require('./lib/pm2');
+const { find_pm2, pm2_home, pm2_start, pm2_cleanup, load_aws_env } = require('./lib/pm2');
 const { generate_config, OUTPUT_FILENAME } = require('./generate-ecosystem-config');
 const { generate_workspace } = require('./generate-workspace-config');
 const { write_traefik_config, is_traefik_routing } = require('./generate-docker-compose');
@@ -242,8 +242,13 @@ function copy_setup_files(repo_root, worktree_path) {
     if (!fs.existsSync(src)) continue;
 
     try {
-      fs.mkdirSync(path.dirname(dst), { recursive: true });
-      fs.copyFileSync(src, dst);
+      const stat = fs.statSync(src);
+      if (stat.isDirectory()) {
+        fs.cpSync(src, dst, { recursive: true });
+      } else {
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(src, dst);
+      }
       copied++;
     } catch (e) {
       console.warn(`Warning: Could not copy ${rel}: ${e.message}`);
@@ -668,7 +673,7 @@ function main() {
         const mode = options.mode || config.services.defaultMode || 'full';
         const active_services = config_mod.resolve_services(config, mode);
         const passthrough = config.services.pm2.envPassthrough || [];
-        const env_overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development' };
+        const env_overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development', ...load_aws_env() };
         const env_file_local = path.join(worktree_path, config.env.filename || '.env.worktree');
         if (fs.existsSync(env_file_local)) {
           const content = fs.readFileSync(env_file_local, 'utf8');
@@ -695,7 +700,7 @@ function main() {
 
         if (process.env.WT_INNER !== '1') {
           console.log('Starting PM2 services...');
-          pm2_start({ pm2: pm2_bin, pm2_home: home, ecosystem_config: ecosystem_path, cwd: worktree_path });
+          pm2_start({ pm2: pm2_bin, pm2_home: home, ecosystem_config: ecosystem_path, env: load_aws_env(), cwd: worktree_path });
           console.log('PM2 services restarted.');
         }
       }
@@ -785,7 +790,7 @@ function main() {
 
       // Build env overrides from passthrough keys + env file
       const passthrough = config.services.pm2.envPassthrough || [];
-      const env_overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development' };
+      const env_overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development', ...load_aws_env() };
       if (fs.existsSync(env_file_local)) {
         const content = fs.readFileSync(env_file_local, 'utf8');
         for (const line of content.split('\n')) {
@@ -854,6 +859,7 @@ function main() {
         pm2: pm2_bin,
         pm2_home: home,
         ecosystem_config: ecosystem_path,
+        env: load_aws_env(),
         cwd: worktree_path,
       });
       console.log('PM2 services started.');
@@ -879,6 +885,30 @@ function main() {
 function create_git_worktree(repo_root, worktree_path, target_branch, options) {
   execSync(`git -C "${repo_root}" worktree prune`, { stdio: 'pipe' });
 
+  // Clean up leftover directory from a failed previous create (e.g., stale .pm2/)
+  if (fs.existsSync(worktree_path)) {
+    try {
+      execSync(`git -C "${worktree_path}" rev-parse --git-dir`, { stdio: 'pipe' });
+    } catch {
+      console.log(`Removing stale directory: ${worktree_path}`);
+      fs.rmSync(worktree_path, { recursive: true, force: true });
+    }
+  }
+
+  // Fetch the base ref so we branch from the latest remote state
+  if (options.from) {
+    const remote_match = options.from.match(/^(\w+)\/(.+)$/);
+    if (remote_match) {
+      const [, remote, branch] = remote_match;
+      try {
+        console.log(`Fetching ${remote}/${branch}...`);
+        execSync(`git -C "${repo_root}" fetch ${remote} ${branch}`, { stdio: 'pipe' });
+      } catch {
+        // fetch may fail (offline, etc.) — continue with local ref
+      }
+    }
+  }
+
   const branch_exists_locally = has_ref(repo_root, `refs/heads/${target_branch}`);
 
   if (options.branch) {
@@ -896,11 +926,22 @@ function create_git_worktree(repo_root, worktree_path, target_branch, options) {
     );
   } else if (options.from) {
     if (branch_exists_locally) {
-      console.log(`Branch "${target_branch}" exists locally, checking out into worktree...`);
-      execSync(
-        `git -C "${repo_root}" worktree add "${worktree_path}" "${target_branch}"`,
-        { stdio: 'inherit' },
-      );
+      // Delete stale local branch and recreate from the latest base ref
+      console.log(`Branch "${target_branch}" exists locally, recreating from ${options.from}...`);
+      try {
+        execSync(`git -C "${repo_root}" branch -D "${target_branch}"`, { stdio: 'pipe' });
+        execSync(
+          `git -C "${repo_root}" worktree add -b "${target_branch}" "${worktree_path}" "${options.from}"`,
+          { stdio: 'inherit' },
+        );
+      } catch {
+        // branch -D fails if checked out elsewhere — fall back to using existing branch
+        console.log(`Could not reset branch, using existing "${target_branch}"...`);
+        execSync(
+          `git -C "${repo_root}" worktree add "${worktree_path}" "${target_branch}"`,
+          { stdio: 'inherit' },
+        );
+      }
     } else {
       console.log(`Creating branch "${target_branch}" from ${options.from}...`);
       execSync(

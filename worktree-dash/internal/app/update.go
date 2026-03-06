@@ -1497,21 +1497,19 @@ func cmd_service_action(action string, wt worktree.Worktree, svc worktree.Servic
 		} else if wt.IsolatedPM2 {
 			env := pm2.HomeEnv(wt.PM2Home())
 			if action == "start" {
-				// Regenerate ecosystem with all services so --only can target any process
-				repo_root := ""
+				// Use the project's own ecosystem config (same one pnpm dev uses)
+				ecosystem := ""
 				if cfg != nil {
-					repo_root = cfg.RepoRoot
+					ecosystem = cfg.PM2EcosystemConfig()
 				}
-				scripts_dir := flow_scripts_dir(repo_root, cfg)
-				gen_script := filepath.Join(scripts_dir, "generate-ecosystem-config.js")
-				debug_log("[service_action] regenerating ecosystem: node %s --dir %s --mode full", gen_script, wt.Path)
-				run_host_cmd("node", gen_script, "--dir", wt.Path, "--mode", "full")
-
-				ecosystem := filepath.Join(wt.Path, "ecosystem.worktree.config.js")
-				debug_log("[service_action] start via ecosystem: %s --only %s", ecosystem, pm2_target)
-				out, err = run_host_cmd_env(env, "pm2", "start", ecosystem, "--only", pm2_target, "--update-env")
+				if ecosystem == "" {
+					ecosystem = "ecosystem.dev.config.js"
+				}
+				eco_path := filepath.Join(wt.Path, ecosystem)
+				debug_log("[service_action] start via ecosystem: %s --only %s", eco_path, pm2_target)
+				out, err = run_host_cmd_env_dir(wt.Path, env, "pm2", "start", eco_path, "--only", pm2_target, "--update-env")
 			} else {
-				out, err = run_host_cmd_env(env, "pm2", action, pm2_target)
+				out, err = run_host_cmd_env_dir(wt.Path, env, "pm2", action, pm2_target)
 			}
 		} else {
 			out, err = run_host_cmd("pm2", action, pm2_target)
@@ -1535,6 +1533,14 @@ func run_host_cmd(name string, args ...string) (string, error) {
 
 func run_host_cmd_env(env []string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), env...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func run_host_cmd_env_dir(dir string, env []string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
@@ -1821,26 +1827,12 @@ func (m Model) open_worktree_info() (Model, tea.Cmd) {
 	return m, nil
 }
 
-// start_dev_server opens a terminal tab running pnpm dev for a local worktree,
-// or starts PM2 services if the worktree has an isolated .pm2 directory.
+// start_dev_server opens a terminal tab running pnpm dev for a local worktree.
+// The project's dev script handles everything: env loading, esbuild, PM2 with the
+// correct ecosystem config. For isolated PM2 worktrees, .env.worktree already
+// contains PM2_HOME so the dev script picks it up automatically.
 func (m Model) start_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
-	debug_log("[services] start_dev_server: alias=%s path=%s", wt.Alias, wt.Path)
-
-	// For isolated PM2 worktrees, start PM2 directly (no tmux tab needed)
-	if wt.IsolatedPM2 {
-		ecosystem := filepath.Join(wt.Path, "ecosystem.worktree.config.js")
-		debug_log("[services] start_dev_server: using isolated PM2 at %s", wt.PM2Home())
-		m.activity = fmt.Sprintf("starting... %s", wt.Alias)
-		return m, tea.Sequence(
-			func() tea.Msg {
-				return MsgActionStarted{WtName: wt.Name, Status: "starting..."}
-			},
-			func() tea.Msg {
-				out, err := run_host_cmd_env(pm2.HomeEnv(wt.PM2Home()), "pm2", "start", ecosystem)
-				return MsgActionOutput{Output: out, Err: err}
-			},
-		)
-	}
+	debug_log("[services] start_dev_server: alias=%s path=%s isolated=%v", wt.Alias, wt.Path, wt.IsolatedPM2)
 
 	// Reload AWS credentials so the spawned process inherits the latest keys
 	reload_aws_credentials()
@@ -2539,23 +2531,22 @@ func (m Model) execute_start_service_action(action ui.PickerAction) (Model, tea.
 // starts all named processes via pm2 --only.
 func cmd_start_isolated_services(wt worktree.Worktree, pm2_names []string, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		repo_root := ""
+		// Use the project's own ecosystem config (same one pnpm dev uses)
+		eco_name := ""
 		if cfg != nil {
-			repo_root = cfg.RepoRoot
+			eco_name = cfg.PM2EcosystemConfig()
 		}
-		scripts_dir := flow_scripts_dir(repo_root, cfg)
-		gen_script := filepath.Join(scripts_dir, "generate-ecosystem-config.js")
-		debug_log("[start_svc] regenerating ecosystem once: node %s --dir %s --mode full", gen_script, wt.Path)
-		run_host_cmd("node", gen_script, "--dir", wt.Path, "--mode", "full")
-
-		ecosystem := filepath.Join(wt.Path, "ecosystem.worktree.config.js")
+		if eco_name == "" {
+			eco_name = "ecosystem.dev.config.js"
+		}
+		ecosystem := filepath.Join(wt.Path, eco_name)
 		env := pm2.HomeEnv(wt.PM2Home())
 
 		var last_out string
 		var last_err error
 		for _, name := range pm2_names {
 			debug_log("[start_svc] start via ecosystem: %s --only %s", ecosystem, name)
-			last_out, last_err = run_host_cmd_env(env, "pm2", "start", ecosystem, "--only", name, "--update-env")
+			last_out, last_err = run_host_cmd_env_dir(wt.Path, env, "pm2", "start", ecosystem, "--only", name, "--update-env")
 			debug_log("[start_svc] start %s: out=%q err=%v", name, last_out, last_err)
 		}
 		return MsgActionOutput{Output: last_out, Err: last_err}

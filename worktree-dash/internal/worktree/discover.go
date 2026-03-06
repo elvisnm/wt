@@ -78,6 +78,12 @@ func Discover(worktrees_dir string, existing []Worktree, cfg *config.Config) []W
 				wt.Offset = read_offset(full_path, cfg)
 				if cfg != nil {
 					wt.Domain = cfg.DomainFor(wt.Alias)
+					if svc_var := cfg.WorktreeVar("services"); svc_var != "" {
+						wt.Mode = read_env_file(full_path, env_filename, svc_var)
+					}
+					if wt.Mode == "" {
+						wt.Mode = cfg.Services.DefaultMode
+					}
 				}
 			}
 
@@ -168,12 +174,8 @@ func Discover(worktrees_dir string, existing []Worktree, cfg *config.Config) []W
 				domain = resolve_traefik_domain(routes, container_alias)
 			}
 		}
-		if domain == "" {
-			if cfg != nil {
-				domain = cfg.DomainFor(alias)
-			} else {
-				domain = fmt.Sprintf("%s.localhost", alias)
-			}
+		if domain == "" && cfg != nil {
+			domain = cfg.DomainFor(alias)
 		}
 
 		mongo_url := read_env_file(full_path, env_filename, db_conn_var)
