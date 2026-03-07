@@ -210,6 +210,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case MsgSsoSessionCheck:
+		if msg.Valid {
+			debug_log("[aws] SSO session valid, pending_action=%s", m.pending_sso_action)
+			return m.resolve_sso_action()
+		}
+		debug_log("[aws] SSO session expired, pending_action=%s, opening login", m.pending_sso_action)
+		m.activity = "AWS SSO session expired — logging in..."
+		return m.open_sso_login()
+
 	case MsgActionStarted:
 		if m.actions_pending == nil {
 			m.actions_pending = make(map[string]bool)
@@ -281,6 +290,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.spin_frame++
 				return m, tick_after(80*time.Millisecond, "spin")
 			}
+			return m, nil
+		case "clear-activity":
+			m.activity = ""
 			return m, nil
 		case "render":
 			// Check if dc-create finished (via sentinel file).
@@ -366,18 +378,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.focus_worktrees_if_empty()
 						return m, tick_after(100*time.Millisecond, "render")
 					}
-					debug_log("[aws] SUCCESS: reloading credentials and restarting services")
-					reload_aws_credentials()
-					// Propagate AWS env vars to tmux server so new windows inherit them
-					if server := m.term_mgr.Server(); server != nil {
-						for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
-							if val := os.Getenv(key); val != "" {
-								server.SetEnv(key, val)
-							}
+					is_sso := m.cfg != nil && m.cfg.AwsSsoProfile() != ""
+					if is_sso {
+						debug_log("[aws] SUCCESS (SSO): exporting credentials from SSO session")
+						if err := export_sso_credentials(m.cfg.AwsSsoProfile()); err != nil {
+							debug_log("[aws] export_sso_credentials FAILED: %v", err)
+							m.activity = fmt.Sprintf("SSO login OK but credential export failed: %v", err)
+							m.focus_worktrees_if_empty()
+							return m, tick_after(100*time.Millisecond, "render")
 						}
-						debug_log("[aws] propagated AWS keys to tmux server")
+						// Propagate SSO-exported keys to tmux server
+						if server := m.term_mgr.Server(); server != nil {
+							for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+								if val := os.Getenv(key); val != "" {
+									server.SetEnv(key, val)
+								}
+							}
+							debug_log("[aws] propagated SSO-exported keys to tmux server")
+						}
+					} else {
+						debug_log("[aws] SUCCESS (paste): reloading credentials and restarting services")
+						reload_aws_credentials()
+						// Propagate AWS env vars to tmux server so new windows inherit them
+						if server := m.term_mgr.Server(); server != nil {
+							for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+								if val := os.Getenv(key); val != "" {
+									server.SetEnv(key, val)
+								}
+							}
+							debug_log("[aws] propagated AWS keys to tmux server")
+						}
 					}
-					m.activity = "AWS keys updated — restarting services..."
+					// If a deferred action was pending, execute it
+					if m.pending_sso_action != "" {
+						debug_log("[aws] SSO login done, resolving pending action=%s", m.pending_sso_action)
+						return m.resolve_sso_action()
+					}
+
+					m.activity = "AWS credentials updated — restarting services..."
 					cmds := []tea.Cmd{
 						tick_after(100*time.Millisecond, "render"),
 						tick_after(3*time.Second, "status"),
@@ -707,7 +745,11 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "A":
 		if m.cfg == nil || m.cfg.FeatureEnabled("awsCredentials") {
-			debug_log("[aws] Shift+A pressed: opening aws-keys")
+			debug_log("[aws] Shift+A pressed")
+			// SSO mode: check session first
+			if profile := m.cfg.AwsSsoProfile(); profile != "" {
+				return m.check_sso_then_login()
+			}
 			return m.open_aws_keys()
 		}
 	case "B":
@@ -831,6 +873,15 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// "n" works even with an empty worktree list
 	if msg.String() == "n" {
 		debug_log("[create] 'n' pressed: opening create wizard")
+		// SSO check before opening wizard
+		if profile := m.sso_profile(); profile != "" {
+			m.pending_sso_action = "create"
+			m.activity = "Checking AWS SSO session..."
+			return m, func() tea.Msg {
+				valid := check_sso_session(profile)
+				return MsgSsoSessionCheck{Valid: valid}
+			}
+		}
 		return m.open_create(m.selected_worktree())
 	}
 
@@ -879,15 +930,18 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "u":
 		if !wt.Running {
-			if wt.Type == worktree.TypeLocal {
-				return m.start_dev_server(*wt)
+			// SSO check before starting
+			if profile := m.sso_profile(); profile != "" {
+				wtCopy := *wt
+				m.pending_sso_action = "start"
+				m.pending_sso_start = &wtCopy
+				m.activity = "Checking AWS SSO session..."
+				return m, func() tea.Msg {
+					valid := check_sso_session(profile)
+					return MsgSsoSessionCheck{Valid: valid}
+				}
 			}
-			if wt.HostBuild {
-				return m.start_host_build(*wt)
-			}
-			if wt.Type == worktree.TypeDocker {
-				return m, cmd_docker_action("start", *wt, m.repo_root, m.cfg)
-			}
+			return m.start_worktree(*wt)
 		}
 	case "x":
 		return m.remove_worktree(*wt)
@@ -2258,26 +2312,122 @@ func (m Model) execute_maintenance_action(action ui.PickerAction) (Model, tea.Cm
 	return m, tick_after(100*time.Millisecond, "render")
 }
 
-// open_aws_keys runs the aws-keys.js script in a terminal session.
+// resolve_sso_action executes the deferred action after SSO session is confirmed valid.
+func (m Model) resolve_sso_action() (tea.Model, tea.Cmd) {
+	action := m.pending_sso_action
+	m.pending_sso_action = ""
+	m.activity = ""
+
+	switch action {
+	case "create":
+		return m.open_create(m.selected_worktree())
+	case "start":
+		if m.pending_sso_start != nil {
+			wt := *m.pending_sso_start
+			m.pending_sso_start = nil
+			return m.start_worktree(wt)
+		}
+	}
+	// No pending action (manual Shift+A check)
+	m.activity = "AWS SSO session is valid"
+	return m, tick_after(3*time.Second, "clear-activity")
+}
+
+// sso_profile returns the configured SSO profile, or empty string.
+func (m Model) sso_profile() string {
+	if m.cfg == nil {
+		return ""
+	}
+	return m.cfg.AwsSsoProfile()
+}
+
+// start_worktree dispatches to the appropriate start method based on worktree type.
+func (m Model) start_worktree(wt worktree.Worktree) (Model, tea.Cmd) {
+	if wt.Type == worktree.TypeLocal {
+		return m.start_dev_server(wt)
+	}
+	if wt.HostBuild {
+		return m.start_host_build(wt)
+	}
+	if wt.Type == worktree.TypeDocker {
+		return m, cmd_docker_action("start", wt, m.repo_root, m.cfg)
+	}
+	return m, nil
+}
+
+// check_sso_session runs `aws sts get-caller-identity` to verify the SSO session.
+// Returns true if the session is valid, false if expired or error.
+func check_sso_session(profile string) bool {
+	cmd := exec.Command("aws", "sts", "get-caller-identity", "--profile", profile, "--output", "json")
+	cmd.Env = os.Environ()
+	err := cmd.Run()
+	return err == nil
+}
+
+// MsgSsoSessionCheck is sent after an async SSO session check completes.
+type MsgSsoSessionCheck struct {
+	Valid bool
+}
+
+// check_sso_then_login checks the SSO session async, then opens login if expired.
+func (m Model) check_sso_then_login() (tea.Model, tea.Cmd) {
+	profile := m.cfg.AwsSsoProfile()
+	debug_log("[aws] checking SSO session for profile=%s", profile)
+	m.activity = "Checking AWS SSO session..."
+	return m, func() tea.Msg {
+		valid := check_sso_session(profile)
+		return MsgSsoSessionCheck{Valid: valid}
+	}
+}
+
+// open_sso_login opens `aws sso login --profile X` in a terminal tab.
+func (m Model) open_sso_login() (tea.Model, tea.Cmd) {
+	w, h := m.right_pane_dimensions()
+	profile := m.cfg.AwsSsoProfile()
+	sentinel_path := sentinel.Path(sentinel.AWSKeys)
+
+	sentinel.Clear(sentinel.AWSKeys)
+	debug_log("[aws] open_sso_login: profile=%s", profile)
+
+	shell_cmd := fmt.Sprintf("aws sso login --profile %s; echo $? > %s", profile, sentinel_path)
+	label := labels.AWSKeys
+	_, err := m.term_mgr.Open(label, "bash", []string{"-c", shell_cmd}, w, h, m.repo_root)
+	if err != nil {
+		debug_log("[aws] open_sso_login: FAILED: %v", err)
+		m.activity = fmt.Sprintf("Failed to open SSO login: %v", err)
+		return m, nil
+	}
+
+	debug_log("[aws] open_sso_login: terminal opened")
+	m.aws_keys_running = true
+	m.terminal_output = ""
+	m.prev_focus = m.focus
+	m.focus = PanelTerminal
+	if m.pane_layout != nil {
+		m.pane_layout.FocusRight()
+	}
+
+	return m, tick_after(100*time.Millisecond, "render")
+}
+
+// open_aws_keys runs the aws-keys.js paste script in a terminal session.
 // The render tick detects when the session exits and triggers service restarts.
 func (m Model) open_aws_keys() (tea.Model, tea.Cmd) {
 	w, h := m.right_pane_dimensions()
 	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "aws-keys.js")
 
-	// Remove stale sentinel before opening
 	sentinel.Clear(sentinel.AWSKeys)
-	debug_log("[aws] open_aws_keys: removed stale sentinel")
-	debug_log("[aws] open_aws_keys: script=%s pane=%dx%d", script, w, h)
+	debug_log("[aws] open_aws_keys: paste mode, script=%s", script)
 
 	label := labels.AWSKeys
 	_, err := m.term_mgr.Open(label, "node", []string{script}, w, h, m.repo_root)
 	if err != nil {
-		debug_log("[aws] open_aws_keys: FAILED to open terminal: %v", err)
+		debug_log("[aws] open_aws_keys: FAILED: %v", err)
 		m.activity = fmt.Sprintf("Failed to open AWS keys: %v", err)
 		return m, nil
 	}
 
-	debug_log("[aws] open_aws_keys: terminal opened, setting aws_keys_running=true")
+	debug_log("[aws] open_aws_keys: terminal opened")
 	m.aws_keys_running = true
 	m.terminal_output = ""
 	m.prev_focus = m.focus

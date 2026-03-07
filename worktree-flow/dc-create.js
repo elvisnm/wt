@@ -11,6 +11,51 @@ const debug = make_debug('dc-create.js');
 
 process.on('SIGINT', () => process.exit(0));
 
+// ── AWS SSO session check ───────────────────────────────────────────────
+
+function get_sso_profile() {
+  if (!config || !config.features) return null;
+  const aws = config.features.awsCredentials;
+  if (aws && typeof aws === 'object' && aws.ssoProfile) return aws.ssoProfile;
+  return null;
+}
+
+function check_sso_session(profile) {
+  try {
+    execSync(`aws sts get-caller-identity --profile "${profile}" --output json`, {
+      stdio: 'pipe',
+      encoding: 'utf8',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensure_sso_session() {
+  const profile = get_sso_profile();
+  if (!profile) return;
+
+  if (check_sso_session(profile)) {
+    debug('ensure_sso_session: session valid for profile=' + profile);
+    return;
+  }
+
+  const p = await import('@clack/prompts');
+  p.log.warn('AWS SSO session expired. Logging in...');
+  try {
+    execSync(`aws sso login --profile "${profile}"`, { stdio: 'inherit' });
+    if (!check_sso_session(profile)) {
+      p.log.error('SSO login succeeded but session check failed.');
+      process.exit(1);
+    }
+    p.log.success('AWS SSO session renewed.');
+  } catch {
+    p.log.error('AWS SSO login failed.');
+    process.exit(1);
+  }
+}
+
 // ── Scripts directory resolution ────────────────────────────────────────
 
 function resolve_scripts_dir() {

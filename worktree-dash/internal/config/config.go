@@ -131,20 +131,43 @@ type EnvConfig struct {
 }
 
 type FeaturesConfig struct {
-	HostBuild      bool         `json:"hostBuild"`
-	Lan            bool         `json:"lan"`
-	Admin          AdminConfig  `json:"admin"`
-	AwsCredentials bool         `json:"awsCredentials"`
-	Autostop       bool         `json:"autostop"`
-	Prune          bool         `json:"prune"`
-	ImagesFix      bool         `json:"imagesFix"`
-	RebuildBase    bool         `json:"rebuildBase"`
-	DevHeap        *int         `json:"devHeap"`
+	HostBuild      bool           `json:"hostBuild"`
+	Lan            bool           `json:"lan"`
+	Admin          AdminConfig    `json:"admin"`
+	AwsCredentials AwsCredsConfig `json:"awsCredentials"`
+	Autostop       bool           `json:"autostop"`
+	Prune          bool           `json:"prune"`
+	ImagesFix      bool           `json:"imagesFix"`
+	RebuildBase    bool           `json:"rebuildBase"`
+	DevHeap        *int           `json:"devHeap"`
 }
 
 type AdminConfig struct {
 	Enabled       bool   `json:"enabled"`
 	DefaultUserId string `json:"defaultUserId"`
+}
+
+// AwsCredsConfig supports both `awsCredentials: true` (paste flow)
+// and `awsCredentials: { ssoProfile: "..." }` (SSO flow).
+type AwsCredsConfig struct {
+	Enabled    bool   `json:"-"`
+	SsoProfile string `json:"ssoProfile"`
+}
+
+func (a *AwsCredsConfig) UnmarshalJSON(data []byte) error {
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		a.Enabled = b
+		return nil
+	}
+	type raw AwsCredsConfig
+	var obj raw
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	a.Enabled = true
+	a.SsoProfile = obj.SsoProfile
+	return nil
 }
 
 type DashConfig struct {
@@ -432,6 +455,11 @@ func (c *Config) PrimaryPort() int {
 	return port
 }
 
+// AwsSsoProfile returns the configured SSO profile name, or empty if not set.
+func (c *Config) AwsSsoProfile() string {
+	return c.Features.AwsCredentials.SsoProfile
+}
+
 // ComputePorts returns all service ports with the given offset applied.
 func (c *Config) ComputePorts(offset int) map[string]int {
 	result := make(map[string]int, len(c.Services.Ports))
@@ -451,7 +479,7 @@ func (c *Config) FeatureEnabled(name string) bool {
 	case "admin":
 		return c.Features.Admin.Enabled
 	case "awsCredentials":
-		return c.Features.AwsCredentials
+		return c.Features.AwsCredentials.Enabled
 	case "autostop":
 		return c.Features.Autostop
 	case "prune":

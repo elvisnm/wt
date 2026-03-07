@@ -92,6 +92,10 @@ type Model struct {
 	// AWS keys: tracks when the aws-keys script is running
 	aws_keys_running bool
 
+	// SSO: deferred action after SSO login completes
+	pending_sso_action string             // "create" or "start"
+	pending_sso_start  *worktree.Worktree // worktree to start (when action="start")
+
 	// Skip-worktree: tracks when the skip-worktree script is running
 	skip_worktree_running bool
 

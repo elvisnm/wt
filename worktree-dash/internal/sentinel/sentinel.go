@@ -37,6 +37,11 @@ func Read(name string) *Result {
 	return &Result{Raw: raw, ExitCode: exit_code}
 }
 
+// Path returns the full path to a sentinel file.
+func Path(name string) string {
+	return filepath.Join(os.TempDir(), name)
+}
+
 // Clear removes a sentinel file if it exists (e.g. before starting a new script).
 func Clear(name string) {
 	_ = os.Remove(filepath.Join(os.TempDir(), name))

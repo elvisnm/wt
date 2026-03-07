@@ -258,6 +258,67 @@ func reload_aws_credentials() {
 	debug_log("[aws] reload_aws_credentials: done, set %d keys", keys_set)
 }
 
+// export_sso_credentials runs `aws configure export-credentials` to extract
+// temporary credentials from the SSO session, writes them to ~/.aws/credentials,
+// and sets them as env vars so child processes (PM2, pnpm dev) inherit them.
+func export_sso_credentials(profile string) error {
+	debug_log("[aws] export_sso_credentials: profile=%s", profile)
+	cmd := exec.Command("aws", "configure", "export-credentials", "--profile", profile, "--format", "env-no-export")
+	cmd.Env = os.Environ()
+	out, err := cmd.Output()
+	if err != nil {
+		debug_log("[aws] export_sso_credentials: command failed: %v", err)
+		return fmt.Errorf("aws configure export-credentials failed: %w", err)
+	}
+
+	// Parse KEY=VALUE lines
+	creds := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		creds[parts[0]] = parts[1]
+	}
+
+	access_key := creds["AWS_ACCESS_KEY_ID"]
+	secret_key := creds["AWS_SECRET_ACCESS_KEY"]
+	session_token := creds["AWS_SESSION_TOKEN"]
+
+	if access_key == "" || secret_key == "" {
+		debug_log("[aws] export_sso_credentials: missing credentials in output")
+		return fmt.Errorf("export-credentials returned incomplete credentials")
+	}
+
+	// Set env vars for current process + children
+	os.Setenv("AWS_ACCESS_KEY_ID", access_key)
+	os.Setenv("AWS_SECRET_ACCESS_KEY", secret_key)
+	os.Setenv("AWS_SESSION_TOKEN", session_token)
+	safe := access_key
+	if len(safe) > 8 {
+		safe = safe[:8]
+	}
+	debug_log("[aws] export_sso_credentials: set env vars (key=%s...)", safe)
+
+	// Write to ~/.aws/credentials so the SDK credential chain picks them up
+	home, err := os.UserHomeDir()
+	if err != nil {
+		debug_log("[aws] export_sso_credentials: UserHomeDir error: %v", err)
+		return nil // env vars are set, credentials file is best-effort
+	}
+	creds_content := fmt.Sprintf("[default]\naws_access_key_id = %s\naws_secret_access_key = %s\naws_session_token = %s\n",
+		access_key, secret_key, session_token)
+	creds_path := filepath.Join(home, ".aws", "credentials")
+	if err := os.WriteFile(creds_path, []byte(creds_content), 0600); err != nil {
+		debug_log("[aws] export_sso_credentials: WriteFile error: %v", err)
+		return nil // env vars are set, credentials file is best-effort
+	}
+	debug_log("[aws] export_sso_credentials: wrote %s", creds_path)
+
+	return nil
+}
+
 func run_docker(args ...string) (string, error) {
 	cmd := exec.Command("docker", args...)
 	out, err := cmd.CombinedOutput()
