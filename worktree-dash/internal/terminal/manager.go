@@ -382,6 +382,30 @@ func (mgr *Manager) CloseDeadByPrefix(prefix string) bool {
 	return len(dead_labels) > 0
 }
 
+// CloseDeadByPrefixIfClean closes dead sessions matching the prefix only if
+// they exited with code 0. Sessions that crashed (non-zero exit) are kept open
+// so the user can read the error output. Returns true if any were closed.
+func (mgr *Manager) CloseDeadByPrefixIfClean(prefix string) bool {
+	mgr.mu.Lock()
+	var clean_labels []string
+	for _, s := range mgr.sessions {
+		if !s.IsAlive() && strings.HasPrefix(s.Label, prefix) {
+			s.mu.Lock()
+			code := s.ExitCode
+			s.mu.Unlock()
+			if code == 0 {
+				clean_labels = append(clean_labels, s.Label)
+			}
+		}
+	}
+	mgr.mu.Unlock()
+
+	for _, label := range clean_labels {
+		mgr.CloseByLabel(label)
+	}
+	return len(clean_labels) > 0
+}
+
 // CloseDeadLogs closes any dead sessions whose labels start with "Logs".
 // Returns true if any sessions were closed.
 func (mgr *Manager) CloseDeadLogs() bool {

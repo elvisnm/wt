@@ -783,6 +783,16 @@ function main() {
         execSync(`node "${create_env_script}" --auto --dir "${worktree_path}"`, { stdio: 'inherit' });
       }
 
+      // Ensure WORKTREE_ALIAS is in the env file (the alias from --alias flag
+      // or auto_alias may differ from the directory name)
+      const alias_var_local = config ? config_mod.worktree_var(config, 'alias') : 'WORKTREE_ALIAS';
+      if (alias_var_local && alias) {
+        const env_content = fs.existsSync(env_file_local) ? fs.readFileSync(env_file_local, 'utf8') : '';
+        if (!env_content.includes(`${alias_var_local}=`)) {
+          fs.appendFileSync(env_file_local, `${alias_var_local}=${alias}\n`);
+        }
+      }
+
       // Generate ecosystem config for this worktree
       const port_offset = find_free_offset(compute_auto_offset(worktree_path));
       const mode = options.mode || config.services.defaultMode || 'full';
@@ -925,8 +935,36 @@ function create_git_worktree(repo_root, worktree_path, target_branch, options) {
       { stdio: 'inherit' },
     );
   } else if (options.from) {
-    if (branch_exists_locally) {
-      // Delete stale local branch and recreate from the latest base ref
+    // Detect if --from points to the same branch on the remote (e.g. --from=origin/feat-xyz
+    // with target_branch=feat-xyz). In this case, check out the remote-tracking branch
+    // instead of creating a new one.
+    const is_remote_checkout = options.from === `origin/${target_branch}`
+      || options.from === `refs/remotes/origin/${target_branch}`;
+
+    if (is_remote_checkout) {
+      if (branch_exists_locally) {
+        // Local branch already exists — reset it to match the remote
+        console.log(`Resetting local "${target_branch}" to match ${options.from}...`);
+        try {
+          execSync(`git -C "${repo_root}" branch -D "${target_branch}"`, { stdio: 'pipe' });
+        } catch {
+          // branch -D fails if checked out elsewhere — try force update
+          console.log(`Could not delete branch, using existing "${target_branch}"...`);
+          execSync(
+            `git -C "${repo_root}" worktree add "${worktree_path}" "${target_branch}"`,
+            { stdio: 'inherit' },
+          );
+          return;
+        }
+      }
+      // git worktree add <path> <branch> auto-creates a tracking branch from origin/<branch>
+      console.log(`Checking out remote branch "${target_branch}" from ${options.from}...`);
+      execSync(
+        `git -C "${repo_root}" worktree add "${worktree_path}" "${target_branch}"`,
+        { stdio: 'inherit' },
+      );
+    } else if (branch_exists_locally) {
+      // Delete stale local branch and recreate from the specified base ref
       console.log(`Branch "${target_branch}" exists locally, recreating from ${options.from}...`);
       try {
         execSync(`git -C "${repo_root}" branch -D "${target_branch}"`, { stdio: 'pipe' });

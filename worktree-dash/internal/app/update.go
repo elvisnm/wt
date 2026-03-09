@@ -335,10 +335,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmd_discover(),
 				)
 			} else if m.term_mgr.HasLabel(labels.Create) || m.has_create_alias_tab() {
-				if m.term_mgr.CloseDeadByPrefix(labels.Create) {
-					// Create process died without writing sentinel (e.g. Ctrl+C)
+				if m.term_mgr.CloseDeadByPrefixIfClean(labels.Create) {
+					// Create process exited cleanly without sentinel (e.g. Ctrl+C)
 					m.focus_worktrees_if_empty()
 				}
+				// If process crashed (non-zero exit), the tab stays open so
+				// the user can read the error output.
 			}
 			// Check if skip-worktree script finished (via sentinel file)
 			if m.skip_worktree_running {
@@ -1496,14 +1498,28 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 			label = labels.Tab(labels.Logs, svc_label)
 		}
 	} else {
-		cmd_name = "pm2"
 		dir = wt.Path
-		if svc.Name == "__all" {
-			args = []string{"logs", "--lines", "80"}
-			label = labels.Tab(labels.Logs, wt.Alias)
+		if wt.IsolatedPM2 {
+			// Isolated PM2: wrap with PM2_HOME so pm2 finds the right daemon
+			pm2_home := wt.PM2Home()
+			cmd_name = "bash"
+			if svc.Name == "__all" {
+				args = []string{"-c", fmt.Sprintf("PM2_HOME=%s exec pm2 logs --lines 80", pm2_home)}
+				label = labels.Tab(labels.Logs, wt.Alias)
+			} else {
+				target := m.pm2_log_target(svc, wt)
+				args = []string{"-c", fmt.Sprintf("PM2_HOME=%s exec pm2 logs %s --lines 80", pm2_home, target)}
+				label = labels.Tab(labels.Logs, svc_label)
+			}
 		} else {
-			args = []string{"logs", svc.Name, "--lines", "80"}
-			label = labels.Tab(labels.Logs, svc_label)
+			cmd_name = "pm2"
+			if svc.Name == "__all" {
+				args = []string{"logs", "--lines", "80"}
+				label = labels.Tab(labels.Logs, wt.Alias)
+			} else {
+				args = []string{"logs", svc.Name, "--lines", "80"}
+				label = labels.Tab(labels.Logs, svc_label)
+			}
 		}
 	}
 
@@ -1716,12 +1732,23 @@ func (m *Model) open_preview_logs(wt worktree.Worktree, svc worktree.Service) te
 			args = []string{"exec", "-it", wt.Container, "pm2", "logs", svc.Name, "--lines", "80"}
 		}
 	} else {
-		cmd_name = "pm2"
 		dir = wt.Path
-		if svc.Name == "__all" {
-			args = []string{"logs", "--lines", "80"}
+		if wt.IsolatedPM2 {
+			pm2_home := wt.PM2Home()
+			cmd_name = "bash"
+			if svc.Name == "__all" {
+				args = []string{"-c", fmt.Sprintf("PM2_HOME=%s exec pm2 logs --lines 80", pm2_home)}
+			} else {
+				target := m.pm2_log_target(svc, wt)
+				args = []string{"-c", fmt.Sprintf("PM2_HOME=%s exec pm2 logs %s --lines 80", pm2_home, target)}
+			}
 		} else {
-			args = []string{"logs", svc.Name, "--lines", "80"}
+			cmd_name = "pm2"
+			if svc.Name == "__all" {
+				args = []string{"logs", "--lines", "80"}
+			} else {
+				args = []string{"logs", svc.Name, "--lines", "80"}
+			}
 		}
 	}
 
@@ -2562,6 +2589,30 @@ func (m *Model) running_base_names(alias string) map[string]bool {
 		running[name] = true
 	}
 	return running
+}
+
+// pm2_log_target returns the PM2 process name(s) to pass to `pm2 logs` for a service.
+// For isolated PM2, process names are suffixed with the worktree alias.
+// For multi-process services (e.g. sync -> combined_sync, listings_sync), returns a
+// regex pattern so pm2 logs shows all matching processes.
+func (m Model) pm2_log_target(svc worktree.Service, wt worktree.Worktree) string {
+	names := []string{svc.Name}
+	if m.cfg != nil {
+		for _, entry := range m.cfg.Dash.Services.List {
+			if entry.Name == svc.Name {
+				names = pm2_process_names(entry, wt.Alias)
+				break
+			}
+		}
+	} else if wt.IsolatedPM2 && wt.Alias != "" {
+		names = []string{svc.Name + "-" + wt.Alias}
+	}
+
+	if len(names) == 1 {
+		return names[0]
+	}
+	// Multiple processes: use regex pattern for pm2 logs
+	return "/" + strings.Join(names, "|") + "/"
 }
 
 // pm2_process_names returns the PM2 process names for a config service entry,
