@@ -245,9 +245,9 @@ module.exports = {
     // Each entry: { src: "path/to/source", dst: "path/in/worktree" }
     // src: resolved relative to repo root. Supports absolute paths and ~/... tilde expansion.
     // dst: relative to worktree root.
-    // Useful for Claude Code slash commands, shared tool configs, etc.
+    // Useful for Claude Code skills, shared tool configs, etc.
     symlinks: [
-      // { src: "../.claude/commands", dst: ".claude/commands" },
+      // { src: "../.claude/skills", dst: ".claude/skills" },
     ],
   },
 

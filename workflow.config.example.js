@@ -106,7 +106,7 @@ module.exports = {
     // src: relative to repo root (or absolute / ~/...), dst: relative to worktree root.
     // Useful for Claude Code skills, shared configs, etc.
     symlinks: [
-      // { src: '../.claude/commands', dst: '.claude/commands' },
+      // { src: '../.claude/skills', dst: '.claude/skills' },
     ],
   },
 

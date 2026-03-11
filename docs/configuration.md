@@ -357,7 +357,7 @@ paths: {
 ```js
 setup: {
   symlinks: [
-    { src: '../.claude/commands', dst: '.claude/commands' },
+    { src: '../.claude/skills', dst: '.claude/skills' },
   ],
   copyFiles: [
     'scripts/port-config.js',
