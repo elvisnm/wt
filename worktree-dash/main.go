@@ -800,7 +800,8 @@ func renderGuide() string {
 		"Select a worktree, then press:",
 		"",
 		guideKey("b") + "  bash shell       " + guideKey("c") + "  claude code",
-		guideKey("l") + "  logs             " + guideKey("n") + "  create new",
+		guideKey("g") + "  pull latest      " + guideKey("l") + "  logs",
+		guideKey("n") + "  create new",
 	}, colW))
 
 	leftSecs = append(leftSecs, guideBox("Terminal", []string{
@@ -841,6 +842,7 @@ func renderGuide() string {
 		guideKey("Shift+T") + " tasks       " + guideKey("Shift+M") + " maintenance",
 		ansiDim + strings.Repeat("─", 42) + ansiReset,
 		guideKey("i") + " info  " + guideKey("r") + " restart  " + guideKey("u") + " start  " + guideKey("t") + " stop",
+		guideKey("g") + " pull latest",
 	}, colW))
 
 	rightLines := flattenSections(rightSecs)
@@ -979,6 +981,7 @@ func renderHelp() string {
 		guideKey("Enter") + "       action menu",
 		guideKey("b") + "           bash shell",
 		guideKey("c") + "           claude code",
+		guideKey("g") + "           pull latest",
 		guideKey("z") + "           local shell (zsh)",
 		guideKey("l") + "           logs",
 		guideKey("n") + "           create worktree",

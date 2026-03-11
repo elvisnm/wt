@@ -8,6 +8,10 @@ const {
   config, config_mod, run, auto_alias, has_ref, compute_auto_offset,
   resolve_worktrees_dir, update_env_key, remove_env_key,
 } = require('./lib/utils');
+const {
+  apply_skip_worktree: apply_skip_worktree_config,
+  copy_setup_files,
+} = require('./lib/skip-worktree');
 const { find_pm2, pm2_home, pm2_start, pm2_cleanup, load_aws_env } = require('./lib/pm2');
 const { generate_config, OUTPUT_FILENAME } = require('./generate-ecosystem-config');
 const { generate_workspace } = require('./generate-workspace-config');
@@ -137,33 +141,6 @@ function ensure_git_exclude(worktree_path) {
   fs.appendFileSync(exclude_file, separator + missing.join('\n') + '\n');
 }
 
-// ── Skip-worktree ───────────────────────────────────────────────────
-
-function apply_skip_worktree(worktree_path) {
-  const paths = config && config.git && Array.isArray(config.git.skipWorktree)
-    ? config.git.skipWorktree
-    : [];
-  if (paths.length === 0) return;
-
-  const applied = [];
-  for (const p of paths) {
-    try {
-      const files = run(`git -C "${worktree_path}" ls-files -z "${p}"`)
-        .split('\0')
-        .filter(Boolean);
-      if (files.length === 0) continue;
-      const file_args = files.map((f) => `"${f}"`).join(' ');
-      run(`git -C "${worktree_path}" update-index --skip-worktree ${file_args}`);
-      applied.push(p);
-    } catch {
-      // path not tracked or not present — skip silently
-    }
-  }
-  if (applied.length > 0) {
-    console.log(`Skip-worktree: ${applied.join(', ')}`);
-  }
-}
-
 // ── Override files (generate strategy) ──────────────────────────────────
 
 function ensure_override_files(repo_root, worktree_path) {
@@ -224,38 +201,6 @@ function ensure_setup_symlinks(repo_root, worktree_path) {
   }
   if (created > 0) {
     console.log(`Created ${created} setup symlink(s).`);
-  }
-}
-
-function copy_setup_files(repo_root, worktree_path) {
-  const files = config && config.setup && config.setup.copyFiles
-    ? config.setup.copyFiles
-    : [];
-
-  if (files.length === 0) return;
-
-  let copied = 0;
-  for (const rel of files) {
-    const src = path.join(repo_root, rel);
-    const dst = path.join(worktree_path, rel);
-
-    if (!fs.existsSync(src)) continue;
-
-    try {
-      const stat = fs.statSync(src);
-      if (stat.isDirectory()) {
-        fs.cpSync(src, dst, { recursive: true });
-      } else {
-        fs.mkdirSync(path.dirname(dst), { recursive: true });
-        fs.copyFileSync(src, dst);
-      }
-      copied++;
-    } catch (e) {
-      console.warn(`Warning: Could not copy ${rel}: ${e.message}`);
-    }
-  }
-  if (copied > 0) {
-    console.log(`Copied ${copied} setup file(s) from repo root.`);
   }
 }
 
@@ -728,7 +673,7 @@ function main() {
   }
 
   ensure_git_exclude(worktree_path);
-  apply_skip_worktree(worktree_path);
+  apply_skip_worktree_config(worktree_path);
 
   const compose_strategy = config ? config.docker.composeStrategy : 'generate';
   const is_shared_compose = compose_strategy !== 'generate' && config && config.docker._composeFileResolved;

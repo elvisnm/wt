@@ -40,6 +40,7 @@ func HelpSections() []HelpSection {
 				{Key: "Enter", Desc: "Action menu"},
 				{Key: "b", Desc: "Shell"},
 				{Key: "c", Desc: "Claude Code"},
+				{Key: "g", Desc: "Pull latest"},
 				{Key: "l", Desc: "Logs"},
 				{Key: "n", Desc: "Create worktree"},
 				{Key: "r", Desc: "Restart container"},

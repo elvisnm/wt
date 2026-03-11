@@ -29,6 +29,7 @@ const (
 	Autostop    = "Autostop Idle"
 	RebuildBase = "Rebuild Base"
 	Actions     = "Actions"
+	Pull        = "Pull"
 	Remove      = "Remove"
 )
 

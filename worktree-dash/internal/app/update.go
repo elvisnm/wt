@@ -906,6 +906,8 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.open_logs(*wt)
 	case "i":
 		return m.open_worktree_info()
+	case "g":
+		return m.open_pull(*wt)
 	case "e":
 		if wt.HostBuild && wt.Running {
 			return m.open_esbuild_watch(*wt)
@@ -1212,6 +1214,8 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 		return m.open_logs(*wt)
 	case "n":
 		return m.open_create(wt)
+	case "g":
+		return m.open_pull(*wt)
 	case "e":
 		if wt.HostBuild {
 			return m.open_esbuild_watch(*wt)
@@ -1284,6 +1288,39 @@ func (m Model) open_bash(wt worktree.Worktree) (Model, tea.Cmd) {
 	m.terminal_output = ""
 	m.prev_focus = m.focus; m.focus = PanelTerminal
 	// Focus the right pane for native terminal interaction
+	if m.pane_layout != nil {
+		m.pane_layout.FocusRight()
+	}
+	return m, tick_after(100*time.Millisecond, "render")
+}
+
+// open_pull asks for confirmation then runs dc-pull.js to safely pull latest changes.
+func (m Model) open_pull(wt worktree.Worktree) (Model, tea.Cmd) {
+	m.confirm_open = true
+	m.confirm_prompt = fmt.Sprintf("Pull latest changes on %s?", wt.Alias)
+	m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
+		return mdl.run_pull(wt)
+	}
+	return m, nil
+}
+
+func (m Model) run_pull(wt worktree.Worktree) (Model, tea.Cmd) {
+	w, h := m.right_pane_dimensions()
+
+	script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "dc-pull.js")
+	shell_cmd := fmt.Sprintf("node %q --repo %q --worktree %q", script, m.repo_root, wt.Path)
+
+	label := labels.Tab(labels.Pull, wt.Alias)
+	_, err := m.term_mgr.Open(label, "bash", []string{"-c", shell_cmd}, w, h, wt.Path)
+	if err != nil {
+		m.activity = fmt.Sprintf("Failed to pull: %v", err)
+		return m, nil
+	}
+
+	m.activity = fmt.Sprintf("Pulling latest changes for %s...", wt.Alias)
+	m.terminal_output = ""
+	m.prev_focus = m.focus
+	m.focus = PanelTerminal
 	if m.pane_layout != nil {
 		m.pane_layout.FocusRight()
 	}

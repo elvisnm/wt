@@ -27,12 +27,14 @@ var (
 	actionContainerRestart = PickerAction{Key: "r", Label: "Restart", Desc: "Restart container"}
 	actionContainerStop    = PickerAction{Key: "t", Label: "Stop", Desc: "Stop container"}
 	actionInfo             = PickerAction{Key: "i", Label: "Info", Desc: "Worktree info"}
+	actionPull             = PickerAction{Key: "g", Label: labels.Pull, Desc: "Pull latest changes"}
 )
 
 var WorktreeActions = []PickerAction{
 	actionContainerShell,
 	actionZsh,
 	actionClaude,
+	actionPull,
 	actionContainerRestart,
 	actionContainerStop,
 	actionRemove,
@@ -42,6 +44,7 @@ var StoppedActions = []PickerAction{
 	{Key: "u", Label: "Start", Desc: "Start container"},
 	actionZsh,
 	actionClaude,
+	actionPull,
 	actionRemove,
 }
 
@@ -62,6 +65,7 @@ var LocalActions = []PickerAction{
 	{Key: "u", Label: "Start", Desc: "Start dev server"},
 	actionLocalShell,
 	actionClaude,
+	actionPull,
 	{Key: "n", Label: labels.Create, Desc: "Create container"},
 	actionInfo,
 	actionRemove,
@@ -72,6 +76,7 @@ var HostBuildRunningActions = []PickerAction{
 	actionContainerShell,
 	actionZsh,
 	actionClaude,
+	actionPull,
 	actionContainerRestart,
 	actionContainerStop,
 	actionRemove,
@@ -81,6 +86,7 @@ var HostBuildStoppedActions = []PickerAction{
 	{Key: "u", Label: "Start + Build", Desc: "Container + esbuild"},
 	actionZsh,
 	actionClaude,
+	actionPull,
 	actionRemove,
 }
 
@@ -92,6 +98,7 @@ var RemoveActions = []PickerAction{
 var LocalRunningActions = []PickerAction{
 	actionLocalShell,
 	actionClaude,
+	actionPull,
 	{Key: "l", Label: labels.Logs, Desc: "Dev logs"},
 	{Key: "o", Label: "Start service", Desc: "Start a stopped service"},
 	{Key: "p", Label: "Stop service", Desc: "Stop a running service"},
