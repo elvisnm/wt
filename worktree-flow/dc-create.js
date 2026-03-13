@@ -488,7 +488,20 @@ async function main() {
     if (db_choice === 'shared') flags.push('--shared-db');
     if (seed_db) flags.push('--seed');
 
-    const domain = config ? config_mod.domain_for(config, final_alias) : null;
+    // Traefik domain routing (only when proxy.type is 'traefik')
+    const has_traefik = config && config.docker && config.docker.proxy && config.docker.proxy.type === 'traefik';
+    let use_traefik = has_traefik;
+    if (has_traefik) {
+      const traefik_choice = await p.confirm({
+        message: `Use domain routing? (${config_mod.domain_for(config, final_alias)})`,
+        initialValue: true,
+      });
+      if (p.isCancel(traefik_choice)) { p.cancel('Cancelled.'); process.exit(0); }
+      use_traefik = traefik_choice;
+    }
+    if (!use_traefik) flags.push('--no-traefik');
+
+    const domain = use_traefik && config ? config_mod.domain_for(config, final_alias) : null;
     const isolated_name = config ? config_mod.db_name(config, final_alias) : `${db_prefix}${final_alias.replace(/[^a-zA-Z0-9_]/g, '_')}`;
 
     const summary_lines = [

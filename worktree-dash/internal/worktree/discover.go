@@ -77,7 +77,11 @@ func Discover(worktrees_dir string, existing []Worktree, cfg *config.Config) []W
 				}
 				wt.Offset = read_offset(full_path, cfg)
 				if cfg != nil {
-					wt.Domain = cfg.DomainFor(wt.Alias)
+					if app_port := cfg.PrimaryPort() + wt.Offset; app_port > 0 {
+						if routes, ok := traefik_port_map[app_port]; ok {
+							wt.Domain = resolve_traefik_domain(routes, wt.Alias)
+						}
+					}
 					if svc_var := cfg.WorktreeVar("services"); svc_var != "" {
 						wt.Mode = read_env_file(full_path, env_filename, svc_var)
 					}

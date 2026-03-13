@@ -28,6 +28,18 @@ func RunCmdEnv(extra_env []string, name string, args ...string) (string, error) 
 	return strings.TrimSpace(string(out)), nil
 }
 
+// RunCmdDirEnv executes a command with extra env vars and a working directory.
+func RunCmdDirEnv(extra_env []string, dir string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), extra_env...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // ParseJSONLines parses newline-delimited JSON into a slice of maps.
 func ParseJSONLines(raw string) []map[string]interface{} {
 	var results []map[string]interface{}

@@ -171,16 +171,21 @@ func build_detail_lines(wt *worktree.Worktree, inner_w, spin_frame int, cfg *con
 				lipgloss.NewStyle().Foreground(StoppedColor).Render("stopped"), inner_w))
 		}
 
-		// App URL — local worktrees use localhost with offset port
+		// App URL — show domain when available, always show localhost:port
 		var app_port int
 		if cfg != nil {
 			app_port = cfg.PrimaryPort() + wt.Offset
 		} else {
 			app_port = 3001 + wt.Offset
 		}
-		url := fmt.Sprintf("http://localhost:%d/", app_port)
-		lines = append(lines, detail_line("URL",
-			lipgloss.NewStyle().Foreground(HintColor).Render(url), inner_w))
+		if wt.Domain != "" {
+			domain_url := fmt.Sprintf("http://%s/", wt.Domain)
+			lines = append(lines, detail_line("URL",
+				lipgloss.NewStyle().Foreground(HintColor).Render(domain_url), inner_w))
+		}
+		local_url := fmt.Sprintf("http://localhost:%d/", app_port)
+		lines = append(lines, detail_line("Local",
+			lipgloss.NewStyle().Foreground(HintColor).Render(local_url), inner_w))
 
 		if wt.Running {
 			lines = append(lines, detail_line("CPU", wt.CPU, inner_w))
@@ -207,8 +212,9 @@ func build_quick_links(wt *worktree.Worktree, cfg *config.Config, link_style lip
 			}
 			port := base_port + wt.Offset
 			url := fmt.Sprintf("http://localhost:%d%s", port, ql.PathPrefix)
-			// Use domain for root links (empty or "/" prefix)
-			if wt.Domain != "" && (ql.PathPrefix == "" || ql.PathPrefix == "/") {
+			// Use domain only for the primary service with root path
+			is_primary := cfg.Services.Primary != "" && ql.Service == cfg.Services.Primary
+			if wt.Domain != "" && is_primary && (ql.PathPrefix == "" || ql.PathPrefix == "/") {
 				url = "http://" + wt.Domain + "/"
 			}
 			lines = append(lines, detail_line(ql.Label, link_style.Render(url), inner_w))

@@ -14,6 +14,7 @@ import (
 	"github.com/elvisnm/wt/internal/claude"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/docker"
+	"github.com/elvisnm/wt/internal/esbuild"
 	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/pm2"
 	"github.com/elvisnm/wt/internal/terminal"
@@ -401,6 +402,20 @@ func cmd_fetch_local_services(wt worktree.Worktree, cfg *config.Config) tea.Cmd 
 		} else {
 			svcs = pm2_svcs
 		}
+
+		// Append esbuild watcher status (only if project has a build script)
+		if cfg != nil && cfg.Paths.BuildScript != "" {
+			esbuild_status := "stopped"
+			if esbuild.IsRunning(wt.PM2Home()) {
+				esbuild_status = "online"
+			}
+			svcs = append(svcs, worktree.Service{
+				Name:        "esbuild",
+				DisplayName: "esbuild (watch)",
+				Status:      esbuild_status,
+			})
+		}
+
 		debug_log("[services] fetch_local_services: %s returned %d services", wt.Alias, len(svcs))
 		return MsgServicesUpdated{Services: svcs}
 	}

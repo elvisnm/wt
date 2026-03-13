@@ -10,6 +10,7 @@ import (
 
 	"github.com/elvisnm/wt/internal/beads"
 	"github.com/elvisnm/wt/internal/config"
+	"github.com/elvisnm/wt/internal/esbuild"
 	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/pm2"
 	"github.com/elvisnm/wt/internal/sentinel"
@@ -1514,6 +1515,21 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 
 	svc_label := wt.Alias + "/" + svc.DisplayName
 
+	// Esbuild service — tail the log file
+	if svc.Name == "esbuild" && wt.Type == worktree.TypeLocal {
+		log_path := esbuild.LogPath(wt.PM2Home())
+		label = labels.Tab(labels.Logs, svc_label)
+		cmd_name = "tail"
+		args = []string{"-f", "-n", "80", log_path}
+		dir = wt.Path
+		_, err := m.term_mgr.Open(label, cmd_name, args, w, h, dir)
+		if err != nil {
+			return m, m.show_result(fmt.Sprintf("Failed to open esbuild logs: %v", err))
+		}
+		m.prev_focus = m.focus; m.focus = PanelTerminal
+		return m, nil
+	}
+
 	if wt.Type == worktree.TypeDocker && manager == "static" {
 		// Static Docker: use docker logs (no pm2 inside containers)
 		cmd_name = "docker"
@@ -1574,6 +1590,32 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 }
 
 func cmd_service_action(action string, wt worktree.Worktree, svc worktree.Service, cfg *config.Config) tea.Cmd {
+	// Handle esbuild watcher actions
+	if svc.Name == "esbuild" && wt.Type == worktree.TypeLocal {
+		return func() tea.Msg {
+			state_dir := wt.PM2Home()
+			if action == "stop" {
+				esbuild.Stop(state_dir)
+				return MsgActionOutput{Output: "esbuild stopped"}
+			}
+			// start and restart both launch esbuild; restart stops first
+			if action == "restart" {
+				esbuild.Stop(state_dir)
+			}
+			build_script := ""
+			if cfg != nil && cfg.Paths.BuildScript != "" {
+				build_script = filepath.Join(wt.Path, cfg.Paths.BuildScript)
+			}
+			if build_script == "" {
+				return MsgActionOutput{Output: "No build script configured"}
+			}
+			if err := esbuild.Start(build_script, wt.Path, state_dir, build_esbuild_env(wt, cfg)); err != nil {
+				return MsgActionOutput{Err: err}
+			}
+			return MsgActionOutput{Output: "esbuild " + action + "ed"}
+		}
+	}
+
 	// Determine the effective manager for this worktree type
 	manager := "pm2"
 	if cfg != nil {
@@ -1770,7 +1812,10 @@ func (m *Model) open_preview_logs(wt worktree.Worktree, svc worktree.Service) te
 		}
 	} else {
 		dir = wt.Path
-		if wt.IsolatedPM2 {
+		if svc.Name == "esbuild" {
+			cmd_name = "tail"
+			args = []string{"-f", "-n", "80", esbuild.LogPath(wt.PM2Home())}
+		} else if wt.IsolatedPM2 {
 			pm2_home := wt.PM2Home()
 			cmd_name = "bash"
 			if svc.Name == "__all" {
@@ -1804,7 +1849,6 @@ func (m *Model) open_preview_logs(wt worktree.Worktree, svc worktree.Service) te
 		m.activity = fmt.Sprintf("Preview failed: %v", err)
 		return nil
 	}
-
 	m.preview_session = s
 	m.preview_svc_name = svc.Name
 
@@ -1945,63 +1989,76 @@ func (m Model) open_worktree_info() (Model, tea.Cmd) {
 	return m, nil
 }
 
-// start_dev_server opens a terminal tab running pnpm dev for a local worktree.
-// The project's dev script handles everything: env loading, esbuild, PM2 with the
-// correct ecosystem config. For isolated PM2 worktrees, .env.worktree already
-// contains PM2_HOME so the dev script picks it up automatically.
+// start_dev_server starts PM2 and esbuild as independent daemons for a local worktree.
+// Both survive dashboard close. On reopen, discovery detects them via PM2 status and PID files.
 func (m Model) start_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 	debug_log("[services] start_dev_server: alias=%s path=%s isolated=%v", wt.Alias, wt.Path, wt.IsolatedPM2)
 
-	// Reload AWS credentials so the spawned process inherits the latest keys
+	// Reload AWS credentials so PM2 processes get the latest keys
 	reload_aws_credentials()
 
-	// Propagate AWS env vars to the tmux server so new windows inherit them
-	if server := m.term_mgr.Server(); server != nil {
-		for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
-			if val := os.Getenv(key); val != "" {
-				server.SetEnv(key, val)
-			}
-		}
-		debug_log("[services] start_dev_server: propagated AWS keys to tmux server")
-	}
-
-	w, h := m.right_pane_dimensions()
-
-	path_env := "PROJECT_PATH"
-	if m.cfg != nil {
-		if v := m.cfg.EnvVar("projectPath"); v != "" {
-			path_env = v
-		}
-	}
-	dev_cmd := "pnpm dev"
-	if m.cfg != nil && m.cfg.Dash.LocalDevCommand != "" {
-		dev_cmd = m.cfg.Dash.LocalDevCommand
-	}
-	shell_cmd := fmt.Sprintf("%s=%s %s", path_env, wt.Path, dev_cmd)
-	label := labels.Tab(labels.Dev, wt.Alias)
-	debug_log("[services] start_dev_server: cmd=%q label=%q", shell_cmd, label)
-
-	_, err := m.term_mgr.Open(label, "bash", []string{"-c", shell_cmd}, w, h, wt.Path)
-	if err != nil {
-		debug_log("[services] start_dev_server: FAILED: %v", err)
-		m.terminal_output = fmt.Sprintf("Failed to start dev server: %v", err)
-		m.prev_focus = m.focus; m.focus = PanelTerminal
+	ecosystem_config := filepath.Join(wt.Path, "ecosystem.worktree.config.js")
+	if _, err := os.Stat(ecosystem_config); os.IsNotExist(err) {
+		debug_log("[services] start_dev_server: ecosystem config not found at %s", ecosystem_config)
+		m.activity = fmt.Sprintf("error: ecosystem.worktree.config.js not found for %s", wt.Alias)
 		return m, nil
 	}
-	debug_log("[services] start_dev_server: terminal opened")
+
+	// Build env vars for PM2
+	var pm2_home string
+	if wt.IsolatedPM2 {
+		pm2_home = wt.PM2Home()
+	}
+
+	// Start PM2 daemon
+	out, err := pm2.Start(pm2_home, ecosystem_config, wt.Path, nil)
+	if err != nil {
+		debug_log("[services] start_dev_server: PM2 start failed: %v (output: %s)", err, out)
+		m.activity = fmt.Sprintf("PM2 start failed: %v", err)
+		return m, nil
+	}
+	debug_log("[services] start_dev_server: PM2 started")
+
+	// Start esbuild watcher as daemon
+	build_script := ""
+	if m.cfg != nil && m.cfg.Paths.BuildScript != "" {
+		build_script = filepath.Join(wt.Path, m.cfg.Paths.BuildScript)
+	}
+	if build_script != "" {
+		state_dir := wt.PM2Home()
+		extra_env := build_esbuild_env(wt, m.cfg)
+		if err := esbuild.Start(build_script, wt.Path, state_dir, extra_env); err != nil {
+			debug_log("[services] start_dev_server: esbuild start failed: %v", err)
+			// Non-fatal — PM2 is running, esbuild can be started manually
+			m.activity = fmt.Sprintf("started %s (esbuild failed: %v)", wt.Alias, err)
+		} else {
+			debug_log("[services] start_dev_server: esbuild started")
+		}
+	}
 
 	m.terminal_output = ""
-	m.activity = fmt.Sprintf("starting... %s", wt.Alias)
-	m.prev_focus = m.focus; m.focus = PanelTerminal
-	// Focus the right pane for native terminal interaction
-	if m.pane_layout != nil {
-		m.pane_layout.FocusRight()
-	}
+	m.activity = fmt.Sprintf("started %s", wt.Alias)
 
 	return m, tea.Batch(
 		tick_after(100*time.Millisecond, "render"),
 		tick_after(3*time.Second, "status"),
 	)
+}
+
+// build_esbuild_env returns env vars needed to run the esbuild watcher.
+func build_esbuild_env(wt worktree.Worktree, cfg *config.Config) []string {
+	env := []string{"NODE_ENV=development"}
+	if cfg != nil {
+		if env_var := cfg.EnvVar("environment"); env_var != "" {
+			env = append(env, fmt.Sprintf("%s=development", env_var))
+		}
+		if path_var := cfg.EnvVar("projectPath"); path_var != "" {
+			env = append(env, fmt.Sprintf("%s=%s", path_var, wt.Path))
+		}
+	}
+	env = append(env, fmt.Sprintf("WORKTREE_PORT_OFFSET=%d", wt.Offset))
+	env = append(env, fmt.Sprintf("WORKTREE_NAME=%s", wt.Name))
+	return env
 }
 
 // stop_dev_server stops PM2 services for a local worktree (with confirmation)
@@ -2042,6 +2099,9 @@ func (m Model) run_stop_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 			},
 		)
 	}
+
+	// Stop esbuild watcher daemon if running
+	esbuild.Stop(wt.PM2Home())
 
 	// Check for isolated PM2_HOME
 	if wt.IsolatedPM2 {
@@ -2637,12 +2697,12 @@ func (m Model) pm2_log_target(svc worktree.Service, wt worktree.Worktree) string
 	if m.cfg != nil {
 		for _, entry := range m.cfg.Dash.Services.List {
 			if entry.Name == svc.Name {
-				names = pm2_process_names(entry, wt.Alias)
+				names = pm2_process_names(entry, wt.Name)
 				break
 			}
 		}
-	} else if wt.IsolatedPM2 && wt.Alias != "" {
-		names = []string{svc.Name + "-" + wt.Alias}
+	} else if wt.IsolatedPM2 && wt.Name != "" {
+		names = []string{svc.Name + "-" + wt.Name}
 	}
 
 	if len(names) == 1 {
@@ -2740,7 +2800,7 @@ func (m Model) execute_start_service_action(action ui.PickerAction) (Model, tea.
 	var pm2_names []string
 	for _, entry := range m.cfg.Dash.Services.List {
 		if entry.Name == action.Label {
-			pm2_names = pm2_process_names(entry, wt.Alias)
+			pm2_names = pm2_process_names(entry, wt.Name)
 			break
 		}
 	}
@@ -2801,7 +2861,7 @@ func (m Model) execute_stop_service_action(action ui.PickerAction) (Model, tea.C
 	var pm2_names []string
 	for _, entry := range m.cfg.Dash.Services.List {
 		if entry.Name == action.Label {
-			pm2_names = pm2_process_names(entry, wt.Alias)
+			pm2_names = pm2_process_names(entry, wt.Name)
 			break
 		}
 	}

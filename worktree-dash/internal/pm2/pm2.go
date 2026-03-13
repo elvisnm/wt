@@ -124,6 +124,25 @@ func HomeEnv(pm2_home string) []string {
 	return []string{fmt.Sprintf("PM2_HOME=%s", pm2_home)}
 }
 
+// Start launches PM2 with the given ecosystem config file.
+// For isolated worktrees, pm2_home should point to the .pm2 directory.
+// extra_env is appended to the process environment (e.g., AWS keys, SKULABS_ENV).
+func Start(pm2_home string, ecosystem_config string, cwd string, extra_env []string) (string, error) {
+	env := append([]string{}, extra_env...)
+	if pm2_home != "" {
+		env = append(env, fmt.Sprintf("PM2_HOME=%s", pm2_home))
+	}
+	return cmdutil.RunCmdDirEnv(env, cwd, "pm2", "start", ecosystem_config, "--update-env")
+}
+
+// Kill stops the PM2 daemon for an isolated worktree.
+func Kill(pm2_home string) (string, error) {
+	if pm2_home == "" {
+		return "", fmt.Errorf("pm2_home required for Kill")
+	}
+	return cmdutil.RunCmdEnv(HomeEnv(pm2_home), "pm2", "kill")
+}
+
 func parse_services(procs []map[string]interface{}, wt_path string) []worktree.Service {
 	services := []worktree.Service{
 		{Name: "__all", DisplayName: "All services", Status: "online"},

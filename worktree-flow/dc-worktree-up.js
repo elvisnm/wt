@@ -36,6 +36,7 @@ function parse_args(argv) {
     host_build: false,
     no_host_build: false,
     no_docker: false,
+    no_traefik: false,
     mode: config && config.services.defaultMode ? config.services.defaultMode : 'full',
   };
 
@@ -56,6 +57,7 @@ function parse_args(argv) {
     if (arg === '--host-build') { options.host_build = true; continue; }
     if (arg === '--no-host-build') { options.no_host_build = true; continue; }
     if (arg === '--no-docker') { options.no_docker = true; continue; }
+    if (arg === '--no-traefik') { options.no_traefik = true; continue; }
 
     if (arg === '--branch') { options.branch = remaining.shift(); continue; }
     if (arg.startsWith('--branch=')) { options.branch = arg.split('=')[1]; continue; }
@@ -602,6 +604,10 @@ function main() {
       ensure_git_exclude(worktree_path);
       ensure_setup_symlinks(repo_root, worktree_path);
       copy_setup_files(repo_root, worktree_path);
+      const config_src = path.join(repo_root, 'workflow.config.js');
+      if (fs.existsSync(config_src)) {
+        fs.copyFileSync(config_src, path.join(worktree_path, 'workflow.config.js'));
+      }
 
       // Restart PM2 services if localDev is enabled
       const use_local_dev = config && config_mod.feature_enabled(config, 'localDev')
@@ -641,7 +647,9 @@ function main() {
         fs.writeFileSync(ecosystem_path, ecosystem_content, 'utf8');
 
         const wt_alias = auto_alias(target_branch);
-        write_traefik_config(wt_alias, config_mod.domain_for(config, wt_alias), port_offset);
+        if (!options.no_traefik) {
+          write_traefik_config(wt_alias, config_mod.domain_for(config, wt_alias), port_offset);
+        }
 
         if (process.env.WT_INNER !== '1') {
           console.log('Starting PM2 services...');
@@ -783,15 +791,17 @@ function main() {
         if (ports[svc]) console.log(`  ${svc.padEnd(22)} ${ports[svc]}`);
       }
 
-      const traefik_written = write_traefik_config(worktree_alias, domain, port_offset);
-      if (traefik_written && domain) {
-        is_traefik_routing().then((routing) => {
-          if (routing) {
-            console.log(`Domain: http://${domain}/`);
-          } else {
-            console.log(`Domain: http://${domain}/ (will activate when Traefik starts)`);
-          }
-        });
+      if (!options.no_traefik) {
+        const traefik_written = write_traefik_config(worktree_alias, domain, port_offset);
+        if (traefik_written && domain) {
+          is_traefik_routing().then((routing) => {
+            if (routing) {
+              console.log(`Domain: http://${domain}/`);
+            } else {
+              console.log(`Domain: http://${domain}/ (will activate when Traefik starts)`);
+            }
+          });
+        }
       }
     }
 
