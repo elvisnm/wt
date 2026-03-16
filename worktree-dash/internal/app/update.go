@@ -583,10 +583,7 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	debug_log("[keys] key=%q focus=%d", msg.String(), m.focus)
 	switch {
 	case key.Matches(msg, Keys.Quit), key.Matches(msg, Keys.CtrlC):
-		m.confirm_open = true
-		m.confirm_prompt = "Quit worktree?"
-		m.confirm_action = quit_action
-		return m, nil
+		return m.open_panel_confirm("Quit", "Quit worktree?", quit_action)
 
 	case key.Matches(msg, Keys.Tab):
 		m.close_preview()
@@ -1066,10 +1063,7 @@ func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, Keys.Quit), key.Matches(msg, Keys.CtrlC):
 		m.picker_open = false
-		m.confirm_open = true
-		m.confirm_prompt = "Quit worktree?"
-		m.confirm_action = quit_action
-		return m, nil
+		return m.open_panel_confirm("Quit", "Quit worktree?", quit_action)
 
 	case key.Matches(msg, Keys.Escape):
 		m.picker_open = false
