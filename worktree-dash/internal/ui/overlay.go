@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -102,18 +101,4 @@ func RenderConfirmModal(prompt string, width, height int) string {
 	}
 
 	return render_modal_box(content, inner_w, width)
-}
-
-// RenderAlertModal renders a centered auto-dismissing alert with countdown.
-// message may contain ANSI styles (pre-rendered lipgloss output).
-func RenderAlertModal(message string, countdown int, width, height int) string {
-	countdown_style := lipgloss.NewStyle().Foreground(DimTextColor)
-
-	content := lipgloss.JoinVertical(lipgloss.Center,
-		message,
-		"",
-		countdown_style.Render(fmt.Sprintf("(%ds)", countdown)),
-	)
-
-	return render_modal_box(content, lipgloss.Width(message), width)
 }

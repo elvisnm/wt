@@ -302,16 +302,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "clear-activity":
 			m.activity = ""
 			return m, nil
-		case "alert":
-			if !m.alert_open {
+		case "notify":
+			if !m.notify_open {
 				return m, nil
 			}
-			m.alert_countdown--
-			if m.alert_countdown <= 0 {
-				m.alert_open = false
-				return m, nil
+			m.notify_open = false
+			if m.pane_layout != nil {
+				m.pane_layout.ClearNotifyPane()
 			}
-			return m, tick_after(1*time.Second, "alert")
+			return m, nil
 		case "render":
 			// Sentinel-driven post-action handlers
 			if sr := sentinel.Read(sentinel.Create); sr != nil {
@@ -358,10 +357,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// In pane layout mode, the right pane gets native input via tmux focus.
 		// Bubbletea only receives keys when the left pane (pane 0) has focus.
-		if m.alert_open {
-			m.alert_open = false
-			return m, tick_after(100*time.Millisecond, "render")
-		}
 		if m.help_open {
 			return m.handle_help_key(msg)
 		}
@@ -1832,6 +1827,21 @@ func (m *Model) show_result(text string) tea.Cmd {
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg {
 		return MsgResultClear{}
 	})
+}
+
+const notifyDefaultDuration = 5 * time.Second
+
+// show_notification displays a timed message in the top-right notification pane.
+// Auto-clears after 5s. Any keypress dismisses it immediately.
+func (m Model) show_notification(title, message string) (Model, tea.Cmd) {
+	if m.pane_layout == nil {
+		m.activity = message
+		return m, tick_after(notifyDefaultDuration, "clear-activity")
+	}
+
+	m.notify_open = true
+	m.pane_layout.SetNotifyContent(title, message)
+	return m, tick_after(notifyDefaultDuration, "notify")
 }
 
 // open_worktree_info focuses the Details panel which shows all info.

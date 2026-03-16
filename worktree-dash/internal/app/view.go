@@ -131,11 +131,6 @@ func (m Model) View() string {
 		return ui.OverlayCentered(left_col, picker, m.width, m.height)
 	}
 
-	if m.alert_open {
-		modal := ui.RenderAlertModal(m.alert_message, m.alert_countdown, m.width, m.height)
-		return ui.OverlayCentered(left_col, modal, m.width, m.height)
-	}
-
 	if m.confirm_open {
 		modal := ui.RenderConfirmModal(m.confirm_prompt, m.width, m.height)
 		return ui.OverlayCentered(left_col, modal, m.width, m.height)

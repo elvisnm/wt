@@ -46,9 +46,7 @@ type Model struct {
 	confirm_open    bool
 	confirm_prompt  string
 	confirm_action  func(*Model) (Model, tea.Cmd)
-	alert_open      bool
-	alert_message   string
-	alert_countdown int
+	notify_open bool
 	picker_open     bool
 	picker_cursor   int
 	picker_actions  []ui.PickerAction
