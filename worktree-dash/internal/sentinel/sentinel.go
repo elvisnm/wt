@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	Create      = "wt-create-done"
+	Create       = "wt-create-done"
 	SkipWorktree = "wt-skip-worktree-done"
-	AWSKeys     = "wt-aws-keys-done"
-	HeiHei      = "wt-heihei-done"
+	AWSKeys      = "wt-aws-keys-done"
+	HeiHei       = "wt-heihei-done"
+	Picker       = "wt-picker-done"
 )
 
 // Result holds the parsed output of a sentinel file.

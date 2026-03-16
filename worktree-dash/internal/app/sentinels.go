@@ -193,11 +193,9 @@ func (m Model) resolve_sso_action() (Model, tea.Cmd) {
 			return m, cmd_docker_action("restart", wt, m.repo_root, m.cfg)
 		}
 	}
-	// No pending action (manual Shift+A) — show timed alert
+	// No pending action (manual Shift+A) — show timed notification
 	white := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
 	green := lipgloss.NewStyle().Foreground(lipgloss.Color("34")).Bold(true)
-	m.alert_open = true
-	m.alert_message = white.Render("AWS session is already ") + green.Render("VALID")
-	m.alert_countdown = 3
-	return m, tick_after(1*time.Second, "alert")
+	msg := white.Render("AWS session is already ") + green.Render("VALID")
+	return m.show_notification("AWS", msg)
 }

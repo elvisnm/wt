@@ -17,6 +17,11 @@ type PickerAction struct {
 	Desc  string
 }
 
+// FormatPickerLabel returns the display label for a picker action: "[key] Label — Desc"
+func FormatPickerLabel(a PickerAction) string {
+	return fmt.Sprintf("[%s] %s — %s", a.Key, a.Label, a.Desc)
+}
+
 // Shared actions reused across multiple picker slices.
 var (
 	actionClaude           = PickerAction{Key: "c", Label: labels.Claude, Desc: "Claude Code"}

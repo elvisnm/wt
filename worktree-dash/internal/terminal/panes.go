@@ -2,6 +2,8 @@ package terminal
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -205,8 +207,9 @@ func (pl *PaneLayout) ConfigureBindings() {
 	// prefix+q: return to dashboard — select-pane auto-unzooms if zoomed
 	ts.Run("bind-key", "q", "select-pane", "-t", pl.left_pane_id)
 
-	// prefix+f: toggle zoom on the content pane
-	ts.Run("bind-key", "f", "resize-pane", "-t", pl.right_pane_id, "-Z")
+	// prefix+f: toggle zoom on the right viewport (last pane in window 0)
+	right_target := pl.resolve_right_viewport()
+	ts.Run("bind-key", "f", "resize-pane", "-t", right_target, "-Z")
 
 	// prefix+1-9: jump to tab N — sends Alt+N to bubbletea (pane 0)
 	// Bubbletea's alt_tab_number handler picks this up and calls FocusByIndex + FocusRight
@@ -297,6 +300,59 @@ func (pl *PaneLayout) SetNotifyContent(title, message string) {
 		fmt.Sprintf("printf '\\033[?25l%%s' '%s'; %s", escaped, holdPaneCmd))
 }
 
+// RunPicker expands the notification pane and runs `wt _pick` inside it.
+// The Go-based picker renders the same bordered box as notifications and
+// handles arrow key navigation natively. Result is written to a sentinel file.
+func (pl *PaneLayout) RunPicker(title string, options []string, sentinel_path string) {
+	pl.mu.Lock()
+	id := pl.notify_pane_id
+	pl.mu.Unlock()
+
+	if id == "" || len(options) == 0 {
+		return
+	}
+
+	// Height: 1 (top border) + options + 1 (bottom border)
+	rows := len(options) + 2
+	pl.server.Run("resize-pane", "-t", id, "-y", fmt.Sprintf("%d", rows))
+
+	// Build the wt _pick command
+	var args []string
+	args = append(args, "--title", fmt.Sprintf("'%s'", strings.ReplaceAll(title, "'", "'\\''")))
+	args = append(args, "--sentinel", fmt.Sprintf("'%s'", sentinel_path))
+	for _, opt := range options {
+		args = append(args, fmt.Sprintf("'%s'", strings.ReplaceAll(opt, "'", "'\\''")))
+	}
+
+	// Find the wt binary path
+	wt_bin := pick_binary_path()
+
+	cmd := fmt.Sprintf("%s _pick %s; %s", wt_bin, strings.Join(args, " "), holdPaneCmd)
+	pl.server.Run("respawn-pane", "-k", "-t", id, cmd)
+
+	// Focus the notification pane so the user can navigate with arrow keys
+	pl.server.Run("select-pane", "-t", id)
+}
+
+// cached_binary_path is resolved once at first use.
+var cached_binary_path string
+
+func pick_binary_path() string {
+	if cached_binary_path != "" {
+		return cached_binary_path
+	}
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			cached_binary_path = resolved
+			return resolved
+		}
+		cached_binary_path = exe
+		return exe
+	}
+	cached_binary_path = "wt"
+	return "wt"
+}
+
 // NotifyPaneExists returns true if the notification panel pane exists.
 func (pl *PaneLayout) NotifyPaneExists() bool {
 	pl.mu.Lock()
@@ -379,13 +435,17 @@ func render_bordered_line(message string, msg_vis_len int, border_color string, 
 // ShowSession swaps a session's tmux window pane into the right viewport.
 // If another session is currently visible, it gets returned to its background window first.
 // Focus stays on the left pane.
+//
+// Note: swap-pane moves pane IDs between windows, so we always resolve the
+// right viewport position dynamically rather than using a stored pane ID.
 func (pl *PaneLayout) ShowSession(window string) {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
 
 	// Return current session to its background window
 	if pl.active_win != "" {
-		pl.server.Run("swap-pane", "-s", pl.right_pane_id, "-t", fmt.Sprintf("wt:%s.0", pl.active_win))
+		right := pl.resolve_right_viewport()
+		pl.server.Run("swap-pane", "-s", right, "-t", fmt.Sprintf("wt:%s.0", pl.active_win))
 	}
 
 	if window == "" {
@@ -393,11 +453,11 @@ func (pl *PaneLayout) ShowSession(window string) {
 		return
 	}
 
-	// Bring new session into the right viewport
-	pl.server.Run("swap-pane", "-s", fmt.Sprintf("wt:%s.0", window), "-t", pl.right_pane_id)
+	// Re-resolve after swap-out — the right viewport pane changed
+	right := pl.resolve_right_viewport()
+	pl.server.Run("swap-pane", "-s", fmt.Sprintf("wt:%s.0", window), "-t", right)
 	pl.active_win = window
 
-	// Ensure focus stays on the left pane (swap-pane can move focus)
 	pl.server.Run("select-pane", "-t", pl.left_pane_id)
 }
 
@@ -411,7 +471,8 @@ func (pl *PaneLayout) ReturnSession() {
 		return
 	}
 
-	pl.server.Run("swap-pane", "-s", pl.right_pane_id, "-t", fmt.Sprintf("wt:%s.0", pl.active_win))
+	right := pl.resolve_right_viewport()
+	pl.server.Run("swap-pane", "-s", right, "-t", fmt.Sprintf("wt:%s.0", pl.active_win))
 	pl.active_win = ""
 	pl.server.Run("select-pane", "-t", pl.left_pane_id)
 }
@@ -428,12 +489,14 @@ func (pl *PaneLayout) SwitchTab(from_window, to_window string) {
 
 	// Return current session to its background window
 	if from_window != "" {
-		pl.server.Run("swap-pane", "-s", pl.right_pane_id, "-t", fmt.Sprintf("wt:%s.0", from_window))
+		right := pl.resolve_right_viewport()
+		pl.server.Run("swap-pane", "-s", right, "-t", fmt.Sprintf("wt:%s.0", from_window))
 	}
 
-	// Bring new session into the viewport
+	// Re-resolve after swap-out — the right viewport pane changed
 	if to_window != "" {
-		pl.server.Run("swap-pane", "-s", fmt.Sprintf("wt:%s.0", to_window), "-t", pl.right_pane_id)
+		right := pl.resolve_right_viewport()
+		pl.server.Run("swap-pane", "-s", fmt.Sprintf("wt:%s.0", to_window), "-t", right)
 	}
 
 	pl.active_win = to_window
@@ -458,21 +521,36 @@ func (pl *PaneLayout) HasActiveSession() bool {
 
 // ── Zoom & Focus ───────────────────────────────────────────────────────
 
+// resolve_right_viewport returns the tmux pane ID currently in the right viewport.
+// This is the last pane in window 0 (always the terminal session area).
+// Must be resolved dynamically because swap-pane moves pane IDs between windows.
+// Safe to call with or without pl.mu held (only accesses pl.server).
+func (pl *PaneLayout) resolve_right_viewport() string {
+	out, err := pl.server.Run("list-panes", "-t", "wt:0", "-F", "#{pane_id}")
+	if err != nil {
+		return pl.right_pane_id
+	}
+	ids := parse_pane_ids(out)
+	if len(ids) == 0 {
+		return pl.right_pane_id
+	}
+	return ids[len(ids)-1]
+}
+
 // ZoomRight zooms the right content pane to fill the entire tmux window.
 func (pl *PaneLayout) ZoomRight() {
-	pl.server.Run("resize-pane", "-t", pl.right_pane_id, "-Z")
+	pl.server.Run("resize-pane", "-t", pl.resolve_right_viewport(), "-Z")
 }
 
 // UnzoomRight unzooms the right content pane (restores the split layout).
 // If not zoomed, this is a no-op (zoom toggles).
 func (pl *PaneLayout) UnzoomRight() {
-	// Check if currently zoomed before toggling
 	out, err := pl.server.Run("display-message", "-t", "wt:0", "-p", "#{window_zoomed_flag}")
 	if err != nil {
 		return
 	}
 	if strings.TrimSpace(out) == "1" {
-		pl.server.Run("resize-pane", "-t", pl.right_pane_id, "-Z")
+		pl.server.Run("resize-pane", "-t", pl.resolve_right_viewport(), "-Z")
 	}
 }
 
@@ -487,7 +565,7 @@ func (pl *PaneLayout) IsZoomed() bool {
 
 // FocusRight switches tmux focus to the right content pane (terminal session).
 func (pl *PaneLayout) FocusRight() {
-	pl.server.Run("select-pane", "-t", pl.right_pane_id)
+	pl.server.Run("select-pane", "-t", pl.resolve_right_viewport())
 }
 
 // FocusLeft switches tmux focus to the left pane (bubbletea control app).
@@ -498,7 +576,7 @@ func (pl *PaneLayout) FocusLeft() {
 // RightPaneDimensions returns the current width and height of the right content pane.
 func (pl *PaneLayout) RightPaneDimensions() (int, int) {
 	out, err := pl.server.Run(
-		"display-message", "-t", pl.right_pane_id,
+		"display-message", "-t", pl.resolve_right_viewport(),
 		"-p", "#{pane_width} #{pane_height}",
 	)
 	if err != nil {

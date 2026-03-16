@@ -9,7 +9,6 @@ import (
 	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
 
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func test_model_full() Model {
@@ -32,14 +31,10 @@ func test_model_full() Model {
 func TestViewWithPickerOpen(t *testing.T) {
 	m := test_model_full()
 
-	// Open picker via Enter
-	enter_msg := tea.KeyMsg{Type: tea.KeyEnter}
-	result, _ := m.Update(enter_msg)
-	m = result.(Model)
-
-	if !m.picker_open {
-		t.Fatal("Picker should be open")
-	}
+	// Manually set picker state (the bubbletea overlay path)
+	m.picker_open = true
+	m.picker_actions = ui.WorktreeActions
+	m.picker_context = pickerWorktree
 
 	view := m.View()
 	lines := strings.Split(view, "\n")

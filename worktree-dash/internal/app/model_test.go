@@ -24,29 +24,24 @@ func test_model() Model {
 	return m
 }
 
-func TestEnterOpensPicker(t *testing.T) {
+func TestEnterWithoutPaneLayout(t *testing.T) {
 	m := test_model()
+	// No pane_layout — open_panel_picker returns early (no-op)
 
-	// Simulate Enter key
 	enter_msg := tea.KeyMsg{Type: tea.KeyEnter}
 	result, _ := m.Update(enter_msg)
 	updated := result.(Model)
 
-	if !updated.picker_open {
-		t.Errorf("Expected picker_open=true after Enter, got false")
+	// Without pane_layout, picker should NOT open
+	if updated.picker_open {
+		t.Errorf("Expected picker_open=false without pane_layout")
 	}
-
-	if len(updated.picker_actions) == 0 {
-		t.Errorf("Expected picker_actions to be populated, got empty")
-	}
-
-	t.Logf("picker_open=%v, picker_actions=%d", updated.picker_open, len(updated.picker_actions))
-	for _, a := range updated.picker_actions {
-		t.Logf("  %s: %s", a.Key, a.Label)
+	if updated.panel_picker_open {
+		t.Errorf("Expected panel_picker_open=false without pane_layout")
 	}
 }
 
-func TestEnterOnLocalOpensPicker(t *testing.T) {
+func TestEnterOnLocalWithoutPaneLayout(t *testing.T) {
 	m := test_model()
 	m.cursor = 1 // local worktree
 
@@ -54,10 +49,9 @@ func TestEnterOnLocalOpensPicker(t *testing.T) {
 	result, _ := m.Update(enter_msg)
 	updated := result.(Model)
 
-	if !updated.picker_open {
-		t.Errorf("Expected picker_open=true for local worktree, got false")
+	if updated.picker_open || updated.panel_picker_open {
+		t.Errorf("Expected no picker without pane_layout")
 	}
-	t.Logf("picker_open=%v, picker_actions=%d", updated.picker_open, len(updated.picker_actions))
 }
 
 func TestPickerEscCloses(t *testing.T) {

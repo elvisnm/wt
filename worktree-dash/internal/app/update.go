@@ -335,12 +335,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m, _ = m.handle_heihei_sentinel()
 				}
 			}
+			// Check if panel picker finished (via sentinel file)
+			if m.panel_picker_open {
+				if sr := sentinel.Read(sentinel.Picker); sr != nil {
+					m.panel_picker_open = false
+					choice := strings.TrimSpace(sr.Raw)
+
+					// Clear the picker panel and restore focus BEFORE dispatching,
+					// matching the old bubbletea flow where picker_open=false
+					// was set before dispatch_picker was called.
+					if m.pane_layout != nil {
+						m.pane_layout.ClearNotifyPane()
+						m.pane_layout.FocusLeft()
+					}
+
+					if choice != "" {
+						for _, a := range m.picker_actions {
+							if ui.FormatPickerLabel(a) == choice {
+								m, cmd := m.dispatch_picker(a)
+								// If the action opened a terminal session, focus
+								// the right tmux pane so the user sees it.
+								if m.focus == PanelTerminal && m.pane_layout != nil {
+									m.pane_layout.FocusRight()
+								}
+								return m, cmd
+							}
+						}
+					}
+					return m, tick_after(100*time.Millisecond, "render")
+				}
+			}
 			// Auto-close dead Logs tabs
 			if m.term_mgr != nil && m.term_mgr.CloseDeadLogs() {
 				m.focus_worktrees_if_empty()
 			}
-			// Re-render tick for PTY output updates
-			if m.term_mgr.Count() > 0 || m.preview_session != nil {
+			// Re-render tick for PTY output updates and panel picker polling
+			if m.term_mgr.Count() > 0 || m.preview_session != nil || m.panel_picker_open {
 				return m, tick_after(100*time.Millisecond, "render")
 			}
 			return m, nil
@@ -721,10 +751,8 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, Keys.Enter):
 		wt := m.selected_worktree()
 		if wt != nil {
-			m.picker_actions = m.actions_for_worktree(*wt)
-			m.picker_cursor = 0
-			m.picker_open = true
-			m.picker_context = pickerWorktree
+			actions := m.actions_for_worktree(*wt)
+			return m.open_panel_picker("Choose an option - "+wt.Alias, actions, pickerWorktree)
 		}
 		return m, nil
 	}
@@ -1844,6 +1872,28 @@ func (m Model) show_notification(title, message string) (Model, tea.Cmd) {
 	return m, tick_after(notifyDefaultDuration, "notify")
 }
 
+// open_panel_picker runs an interactive picker in the notification pane.
+// The render tick polls for the sentinel file and dispatches the result.
+func (m Model) open_panel_picker(title string, actions []ui.PickerAction, context string) (Model, tea.Cmd) {
+	if m.pane_layout == nil || len(actions) == 0 {
+		return m, nil
+	}
+
+	m.picker_actions = actions
+	m.picker_context = context
+	m.panel_picker_open = true
+
+	// Build option labels for the picker
+	options := make([]string, len(actions))
+	for i, a := range actions {
+		options[i] = ui.FormatPickerLabel(a)
+	}
+
+	sentinel.Clear(sentinel.Picker)
+	m.pane_layout.RunPicker(title, options, sentinel.Path(sentinel.Picker))
+	return m, tick_after(100*time.Millisecond, "render")
+}
+
 // open_worktree_info focuses the Details panel which shows all info.
 func (m Model) open_worktree_info() (Model, tea.Cmd) {
 	m.prev_focus = m.focus
@@ -2111,11 +2161,7 @@ func (m Model) run_skip_worktree_toggle(wt worktree.Worktree, action string) (Mo
 
 // open_maintenance_picker shows the maintenance operations picker
 func (m Model) open_maintenance_picker() (tea.Model, tea.Cmd) {
-	m.picker_actions = ui.FilterMaintenanceActions(m.cfg)
-	m.picker_cursor = 0
-	m.picker_open = true
-	m.picker_context = pickerMaintenance
-	return m, nil
+	return m.open_panel_picker("Maintenance", ui.FilterMaintenanceActions(m.cfg), pickerMaintenance)
 }
 
 // execute_maintenance_action runs the selected maintenance operation
@@ -2350,11 +2396,7 @@ func (m Model) open_db_picker() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.picker_actions = ui.FilterDatabaseActions(m.cfg)
-	m.picker_cursor = 0
-	m.picker_open = true
-	m.picker_context = pickerDB
-	return m, nil
+	return m.open_panel_picker("Database", ui.FilterDatabaseActions(m.cfg), pickerDB)
 }
 
 // execute_db_action runs the selected database operation
