@@ -1894,8 +1894,12 @@ func (m Model) open_panel_picker(title string, actions []ui.PickerAction, contex
 	return m, tick_after(100*time.Millisecond, "render")
 }
 
-// open_worktree_info focuses the Details panel which shows all info.
+// open_worktree_info ensures the Details panel is visible and focuses it.
 func (m Model) open_worktree_info() (Model, tea.Cmd) {
+	if !m.details_visible {
+		m.details_visible = true
+		m.recalc_layout()
+	}
 	m.prev_focus = m.focus
 	m.focus = PanelDetails
 	m.details_scroll = 0
