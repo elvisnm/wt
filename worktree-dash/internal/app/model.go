@@ -47,7 +47,9 @@ type Model struct {
 	confirm_prompt  string
 	confirm_action  func(*Model) (Model, tea.Cmd)
 	notify_open      bool
-	panel_picker_open bool // picker running in notify pane
+	panel_picker_open  bool // picker running in notify pane
+	panel_confirm_open bool // confirm dialog running in notify pane
+	panel_confirm_action func(*Model) (Model, tea.Cmd)
 	picker_open     bool
 	picker_cursor   int
 	picker_actions  []ui.PickerAction

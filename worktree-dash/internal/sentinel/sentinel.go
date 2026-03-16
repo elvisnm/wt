@@ -13,6 +13,7 @@ const (
 	AWSKeys      = "wt-aws-keys-done"
 	HeiHei       = "wt-heihei-done"
 	Picker       = "wt-picker-done"
+	Confirm      = "wt-confirm-done"
 )
 
 // Result holds the parsed output of a sentinel file.

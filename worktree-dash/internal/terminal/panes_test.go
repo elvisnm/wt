@@ -209,18 +209,15 @@ func TestShowSessionReplacesActive(t *testing.T) {
 func TestPaneIDs(t *testing.T) {
 	_, pl := setupPaneLayout(t)
 
-	// All 3 pane IDs should be captured and start with %
 	for name, id := range map[string]string{
-		"left": pl.left_pane_id, "right": pl.right_pane_id, "notify": pl.notify_pane_id,
+		"left": pl.left_pane_id, "notify": pl.notify_pane_id,
 	} {
 		if id == "" || id[0] != '%' {
 			t.Errorf("%s_pane_id = %q, want %%N format", name, id)
 		}
 	}
-	// All three should be distinct
-	ids := map[string]bool{pl.left_pane_id: true, pl.right_pane_id: true, pl.notify_pane_id: true}
-	if len(ids) != 3 {
-		t.Errorf("pane IDs not unique: left=%s right=%s notify=%s", pl.left_pane_id, pl.right_pane_id, pl.notify_pane_id)
+	if pl.left_pane_id == pl.notify_pane_id {
+		t.Error("left and notify pane IDs should differ")
 	}
 }
 

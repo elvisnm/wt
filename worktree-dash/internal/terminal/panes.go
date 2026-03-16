@@ -30,8 +30,7 @@ type PaneLayout struct {
 
 	// Stable tmux pane IDs (e.g. "%0", "%1", "%5") — survive splits and swaps
 	left_pane_id   string // bubbletea control app
-	right_pane_id  string // terminal sessions
-	notify_pane_id string // notification/menu panel (empty = hidden)
+	notify_pane_id string // notification/menu panel
 	notify_width   int    // cached width of notification pane
 
 	mu sync.Mutex
@@ -66,8 +65,9 @@ func SetupPaneLayout(ts *TmuxServer, left_pct int, exe_path string) (*PaneLayout
 	left_id := capture_pane_id(ts, "wt:0.0")
 	right_id := capture_pane_id(ts, "wt:0.1")
 
-	// Create the notification pane (2 rows initially: compact empty state).
-	// Expands to 3 rows when showing a message.
+	// Create the notification pane ABOVE the right pane (-b = before).
+	// Layout after split: left=idx0, notify=idx1, right=idx2.
+	// All swap-pane operations use wt:0.2 to target the right viewport.
 	ts.Run("split-window", "-v", "-b", "-d",
 		"-t", right_id,
 		"-l", "2",
@@ -78,11 +78,9 @@ func SetupPaneLayout(ts *TmuxServer, left_pct int, exe_path string) (*PaneLayout
 	// Discover the new notification pane by exclusion.
 	notify_id := discover_pane_excluding(ts, left_id, right_id)
 
-	// Disable remain-on-exit for the notify pane — we use respawn-pane to
-	// update content, and don't want "Pane is dead" flashing between respawns.
-	if notify_id != "" {
-		ts.Run("set-option", "-t", notify_id, "remain-on-exit", "off")
-	}
+	// Keep remain-on-exit ON for the notify pane (inherited from global).
+	// respawn-pane -k handles the kill+restart atomically so the pane
+	// never shows "Pane is dead" to the user.
 
 	// Focus back to the left pane so bubbletea gets input first
 	ts.Run("select-pane", "-t", left_id)
@@ -90,7 +88,6 @@ func SetupPaneLayout(ts *TmuxServer, left_pct int, exe_path string) (*PaneLayout
 	pl := &PaneLayout{
 		server:         ts,
 		left_pane_id:   left_id,
-		right_pane_id:  right_id,
 		notify_pane_id: notify_id,
 		notify_width:   query_pane_width(ts, notify_id),
 	}
@@ -103,31 +100,14 @@ func SetupPaneLayout(ts *TmuxServer, left_pct int, exe_path string) (*PaneLayout
 
 // NewPaneLayout creates a PaneLayout connected to an existing tmux server.
 // Used by the inner-mode bubbletea app to manage pane operations.
-// Discovers pane IDs from the running session (3 panes: left, notify, right).
+// Layout: left=idx0, notify=idx1, right=idx2.
 func NewPaneLayout(server *TmuxServer) *PaneLayout {
-	// Pane 0 is always the left (bubbletea) pane.
 	left_id := capture_pane_id(server, "wt:0.0")
-
-	// With the notify pane, the layout has 3 panes. The right (terminal) pane
-	// is the last one (highest index). The notify pane is in between.
-	// List all panes and assign by exclusion.
-	out, _ := server.Run("list-panes", "-t", "wt:0", "-F", "#{pane_id}")
-	ids := parse_pane_ids(out)
-
-	var right_id, notify_id string
-	if len(ids) >= 3 {
-		// Last pane is the terminal (right), middle is notify
-		right_id = ids[len(ids)-1]
-		notify_id = ids[1] // the one between left and right
-	} else if len(ids) >= 2 {
-		// Fallback: 2-pane layout (no notify pane)
-		right_id = ids[1]
-	}
+	notify_id := capture_pane_id(server, "wt:0.1")
 
 	return &PaneLayout{
 		server:         server,
 		left_pane_id:   left_id,
-		right_pane_id:  right_id,
 		notify_pane_id: notify_id,
 		notify_width:   query_pane_width(server, notify_id),
 	}
@@ -237,20 +217,19 @@ func (pl *PaneLayout) ConfigureBindings() {
 
 	// Prevent mouse clicks from switching pane focus. tmux "mouse on" enables
 	// click-to-select-pane, which causes unwanted focus changes when the user
-	// clicks on the terminal to return from another app. Unbind the default
-	// MouseDown1Pane handler so clicks pass through without changing focus.
-	// Mouse scroll still works (WheelUpPane/WheelDownPane are separate bindings).
+	// clicks on the terminal to return from another app. Keep MouseDrag1Pane
+	// so text selection still works in terminal sessions.
 	ts.Run("unbind-key", "-n", "MouseDown1Pane")
 	ts.Run("unbind-key", "-n", "MouseDown1Status")
-	ts.Run("unbind-key", "-n", "MouseDrag1Pane")
 	ts.Run("unbind-key", "-n", "MouseDrag1Border")
 }
 
 // ── Notification / Menu Panel ──────────────────────────────────────────
 
 const (
-	notifyPaneRows = 3 // top border + content + bottom border
-	holdPaneCmd    = "while :; do sleep 86400; done"
+	notifyPaneRows     = 3 // top border + content + bottom border
+	holdPaneCmd        = "while :; do sleep 86400; done"
+	rightViewportTarget = "wt:0.2" // Layout: left=0, notify=1, right=2
 
 	// ANSI color codes for notification box rendering
 	ansiDim    = "\033[38;5;240m" // grey for borders
@@ -260,63 +239,40 @@ const (
 	ansiReset  = "\033[0m"
 )
 
-// ClearNotifyPane resets the notification panel to a compact 2-row empty state.
-func (pl *PaneLayout) ClearNotifyPane() {
-	pl.mu.Lock()
+// respawn_notify resizes the pane, clears all terminal state, and starts
+// a new process. This is the single method all panel operations use.
+func (pl *PaneLayout) respawn_notify(rows int, cmd string) {
 	id := pl.notify_pane_id
-	w := pl.notify_width
-	pl.mu.Unlock()
-
 	if id == "" {
 		return
 	}
+	pl.server.Run("resize-pane", "-t", id, "-y", fmt.Sprintf("%d", rows))
+	pl.server.Run("respawn-pane", "-k", "-t", id, cmd)
+}
 
-	// Shrink to 2 rows and render the compact (no content line) box in dim grey
-	pl.server.Run("resize-pane", "-t", id, "-y", "2")
+// ClearNotifyPane resets the notification panel to a compact 2-row empty state.
+func (pl *PaneLayout) ClearNotifyPane() {
+	w := pl.notify_width
 	box := render_notify_box_compact("No notifications", ansiDim, w)
 	escaped := strings.ReplaceAll(box, "'", "'\\''")
-	pl.server.Run("respawn-pane", "-k", "-t", id,
-		fmt.Sprintf("printf '\\033[?25l%%s' '%s'; %s", escaped, holdPaneCmd))
+	pl.respawn_notify(2, fmt.Sprintf("printf '\\033[?25l%%s' '%s'; %s", escaped, holdPaneCmd))
 }
 
 // SetNotifyContent renders the full bordered box (title + message) in the
 // notification pane. Expands to 3 rows for the content line.
 func (pl *PaneLayout) SetNotifyContent(title, message string) {
-	pl.mu.Lock()
-	id := pl.notify_pane_id
 	w := pl.notify_width
-	pl.mu.Unlock()
-
-	if id == "" {
-		return
-	}
-
-	// Expand to 3 rows for the content line, use orange borders for attention
-	pl.server.Run("resize-pane", "-t", id, "-y", fmt.Sprintf("%d", notifyPaneRows))
-
 	box := render_notify_box(title, message, ansiOrange, w)
 	escaped := strings.ReplaceAll(box, "'", "'\\''")
-	pl.server.Run("respawn-pane", "-k", "-t", id,
-		fmt.Sprintf("printf '\\033[?25l%%s' '%s'; %s", escaped, holdPaneCmd))
+	pl.respawn_notify(notifyPaneRows, fmt.Sprintf("printf '\\033[?25l%%s' '%s'; %s", escaped, holdPaneCmd))
 }
 
 // RunPicker expands the notification pane and runs `wt _pick` inside it.
-// The Go-based picker renders the same bordered box as notifications and
-// handles arrow key navigation natively. Result is written to a sentinel file.
 func (pl *PaneLayout) RunPicker(title string, options []string, sentinel_path string) {
-	pl.mu.Lock()
-	id := pl.notify_pane_id
-	pl.mu.Unlock()
-
-	if id == "" || len(options) == 0 {
+	if pl.notify_pane_id == "" || len(options) == 0 {
 		return
 	}
 
-	// Height: 1 (top border) + options + 1 (bottom border)
-	rows := len(options) + 2
-	pl.server.Run("resize-pane", "-t", id, "-y", fmt.Sprintf("%d", rows))
-
-	// Build the wt _pick command
 	var args []string
 	args = append(args, "--title", fmt.Sprintf("'%s'", strings.ReplaceAll(title, "'", "'\\''")))
 	args = append(args, "--sentinel", fmt.Sprintf("'%s'", sentinel_path))
@@ -324,14 +280,26 @@ func (pl *PaneLayout) RunPicker(title string, options []string, sentinel_path st
 		args = append(args, fmt.Sprintf("'%s'", strings.ReplaceAll(opt, "'", "'\\''")))
 	}
 
-	// Find the wt binary path
 	wt_bin := pick_binary_path()
-
 	cmd := fmt.Sprintf("%s _pick %s; %s", wt_bin, strings.Join(args, " "), holdPaneCmd)
-	pl.server.Run("respawn-pane", "-k", "-t", id, cmd)
+	pl.respawn_notify(len(options)+2, cmd)
+	pl.server.Run("select-pane", "-t", pl.notify_pane_id)
+}
 
-	// Focus the notification pane so the user can navigate with arrow keys
-	pl.server.Run("select-pane", "-t", id)
+// RunConfirm shows a yes/no confirmation dialog in the notification pane.
+func (pl *PaneLayout) RunConfirm(title, prompt, sentinel_path string) {
+	if pl.notify_pane_id == "" {
+		return
+	}
+
+	wt_bin := pick_binary_path()
+	escaped_title := strings.ReplaceAll(title, "'", "'\\''")
+	escaped_prompt := strings.ReplaceAll(prompt, "'", "'\\''")
+
+	cmd := fmt.Sprintf("%s _confirm --title '%s' --prompt '%s' --sentinel '%s'; %s",
+		wt_bin, escaped_title, escaped_prompt, sentinel_path, holdPaneCmd)
+	pl.respawn_notify(4, cmd)
+	pl.server.Run("select-pane", "-t", pl.notify_pane_id)
 }
 
 // cached_binary_path is resolved once at first use.
@@ -521,20 +489,12 @@ func (pl *PaneLayout) HasActiveSession() bool {
 
 // ── Zoom & Focus ───────────────────────────────────────────────────────
 
-// resolve_right_viewport returns the tmux pane ID currently in the right viewport.
-// This is the last pane in window 0 (always the terminal session area).
-// Must be resolved dynamically because swap-pane moves pane IDs between windows.
-// Safe to call with or without pl.mu held (only accesses pl.server).
+// resolve_right_viewport returns a positional tmux target for the right viewport.
+// Layout: left=idx0, notify=idx1, right=idx2. Right is always wt:0.2.
+// Positional targets always refer to whatever pane occupies that position,
+// even after swap-pane moves pane IDs between windows.
 func (pl *PaneLayout) resolve_right_viewport() string {
-	out, err := pl.server.Run("list-panes", "-t", "wt:0", "-F", "#{pane_id}")
-	if err != nil {
-		return pl.right_pane_id
-	}
-	ids := parse_pane_ids(out)
-	if len(ids) == 0 {
-		return pl.right_pane_id
-	}
-	return ids[len(ids)-1]
+	return rightViewportTarget
 }
 
 // ZoomRight zooms the right content pane to fill the entire tmux window.

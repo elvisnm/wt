@@ -340,21 +340,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if sr := sentinel.Read(sentinel.Picker); sr != nil {
 					m.panel_picker_open = false
 					choice := strings.TrimSpace(sr.Raw)
+	
 
-					// Clear the picker panel and restore focus BEFORE dispatching,
-					// matching the old bubbletea flow where picker_open=false
-					// was set before dispatch_picker was called.
 					if m.pane_layout != nil {
-						m.pane_layout.ClearNotifyPane()
 						m.pane_layout.FocusLeft()
 					}
 
 					if choice != "" {
 						for _, a := range m.picker_actions {
 							if ui.FormatPickerLabel(a) == choice {
+	
 								m, cmd := m.dispatch_picker(a)
-								// If the action opened a terminal session, focus
-								// the right tmux pane so the user sees it.
+	
+								// If the dispatched action didn't open a new panel
+								// UI (confirm/picker), clear the notification pane.
+								if !m.panel_confirm_open && !m.panel_picker_open {
+	
+									if m.pane_layout != nil {
+										m.pane_layout.ClearNotifyPane()
+									}
+								}
 								if m.focus == PanelTerminal && m.pane_layout != nil {
 									m.pane_layout.FocusRight()
 								}
@@ -362,6 +367,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 						}
 					}
+					// Cancelled or no match — clear pane
+	
+					if m.pane_layout != nil {
+						m.pane_layout.ClearNotifyPane()
+					}
+					return m, tick_after(100*time.Millisecond, "render")
+				}
+			}
+			// Check if panel confirm finished (via sentinel file)
+			if m.panel_confirm_open {
+				if sr := sentinel.Read(sentinel.Confirm); sr != nil {
+					m.panel_confirm_open = false
+					confirmed := strings.TrimSpace(sr.Raw) == "yes"
+	
+
+					if m.pane_layout != nil {
+						m.pane_layout.ClearNotifyPane()
+						m.pane_layout.FocusLeft()
+					}
+
+					if confirmed && m.panel_confirm_action != nil {
+						cb := m.panel_confirm_action
+						m.panel_confirm_action = nil
+	
+						m, cmd := cb(&m)
+						if m.focus == PanelTerminal && m.pane_layout != nil {
+							m.pane_layout.FocusRight()
+						}
+						return m, cmd
+					}
+					m.panel_confirm_action = nil
 					return m, tick_after(100*time.Millisecond, "render")
 				}
 			}
@@ -369,8 +405,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.term_mgr != nil && m.term_mgr.CloseDeadLogs() {
 				m.focus_worktrees_if_empty()
 			}
-			// Re-render tick for PTY output updates and panel picker polling
-			if m.term_mgr.Count() > 0 || m.preview_session != nil || m.panel_picker_open {
+			// Re-render tick for PTY output updates and panel polling
+			if m.term_mgr.Count() > 0 || m.preview_session != nil || m.panel_picker_open || m.panel_confirm_open {
 				return m, tick_after(100*time.Millisecond, "render")
 			}
 			return m, nil
@@ -1205,12 +1241,8 @@ func (m Model) open_bash(wt worktree.Worktree) (Model, tea.Cmd) {
 
 // open_pull asks for confirmation then runs dc-pull.js to safely pull latest changes.
 func (m Model) open_pull(wt worktree.Worktree) (Model, tea.Cmd) {
-	m.confirm_open = true
-	m.confirm_prompt = fmt.Sprintf("Pull latest changes on %s?", wt.Alias)
-	m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-		return mdl.run_pull(wt)
-	}
-	return m, nil
+	return m.open_panel_confirm("Pull", fmt.Sprintf("Pull latest changes on %s?", wt.Alias),
+		func(mdl *Model) (Model, tea.Cmd) { return mdl.run_pull(wt) })
 }
 
 func (m Model) run_pull(wt worktree.Worktree) (Model, tea.Cmd) {
@@ -1894,6 +1926,23 @@ func (m Model) open_panel_picker(title string, actions []ui.PickerAction, contex
 	return m, tick_after(100*time.Millisecond, "render")
 }
 
+// open_panel_confirm runs a yes/no confirmation dialog in the notification pane.
+// On confirm, the callback is invoked. On cancel, nothing happens.
+func (m Model) open_panel_confirm(title, prompt string, action func(*Model) (Model, tea.Cmd)) (Model, tea.Cmd) {
+	if m.pane_layout == nil {
+		// Fallback: execute immediately (no confirm)
+		return action(&m)
+	}
+
+
+	m.panel_confirm_open = true
+	m.panel_confirm_action = action
+
+	sentinel.Clear(sentinel.Confirm)
+	m.pane_layout.RunConfirm(title, prompt, sentinel.Path(sentinel.Confirm))
+	return m, tick_after(100*time.Millisecond, "render")
+}
+
 // open_worktree_info ensures the Details panel is visible and focuses it.
 func (m Model) open_worktree_info() (Model, tea.Cmd) {
 	if !m.details_visible {
@@ -2006,12 +2055,8 @@ func (m Model) toggle_admin() (tea.Model, tea.Cmd) {
 		action = "unset"
 	}
 
-	m.confirm_open = true
-	m.confirm_prompt = fmt.Sprintf("Admin %s on %s?", action, wt.Alias)
-	m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-		return mdl.run_admin_toggle(*wt, action)
-	}
-	return m, nil
+	return m.open_panel_confirm("Admin", fmt.Sprintf("Admin %s on %s?", action, wt.Alias),
+		func(mdl *Model) (Model, tea.Cmd) { return mdl.run_admin_toggle(*wt, action) })
 }
 
 func (m Model) run_admin_toggle(wt worktree.Worktree, action string) (Model, tea.Cmd) {
@@ -2056,12 +2101,8 @@ func (m Model) toggle_lan() (tea.Model, tea.Cmd) {
 		action = "disable"
 	}
 
-	m.confirm_open = true
-	m.confirm_prompt = fmt.Sprintf("LAN %s on %s?", action, wt.Alias)
-	m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-		return mdl.run_lan_toggle(*wt, action)
-	}
-	return m, nil
+	return m.open_panel_confirm("LAN", fmt.Sprintf("LAN %s on %s?", action, wt.Alias),
+		func(mdl *Model) (Model, tea.Cmd) { return mdl.run_lan_toggle(*wt, action) })
 }
 
 func (m Model) run_lan_toggle(wt worktree.Worktree, action string) (Model, tea.Cmd) {
@@ -2124,16 +2165,12 @@ func (m Model) toggle_skip_worktree() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	m.confirm_open = true
 	verb := "Apply"
 	if action == "remove" {
 		verb = "Remove"
 	}
-	m.confirm_prompt = fmt.Sprintf("%s skip-worktree on %s?", verb, wt.Alias)
-	m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-		return mdl.run_skip_worktree_toggle(*wt, action)
-	}
-	return m, nil
+	return m.open_panel_confirm("Skip-worktree", fmt.Sprintf("%s skip-worktree on %s?", verb, wt.Alias),
+		func(mdl *Model) (Model, tea.Cmd) { return mdl.run_skip_worktree_toggle(*wt, action) })
 }
 
 func (m Model) run_skip_worktree_toggle(wt worktree.Worktree, action string) (Model, tea.Cmd) {
@@ -2519,28 +2556,22 @@ func (m Model) handle_tasks_list_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "c":
 		id := task.ID
-		title := task.Title
-		m.confirm_open = true
-		m.confirm_prompt = fmt.Sprintf("Close task %s?\n%s", id, title)
-		m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-			return *mdl, func() tea.Msg {
-				err := beads.CloseTask(id)
-				return MsgTaskActionDone{Err: err}
-			}
-		}
-		return m, nil
+		return m.open_panel_confirm("Close Task", fmt.Sprintf("Close task %s?", id),
+			func(mdl *Model) (Model, tea.Cmd) {
+				return *mdl, func() tea.Msg {
+					err := beads.CloseTask(id)
+					return MsgTaskActionDone{Err: err}
+				}
+			})
 	case "d":
 		id := task.ID
-		title := task.Title
-		m.confirm_open = true
-		m.confirm_prompt = fmt.Sprintf("Delete task %s?\n%s", id, title)
-		m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-			return *mdl, func() tea.Msg {
-				err := beads.DeleteTask(id)
-				return MsgTaskActionDone{Err: err}
-			}
-		}
-		return m, nil
+		return m.open_panel_confirm("Delete Task", fmt.Sprintf("Delete task %s?", id),
+			func(mdl *Model) (Model, tea.Cmd) {
+				return *mdl, func() tea.Msg {
+					err := beads.DeleteTask(id)
+					return MsgTaskActionDone{Err: err}
+				}
+			})
 	}
 
 	return m, nil
