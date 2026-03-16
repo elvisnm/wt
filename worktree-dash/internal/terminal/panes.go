@@ -231,6 +231,16 @@ func (pl *PaneLayout) ConfigureBindings() {
 	ts.Run("bind-key", "-n", "C-k",
 		"if-shell", "-F", "#{pane_index}",
 		"send-keys C-k", "")
+
+	// Prevent mouse clicks from switching pane focus. tmux "mouse on" enables
+	// click-to-select-pane, which causes unwanted focus changes when the user
+	// clicks on the terminal to return from another app. Unbind the default
+	// MouseDown1Pane handler so clicks pass through without changing focus.
+	// Mouse scroll still works (WheelUpPane/WheelDownPane are separate bindings).
+	ts.Run("unbind-key", "-n", "MouseDown1Pane")
+	ts.Run("unbind-key", "-n", "MouseDown1Status")
+	ts.Run("unbind-key", "-n", "MouseDrag1Pane")
+	ts.Run("unbind-key", "-n", "MouseDrag1Border")
 }
 
 // ── Notification / Menu Panel ──────────────────────────────────────────
