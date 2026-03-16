@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -57,6 +58,26 @@ func splice_visual(bg, fg string, start_x, fg_w int) string {
 	return bg[:left_end] + "\x1b[0m" + fg + "\x1b[0m" + bg[right_start:]
 }
 
+// render_modal_box wraps content in a styled modal box sized to fit content_width.
+func render_modal_box(content string, content_width, term_width int) string {
+	box_w := content_width + 8 // padding (4) + border (2) + margin (2)
+	if box_w < 36 {
+		box_w = 36
+	}
+	if box_w > term_width-4 {
+		box_w = term_width - 4
+	}
+
+	box := lipgloss.NewStyle().
+		Width(box_w).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(FocusBorderColor).
+		Padding(1, 3).
+		Align(lipgloss.Center)
+
+	return box.Render(content)
+}
+
 // RenderConfirmModal renders a centered confirmation box.
 func RenderConfirmModal(prompt string, width, height int) string {
 	prompt_style := lipgloss.NewStyle().
@@ -79,20 +100,20 @@ func RenderConfirmModal(prompt string, width, height int) string {
 	if hint_w > inner_w {
 		inner_w = hint_w
 	}
-	box_w := inner_w + 8 // padding (4) + border (2) + margin (2)
-	if box_w < 36 {
-		box_w = 36
-	}
-	if box_w > width-4 {
-		box_w = width - 4
-	}
 
-	box := lipgloss.NewStyle().
-		Width(box_w).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(FocusBorderColor).
-		Padding(1, 3).
-		Align(lipgloss.Center)
+	return render_modal_box(content, inner_w, width)
+}
 
-	return box.Render(content)
+// RenderAlertModal renders a centered auto-dismissing alert with countdown.
+// message may contain ANSI styles (pre-rendered lipgloss output).
+func RenderAlertModal(message string, countdown int, width, height int) string {
+	countdown_style := lipgloss.NewStyle().Foreground(DimTextColor)
+
+	content := lipgloss.JoinVertical(lipgloss.Center,
+		message,
+		"",
+		countdown_style.Render(fmt.Sprintf("(%ds)", countdown)),
+	)
+
+	return render_modal_box(content, lipgloss.Width(message), width)
 }

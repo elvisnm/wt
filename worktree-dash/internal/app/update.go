@@ -20,6 +20,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -295,6 +296,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "clear-activity":
 			m.activity = ""
 			return m, nil
+		case "alert":
+			if !m.alert_open {
+				return m, nil
+			}
+			m.alert_countdown--
+			if m.alert_countdown <= 0 {
+				m.alert_open = false
+				return m, nil
+			}
+			return m, tick_after(1*time.Second, "alert")
 		case "render":
 			// Check if dc-create finished (via sentinel file).
 			// Always check the sentinel first — the pane may have already
@@ -501,6 +512,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// In pane layout mode, the right pane gets native input via tmux focus.
 		// Bubbletea only receives keys when the left pane (pane 0) has focus.
+		if m.alert_open {
+			m.alert_open = false
+			return m, tick_after(100*time.Millisecond, "render")
+		}
 		if m.help_open {
 			return m.handle_help_key(msg)
 		}
@@ -2452,9 +2467,13 @@ func (m Model) resolve_sso_action() (tea.Model, tea.Cmd) {
 			return m.start_worktree(wt)
 		}
 	}
-	// No pending action (manual Shift+A check)
-	m.activity = "AWS SSO session is valid"
-	return m, tick_after(3*time.Second, "clear-activity")
+	// No pending action (manual Shift+A) — show timed alert
+	white := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
+	green := lipgloss.NewStyle().Foreground(lipgloss.Color("34")).Bold(true)
+	m.alert_open = true
+	m.alert_message = white.Render("AWS session is already ") + green.Render("VALID")
+	m.alert_countdown = 3
+	return m, tick_after(1*time.Second, "alert")
 }
 
 // sso_profile returns the configured SSO profile, or empty string.
