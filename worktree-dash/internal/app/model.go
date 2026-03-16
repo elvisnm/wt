@@ -50,6 +50,8 @@ type Model struct {
 	panel_picker_open  bool // picker running in notify pane
 	panel_confirm_open bool // confirm dialog running in notify pane
 	panel_confirm_action func(*Model) (Model, tea.Cmd)
+	panel_input_open bool // text input running in notify pane
+	panel_input_callback func(*Model, string) (Model, tea.Cmd)
 	picker_open     bool
 	picker_cursor   int
 	picker_actions  []ui.PickerAction

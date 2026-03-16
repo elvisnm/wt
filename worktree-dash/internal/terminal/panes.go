@@ -302,6 +302,23 @@ func (pl *PaneLayout) RunConfirm(title, prompt, sentinel_path string) {
 	pl.server.Run("select-pane", "-t", pl.notify_pane_id)
 }
 
+// RunInput shows a text input dialog in the notification pane.
+// Result (typed value or empty on cancel) is written to a sentinel file.
+func (pl *PaneLayout) RunInput(title, prompt, sentinel_path string) {
+	if pl.notify_pane_id == "" {
+		return
+	}
+
+	wt_bin := pick_binary_path()
+	escaped_title := strings.ReplaceAll(title, "'", "'\\''")
+	escaped_prompt := strings.ReplaceAll(prompt, "'", "'\\''")
+
+	cmd := fmt.Sprintf("%s _input --title '%s' --prompt '%s' --sentinel '%s'; %s",
+		wt_bin, escaped_title, escaped_prompt, sentinel_path, holdPaneCmd)
+	pl.respawn_notify(notifyPaneRows, cmd)
+	pl.server.Run("select-pane", "-t", pl.notify_pane_id)
+}
+
 // cached_binary_path is resolved once at first use.
 var cached_binary_path string
 

@@ -401,12 +401,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tick_after(100*time.Millisecond, "render")
 				}
 			}
+			// Check if panel input finished (via sentinel file)
+			if m.panel_input_open {
+				if sr := sentinel.Read(sentinel.Input); sr != nil {
+					m.panel_input_open = false
+					value := strings.TrimSpace(sr.Raw)
+
+					if m.pane_layout != nil {
+						m.pane_layout.ClearNotifyPane()
+						m.pane_layout.FocusLeft()
+					}
+
+					if value != "" && m.panel_input_callback != nil {
+						cb := m.panel_input_callback
+						m.panel_input_callback = nil
+						m, cmd := cb(&m, value)
+						if m.focus == PanelTerminal && m.pane_layout != nil {
+							m.pane_layout.FocusRight()
+						}
+						return m, cmd
+					}
+					m.panel_input_callback = nil
+					return m, tick_after(100*time.Millisecond, "render")
+				}
+			}
 			// Auto-close dead Logs tabs
 			if m.term_mgr != nil && m.term_mgr.CloseDeadLogs() {
 				m.focus_worktrees_if_empty()
 			}
 			// Re-render tick for PTY output updates and panel polling
-			if m.term_mgr.Count() > 0 || m.preview_session != nil || m.panel_picker_open || m.panel_confirm_open {
+			if m.term_mgr.Count() > 0 || m.preview_session != nil || m.panel_picker_open || m.panel_confirm_open || m.panel_input_open {
 				return m, tick_after(100*time.Millisecond, "render")
 			}
 			return m, nil
@@ -1934,6 +1958,21 @@ func (m Model) open_panel_confirm(title, prompt string, action func(*Model) (Mod
 
 	sentinel.Clear(sentinel.Confirm)
 	m.pane_layout.RunConfirm(title, prompt, sentinel.Path(sentinel.Confirm))
+	return m, tick_after(100*time.Millisecond, "render")
+}
+
+// open_panel_input shows a text input dialog in the notification pane.
+// On submit, the callback receives the typed value. On cancel, nothing happens.
+func (m Model) open_panel_input(title, prompt string, callback func(*Model, string) (Model, tea.Cmd)) (Model, tea.Cmd) {
+	if m.pane_layout == nil {
+		return m, nil
+	}
+
+	m.panel_input_open = true
+	m.panel_input_callback = callback
+
+	sentinel.Clear(sentinel.Input)
+	m.pane_layout.RunInput(title, prompt, sentinel.Path(sentinel.Input))
 	return m, tick_after(100*time.Millisecond, "render")
 }
 

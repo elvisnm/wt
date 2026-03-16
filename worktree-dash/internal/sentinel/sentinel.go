@@ -14,6 +14,7 @@ const (
 	HeiHei       = "wt-heihei-done"
 	Picker       = "wt-picker-done"
 	Confirm      = "wt-confirm-done"
+	Input        = "wt-input-done"
 )
 
 // Result holds the parsed output of a sentinel file.

@@ -162,6 +162,126 @@ func runConfirm(args []string) {
 	}
 }
 
+// runInput shows a text input dialog in the bordered box.
+// Args: --title "Title" --prompt "Label:" --sentinel "path"
+func runInput(args []string) {
+	title := "Input"
+	prompt := "Value:"
+	sentinel_path := ""
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--title":
+			if i+1 < len(args) {
+				title = args[i+1]
+				i++
+			}
+		case "--prompt":
+			if i+1 < len(args) {
+				prompt = args[i+1]
+				i++
+			}
+		case "--sentinel":
+			if i+1 < len(args) {
+				sentinel_path = args[i+1]
+				i++
+			}
+		}
+	}
+
+	width, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || width < 10 {
+		width = 80
+	}
+
+	old_state, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wt _input: failed to set raw mode: %v\n", err)
+		os.Exit(1)
+	}
+	defer term.Restore(int(os.Stdin.Fd()), old_state)
+
+	value := ""
+
+	draw := func() {
+		inner := width - 2
+		if inner < 1 {
+			inner = 1
+		}
+
+		fmt.Print("\033[2J\033[H\033[?25l")
+
+		// Top border
+		title_fill := inner - 1 - len(title) - 2
+		if title_fill < 1 {
+			title_fill = 1
+		}
+		fmt.Printf("%s╭─ %s%s%s %s╮%s\r\n",
+			pickOrange, pickBold, title, pickOrange,
+			strings.Repeat("─", title_fill), pickReset)
+
+		// Prompt + value line
+		display := fmt.Sprintf("%s %s%s█%s", prompt, pickBold, value, pickReset)
+		display_vis := len(prompt) + 1 + len(value) + 1 // prompt + space + value + cursor
+		pad := inner - display_vis - 2
+		if pad < 0 {
+			pad = 0
+		}
+		fmt.Printf("%s│%s %s%s%s │%s\r\n",
+			pickOrange, pickReset, display,
+			strings.Repeat(" ", pad), pickOrange, pickReset)
+
+		// Bottom border
+		fmt.Printf("%s╰%s╯%s",
+			pickOrange, strings.Repeat("─", inner), pickReset)
+	}
+
+	write_result := func(result string) {
+		term.Restore(int(os.Stdin.Fd()), old_state)
+		fmt.Print("\033[?25h")
+		if sentinel_path != "" {
+			os.WriteFile(sentinel_path, []byte(result+"\n"), 0644)
+		}
+		os.Exit(0)
+	}
+
+	draw()
+
+	buf := make([]byte, 4)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil || n == 0 {
+			continue
+		}
+
+		switch {
+		// Enter — submit
+		case n == 1 && (buf[0] == '\r' || buf[0] == '\n'):
+			write_result(value)
+
+		// Escape — cancel
+		case n == 1 && buf[0] == 0x1b:
+			write_result("")
+
+		// Ctrl+C — cancel
+		case n == 1 && buf[0] == 0x03:
+			write_result("")
+
+		// Backspace (0x7f) or Ctrl+H (0x08)
+		case n == 1 && (buf[0] == 0x7f || buf[0] == 0x08):
+			if len(value) > 0 {
+				value = value[:len(value)-1]
+				draw()
+			}
+
+		// Printable ASCII
+		case n == 1 && buf[0] >= 0x20 && buf[0] < 0x7f:
+			value += string(buf[0])
+			draw()
+		}
+	}
+}
+
 // runPick runs an interactive picker in the terminal with the same bordered
 // box design as the notification panel. Args: --title "Title" --sentinel "path" option1 option2 ...
 func runPick(args []string) {

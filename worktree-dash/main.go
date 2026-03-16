@@ -93,6 +93,8 @@ func main() {
 		runPick(os.Args[2:])
 	case "_confirm":
 		runConfirm(os.Args[2:])
+	case "_input":
+		runInput(os.Args[2:])
 	case "_heihei":
 		if len(os.Args) < 3 {
 			os.Exit(1)
