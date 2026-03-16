@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elvisnm/wt/internal/agent"
 	"github.com/elvisnm/wt/internal/aws"
 	"github.com/elvisnm/wt/internal/beads"
 	"github.com/elvisnm/wt/internal/config"
@@ -436,6 +437,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil
+
+	case agent.IdleEvent:
+		if msg.Idle {
+			debug_log("[agent] idle: label=%s alias=%s", msg.Label, msg.Alias)
+			m, notify_cmd := m.show_notification("Agent Idle", msg.Alias+" is waiting for input")
+			return m, tea.Batch(notify_cmd, m.poll_agent_events())
+		}
+		debug_log("[agent] resumed: label=%s alias=%s", msg.Label, msg.Alias)
+		return m, m.poll_agent_events()
 
 	case MsgResultClear:
 		m.result_text = ""
@@ -1304,20 +1314,25 @@ func (m Model) open_claude(wt worktree.Worktree) (Model, tea.Cmd) {
 	dir = wt.Path
 
 	label := labels.Tab(labels.Claude, wt.Alias)
-	_, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
+	s, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
 	if err != nil {
 		m.terminal_output = fmt.Sprintf("Failed to open Claude: %v", err)
 		m.prev_focus = m.focus; m.focus = PanelTerminal
 		return m, nil
 	}
 
+	// Start monitoring this Claude session for idle detection
+	if m.agent_monitor != nil && s != nil {
+		m.agent_monitor.Watch(label, wt.Alias, s.PaneID())
+	}
+
 	m.terminal_output = ""
-	m.prev_focus = m.focus; m.focus = PanelTerminal
-	// Focus the right pane for native terminal interaction
+	m.prev_focus = m.focus
+	m.focus = PanelTerminal
 	if m.pane_layout != nil {
 		m.pane_layout.FocusRight()
 	}
-	return m, tick_after(100*time.Millisecond, "render")
+	return m, tea.Batch(tick_after(100*time.Millisecond, "render"), m.poll_agent_events())
 }
 
 // open_local_shell opens a host shell (zsh/bash) in the worktree directory
@@ -1974,6 +1989,17 @@ func (m Model) open_panel_input(title, prompt string, callback func(*Model, stri
 	sentinel.Clear(sentinel.Input)
 	m.pane_layout.RunInput(title, prompt, sentinel.Path(sentinel.Input))
 	return m, tick_after(100*time.Millisecond, "render")
+}
+
+// poll_agent_events returns a Cmd that waits for the next agent idle event.
+func (m Model) poll_agent_events() tea.Cmd {
+	if m.agent_monitor == nil {
+		return nil
+	}
+	ch := m.agent_monitor.Events()
+	return func() tea.Msg {
+		return <-ch
+	}
 }
 
 // open_worktree_info ensures the Details panel is visible and focuses it.

@@ -179,6 +179,11 @@ func (s *Session) Window() string {
 	return s.window
 }
 
+// PaneID returns the stable tmux pane ID (e.g. "%5") for this session.
+func (s *Session) PaneID() string {
+	return s.pane_id
+}
+
 // Respawn kills the running process and starts a new command in the same pane.
 // The tmux window and pane stay in place — no pane swapping or window recreation.
 func (s *Session) Respawn(cmd_name string, args []string, dir string) {

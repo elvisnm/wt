@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/elvisnm/wt/internal/agent"
 	"github.com/elvisnm/wt/internal/beads"
 	"github.com/elvisnm/wt/internal/claude"
 	"github.com/elvisnm/wt/internal/config"
@@ -68,6 +69,7 @@ type Model struct {
 	term_mgr        *terminal.Manager
 	terminal_output string // static output (for non-PTY actions)
 	pane_layout     *terminal.PaneLayout
+	agent_monitor   *agent.Monitor
 
 	// Preview: standalone log session shown in right panel without a tab
 	preview_session  *terminal.Session
@@ -181,6 +183,14 @@ func NewModelWithLayout(server *terminal.TmuxServer, pl *terminal.PaneLayout) Mo
 	mgr := terminal.NewManagerWithServer(server)
 	mgr.SetPaneLayout(pl)
 
+	// Agent monitor: captures tmux pane content to detect idle Claude sessions
+	var mon *agent.Monitor
+	if server != nil {
+		mon = agent.NewMonitor(func(pane_id string) (string, error) {
+			return server.Run("capture-pane", "-t", pane_id, "-p")
+		})
+	}
+
 	return Model{
 		focus:           PanelWorktrees,
 		cursor:          0,
@@ -189,7 +199,7 @@ func NewModelWithLayout(server *terminal.TmuxServer, pl *terminal.PaneLayout) Mo
 		cfg:             cfg,
 		term_mgr:        mgr,
 		pane_layout:     pl,
-		// details_visible defaults to false (zero value)
+		agent_monitor:   mon,
 	}
 }
 
