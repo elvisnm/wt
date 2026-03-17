@@ -606,6 +606,25 @@ func (pl *PaneLayout) ResizeSplit(left_cols int) {
 	pl.server.Run("resize-pane", "-t", pl.left_pane_id, "-x", fmt.Sprintf("%d", left_cols))
 }
 
+// IsRightPaneFocused returns true if the right terminal pane has tmux focus.
+func (pl *PaneLayout) IsRightPaneFocused() bool {
+	out, err := pl.server.Run("display-message", "-t", "wt:0", "-p", "#{pane_index}")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) == "2"
+}
+
+// IsClientFocused returns true if the tmux client (terminal window) has focus.
+// When the user switches to another app or terminal tab, this returns false.
+func (pl *PaneLayout) IsClientFocused() bool {
+	out, err := pl.server.Run("list-clients", "-F", "#{client_flags}")
+	if err != nil {
+		return false
+	}
+	return strings.Contains(out, "focused")
+}
+
 // Server returns the underlying TmuxServer.
 func (pl *PaneLayout) Server() *TmuxServer {
 	return pl.server

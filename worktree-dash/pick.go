@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -282,6 +283,19 @@ func runInput(args []string) {
 	}
 }
 
+// selectAndExit restores the terminal, writes the selection to the sentinel file, and exits.
+// An empty selection means the user cancelled.
+func selectAndExit(old_state *term.State, sentinel_path, selection string) {
+	term.Restore(int(os.Stdin.Fd()), old_state)
+	fmt.Print("\033[?25h")
+	if sentinel_path != "" {
+		os.WriteFile(sentinel_path, []byte(selection+"\n"), 0644)
+	} else if selection != "" {
+		fmt.Println(selection)
+	}
+	os.Exit(0)
+}
+
 // runPick runs an interactive picker in the terminal with the same bordered
 // box design as the notification panel. Args: --title "Title" --sentinel "path" option1 option2 ...
 func runPick(args []string) {
@@ -400,23 +414,23 @@ func runPick(args []string) {
 
 		// Enter
 		case n == 1 && (buf[0] == '\r' || buf[0] == '\n'):
-			term.Restore(int(os.Stdin.Fd()), old_state)
-			fmt.Print("\033[?25h") // show cursor
-			if sentinel_path != "" {
-				os.WriteFile(sentinel_path, []byte(options[cursor]+"\n"), 0644)
-			} else {
-				fmt.Println(options[cursor])
-			}
-			os.Exit(0)
+			selectAndExit(old_state, sentinel_path, options[cursor])
 
 		// Escape or q — cancel
 		case n == 1 && (buf[0] == 0x1b || buf[0] == 'q'):
-			term.Restore(int(os.Stdin.Fd()), old_state)
-			fmt.Print("\033[?25h")
-			if sentinel_path != "" {
-				os.WriteFile(sentinel_path, []byte("\n"), 0644)
+			selectAndExit(old_state, sentinel_path, "")
+
+		// Shortcut key — match "[key]" prefix in option labels
+		case n == 1 && buf[0] >= '!' && buf[0] <= '~':
+			key := string(buf[0])
+			for i, opt := range options {
+				if len(opt) >= 3 && opt[0] == '[' && opt[2] == ']' && string(opt[1]) == key {
+					cursor = i
+					draw()
+					time.Sleep(100 * time.Millisecond)
+					selectAndExit(old_state, sentinel_path, opt)
+				}
 			}
-			os.Exit(0)
 		}
 	}
 }

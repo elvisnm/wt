@@ -14,6 +14,7 @@ type TabInfo struct {
 	Label  string
 	Active bool
 	Alive  bool
+	Idle   bool // agent is waiting for input
 }
 
 // RenderTabsPanel renders the active tabs as a bordered panel matching
@@ -110,6 +111,9 @@ func format_tab_line(tab TabInfo, width int, pos int, selected bool, panel_focus
 func tab_status_indicator(tab TabInfo) string {
 	if !tab.Alive {
 		return lipgloss.NewStyle().Foreground(StoppedColor).Render("○")
+	}
+	if tab.Idle {
+		return lipgloss.NewStyle().Foreground(StartingColor).Render("◉") // orange = needs attention
 	}
 	if tab.Active {
 		return lipgloss.NewStyle().Foreground(RunningColor).Render("●")

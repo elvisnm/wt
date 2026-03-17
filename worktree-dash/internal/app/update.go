@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elvisnm/wt/internal/agent"
 	"github.com/elvisnm/wt/internal/aws"
 	"github.com/elvisnm/wt/internal/beads"
 	"github.com/elvisnm/wt/internal/config"
@@ -67,11 +66,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, wt := range m.worktrees {
 				if wt.Alias == m.pending_dev_alias && wt.Type == worktree.TypeLocal {
 					debug_log("[create] deferred dev server start for %s", wt.Alias)
+					if m, cmd, gated := m.sso_gate("start", &wt); gated {
+						m.pending_dev_alias = ""
+						return m, cmd
+					}
 					m, _ = m.start_dev_server(wt)
 					break
 				}
 			}
 			m.pending_dev_alias = ""
+		}
+
+		// Clear stale agent sentinel files from previous session
+		if first_load {
+			stale, _ := filepath.Glob(sentinel.Path(sentinel.AgentNotify + "-*"))
+			for _, f := range stale {
+				os.Remove(f)
+			}
 		}
 
 		// Signal the outer process that we're ready (unblocks tmux attach).
@@ -82,6 +93,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tick_after(5*time.Second, "status"),
 			tick_after(3*time.Second, "stats"),
 			tick_after(100*time.Millisecond, "render"),
+			tick_after(1*time.Second, "agent-poll"),
 		}
 		wt := m.selected_worktree()
 		if wt != nil && wt.Running {
@@ -220,6 +232,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if profile := m.sso_profile(); profile != "" {
 				if err := aws.Refresh(profile); err != nil {
 					debug_log("[aws] Refresh on valid session FAILED: %v", err)
+				} else {
+					aws.PropagateToTmux(m.term_mgr.Server())
 				}
 			}
 			return m.resolve_sso_action()
@@ -312,6 +326,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pane_layout.ClearNotifyPane()
 			}
 			return m, nil
+		case "agent-poll":
+			// Scan for agent notification sentinel files (wt-agent-notify-*)
+			matches, _ := filepath.Glob(sentinel.Path(sentinel.AgentNotify + "-*"))
+			var cmds []tea.Cmd
+			for _, path := range matches {
+				data, err := os.ReadFile(path)
+				os.Remove(path)
+				if err != nil {
+					continue
+				}
+				lines := strings.SplitN(strings.TrimSpace(string(data)), "\n", 3)
+				event := strings.TrimSpace(lines[0])
+				alias := ""
+				if len(lines) > 1 {
+					alias = strings.TrimSpace(lines[1])
+				}
+				if event != "" {
+					debug_log("[agent] hook: event=%s alias=%s", event, alias)
+					ev, al := event, alias
+					cmds = append(cmds, func() tea.Msg { return MsgAgentNotify{Event: ev, Alias: al} })
+				}
+			}
+			cmds = append(cmds, tick_after(1*time.Second, "agent-poll"))
+			return m, tea.Batch(cmds...)
 		case "render":
 			// Sentinel-driven post-action handlers
 			if sr := sentinel.Read(sentinel.Create); sr != nil {
@@ -438,14 +476,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case agent.IdleEvent:
-		if msg.Idle {
-			debug_log("[agent] idle: label=%s alias=%s", msg.Label, msg.Alias)
-			m, notify_cmd := m.show_notification("Agent Idle", msg.Alias+" is waiting for input")
-			return m, tea.Batch(notify_cmd, m.poll_agent_events())
+	case MsgAgentNotify:
+		debug_log("[agent] hook: event=%s alias=%s", msg.Event, msg.Alias)
+		title := "Claude Agent — " + msg.Alias
+		message := "Task complete"
+		if msg.Event == AgentEventPermission {
+			message = "Waiting for input"
 		}
-		debug_log("[agent] resumed: label=%s alias=%s", msg.Label, msg.Alias)
-		return m, m.poll_agent_events()
+
+		// Always show in the notification panel
+		m, notify_cmd := m.show_notification(title, message)
+
+		// Only send macOS notification if wt is NOT the active window
+		if m.pane_layout == nil || !m.pane_layout.IsClientFocused() {
+			go send_macos_notification(title, message)
+		}
+
+		return m, tea.Batch(notify_cmd, tick_after(1*time.Second, "agent-poll"))
 
 	case MsgResultClear:
 		m.result_text = ""
@@ -828,13 +875,8 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "n" {
 		debug_log("[create] 'n' pressed: opening create wizard")
 		// SSO check before opening wizard
-		if profile := m.sso_profile(); profile != "" {
-			m.pending_sso_action = "create"
-			m.activity = "Checking AWS SSO session..."
-			return m, func() tea.Msg {
-				valid := aws.CheckSession(profile)
-				return MsgSsoSessionCheck{Valid: valid}
-			}
+		if m, cmd, gated := m.sso_gate("create", nil); gated {
+			return m, cmd
 		}
 		return m.open_create(m.selected_worktree())
 	}
@@ -897,16 +939,8 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "u":
 		if !wt.Running {
-			// SSO check before starting
-			if profile := m.sso_profile(); profile != "" {
-				wtCopy := *wt
-				m.pending_sso_action = "start"
-				m.pending_sso_start = &wtCopy
-				m.activity = "Checking AWS SSO session..."
-				return m, func() tea.Msg {
-					valid := aws.CheckSession(profile)
-					return MsgSsoSessionCheck{Valid: valid}
-				}
+			if m, cmd, gated := m.sso_gate("start", wt); gated {
+				return m, cmd
 			}
 			return m.start_worktree(*wt)
 		}
@@ -1208,13 +1242,10 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 		}
 		return m, cmd_docker_action("stop", *wt, m.repo_root, m.cfg)
 	case "u":
-		if wt.Type == worktree.TypeLocal {
-			return m.start_dev_server(*wt)
+		if m, cmd, gated := m.sso_gate("start", wt); gated {
+			return m, cmd
 		}
-		if wt.HostBuild {
-			return m.start_host_build(*wt)
-		}
-		return m, cmd_docker_action("start", *wt, m.repo_root, m.cfg)
+		return m.start_worktree(*wt)
 	case "o":
 		return m.open_start_service_picker(*wt)
 	case "p":
@@ -1314,16 +1345,11 @@ func (m Model) open_claude(wt worktree.Worktree) (Model, tea.Cmd) {
 	dir = wt.Path
 
 	label := labels.Tab(labels.Claude, wt.Alias)
-	s, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
+	_, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
 	if err != nil {
 		m.terminal_output = fmt.Sprintf("Failed to open Claude: %v", err)
 		m.prev_focus = m.focus; m.focus = PanelTerminal
 		return m, nil
-	}
-
-	// Start monitoring this Claude session for idle detection
-	if m.agent_monitor != nil && s != nil {
-		m.agent_monitor.Watch(label, wt.Alias, s.PaneID())
 	}
 
 	m.terminal_output = ""
@@ -1332,7 +1358,7 @@ func (m Model) open_claude(wt worktree.Worktree) (Model, tea.Cmd) {
 	if m.pane_layout != nil {
 		m.pane_layout.FocusRight()
 	}
-	return m, tea.Batch(tick_after(100*time.Millisecond, "render"), m.poll_agent_events())
+	return m, tick_after(100*time.Millisecond, "render")
 }
 
 // open_local_shell opens a host shell (zsh/bash) in the worktree directory
@@ -1991,15 +2017,13 @@ func (m Model) open_panel_input(title, prompt string, callback func(*Model, stri
 	return m, tick_after(100*time.Millisecond, "render")
 }
 
-// poll_agent_events returns a Cmd that waits for the next agent idle event.
-func (m Model) poll_agent_events() tea.Cmd {
-	if m.agent_monitor == nil {
-		return nil
-	}
-	ch := m.agent_monitor.Events()
-	return func() tea.Msg {
-		return <-ch
-	}
+// send_macos_notification sends a native macOS notification via osascript.
+func send_macos_notification(title, message string) {
+	t := strings.ReplaceAll(title, `"`, `\"`)
+	m := strings.ReplaceAll(message, `"`, `\"`)
+	exec.Command("osascript", "-e",
+		fmt.Sprintf(`display notification "%s" with title "%s"`, m, t),
+	).Run()
 }
 
 // open_worktree_info ensures the Details panel is visible and focuses it.
@@ -2309,6 +2333,27 @@ func (m Model) sso_profile() string {
 	}
 	return m.cfg.AwsSsoProfile()
 }
+
+// sso_gate checks the SSO session before executing an action. If SSO is configured,
+// it stores the pending action and worktree, then returns a check command.
+// Returns (model, cmd, true) if the SSO gate is active (caller should return).
+// Returns (model, nil, false) if no SSO configured (caller should proceed directly).
+func (m Model) sso_gate(action string, wt *worktree.Worktree) (Model, tea.Cmd, bool) {
+	profile := m.sso_profile()
+	if profile == "" {
+		return m, nil, false
+	}
+	m.pending_sso_action = action
+	if wt != nil {
+		wtCopy := *wt
+		m.pending_sso_start = &wtCopy
+	}
+	m.activity = "Checking AWS SSO session..."
+	return m, func() tea.Msg {
+		return MsgSsoSessionCheck{Valid: aws.CheckSession(profile)}
+	}, true
+}
+
 
 // MsgSsoSessionCheck is sent after an async SSO session check completes.
 type MsgSsoSessionCheck struct {

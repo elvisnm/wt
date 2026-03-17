@@ -102,12 +102,24 @@ func (ts *TmuxServer) EnsureStarted(width, height int) error {
 		height = 50
 	}
 
+	// Capture CWD so the tmux session (and all panes) inherit it.
+	// Without -c, tmux defaults to $HOME which breaks git and config discovery.
+	cwd, _ := os.Getwd()
+
 	// Create a new tmux session (detached) sized to match the real terminal
-	out, err := ts.run_locked("new-session", "-d", "-s", "wt",
-		"-x", strconv.Itoa(width), "-y", strconv.Itoa(height))
+	args := []string{"new-session", "-d", "-s", "wt",
+		"-x", strconv.Itoa(width), "-y", strconv.Itoa(height)}
+	if cwd != "" {
+		args = append(args, "-c", cwd)
+	}
+	out, err := ts.run_locked(args...)
 	if err != nil {
 		// Retry without -x/-y for older tmux versions
-		out, err = ts.run_locked("new-session", "-d", "-s", "wt")
+		args = []string{"new-session", "-d", "-s", "wt"}
+		if cwd != "" {
+			args = append(args, "-c", cwd)
+		}
+		out, err = ts.run_locked(args...)
 		if err != nil {
 			return fmt.Errorf("tmux new-session failed: %w\n%s", err, out)
 		}

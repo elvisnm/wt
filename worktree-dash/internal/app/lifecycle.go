@@ -133,12 +133,8 @@ func (m Model) start_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 
 // stop_dev_server stops PM2 services for a local worktree (with confirmation)
 func (m Model) stop_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
-	m.confirm_open = true
-	m.confirm_prompt = fmt.Sprintf("Stop dev server on %s?", wt.Alias)
-	m.confirm_action = func(mdl *Model) (Model, tea.Cmd) {
-		return mdl.run_stop_dev_server(wt)
-	}
-	return m, nil
+	return m.open_panel_confirm("Stop", fmt.Sprintf("Stop dev server on %s?", wt.Alias),
+		func(mdl *Model) (Model, tea.Cmd) { return mdl.run_stop_dev_server(wt) })
 }
 
 func (m Model) run_stop_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {

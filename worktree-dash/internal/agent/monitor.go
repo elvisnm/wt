@@ -15,16 +15,18 @@ import (
 type Status int
 
 const (
-	StatusUnknown Status = iota
-	StatusWorking        // content is changing — agent is active
-	StatusIdle           // prompt detected + content stable — waiting for input
+	StatusUnknown  Status = iota
+	StatusWorking         // content is changing — agent is active
+	StatusIdle            // prompt detected + content stable — waiting for input
+	StatusFinished        // empty prompt — task complete, ready for next
 )
 
-// IdleEvent is sent when a Claude session transitions to/from idle.
+// IdleEvent is sent when a Claude session transitions state.
 type IdleEvent struct {
-	Label string // tab label (e.g., "claude:e2e")
-	Alias string // worktree alias
-	Idle  bool   // true = became idle, false = resumed working
+	Label    string // tab label (e.g., "claude:e2e")
+	Alias    string // worktree alias
+	Idle     bool   // true = became idle/finished, false = resumed working
+	Finished bool   // true = task complete (empty prompt), false = waiting for input
 }
 
 // CaptureFunc captures the content of a tmux pane. Injected by the caller
@@ -33,13 +35,15 @@ type CaptureFunc func(pane_id string) (string, error)
 
 // watcher tracks one Claude session.
 type watcher struct {
-	label      string
-	alias      string
-	pane_id    string
-	last_hash  string
-	stable_at  time.Time // when content last changed
-	status     Status
-	stop       chan struct{}
+	label        string
+	alias        string
+	pane_id      string
+	last_hash    string
+	idle_hash    string    // hash when we last notified idle — skip if same
+	stable_at    time.Time // when content last changed
+	change_count int       // consecutive polls with different content
+	status       Status
+	stop         chan struct{}
 }
 
 // Monitor manages watchers for Claude terminal sessions.
@@ -61,7 +65,7 @@ func NewMonitor(capture CaptureFunc) *Monitor {
 		capture:          capture,
 		watchers:         make(map[string]*watcher),
 		events:           make(chan IdleEvent, 16),
-		stable_threshold: 10 * time.Second,
+		stable_threshold: 5 * time.Second,
 		poll_interval:    3 * time.Second,
 	}
 }
@@ -149,85 +153,123 @@ func (m *Monitor) check(w *watcher) {
 	now := time.Now()
 
 	if hash != w.last_hash {
-		// Content changed — agent is working
+		// Content changed
 		w.last_hash = hash
 		w.stable_at = now
-		if w.status != StatusWorking {
+		w.change_count++
+		// Only transition to "working" after 3+ consecutive meaningful
+		// content changes to avoid flapping on tab switches / cursor blinks
+		if w.status != StatusWorking && w.change_count >= 3 {
 			w.status = StatusWorking
-			m.emit(w, false)
+			m.emit_resumed(w)
 		}
 		return
 	}
 
-	// Content unchanged — check if stable long enough
+	// Content unchanged — reset change counter
+	w.change_count = 0
+
 	if now.Sub(w.stable_at) < m.stable_threshold {
-		return // not stable long enough yet
+		return
 	}
 
-	// Content stable — check for idle prompt
-	if w.status != StatusIdle && detect_idle_prompt(content) {
-		w.status = StatusIdle
-		m.emit(w, true)
+	// Content stable — check for idle prompt.
+	// Only notify if the agent was previously working AND the content
+	// is different from the last idle state (prevents re-notification
+	// when tab switching causes brief "working" → back to same idle).
+	result := detect_idle_prompt(content)
+	if result != not_idle && w.status == StatusWorking {
+		if hash == w.idle_hash {
+			// Same content as last idle — just a tab switch, not real work
+			w.status = StatusIdle
+			return
+		}
+		w.idle_hash = hash
+		finished := result == idle_finished
+		if finished {
+			w.status = StatusFinished
+		} else {
+			w.status = StatusIdle
+		}
+		m.emit_idle(w, finished)
 	}
 }
 
-func (m *Monitor) emit(w *watcher, idle bool) {
+func (m *Monitor) emit_idle(w *watcher, finished bool) {
 	select {
-	case m.events <- IdleEvent{Label: w.label, Alias: w.alias, Idle: idle}:
+	case m.events <- IdleEvent{Label: w.label, Alias: w.alias, Idle: true, Finished: finished}:
 	default:
-		// Drop event if channel is full
 	}
 }
 
-// content_hash returns a fast hash of the content for change detection.
+func (m *Monitor) emit_resumed(w *watcher) {
+	select {
+	case m.events <- IdleEvent{Label: w.label, Alias: w.alias, Idle: false}:
+	default:
+	}
+}
+
+// content_hash returns a hash of the meaningful content, stripping cursor
+// artifacts and normalizing whitespace so tab switching / cursor blinks
+// don't register as content changes.
 func content_hash(s string) string {
-	h := sha256.Sum256([]byte(s))
+	// Strip trailing whitespace per line and collapse empty lines.
+	// This removes cursor position differences and formatting noise.
+	lines := strings.Split(s, "\n")
+	normalized := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimRight(line, " \t")
+		if trimmed != "" {
+			normalized = append(normalized, trimmed)
+		}
+	}
+	h := sha256.Sum256([]byte(strings.Join(normalized, "\n")))
 	return fmt.Sprintf("%x", h[:8])
 }
 
-// detect_idle_prompt checks if the captured content looks like Claude Code
-// waiting for input. Claude's idle prompt looks like:
-//
-//	─────────────────────────
-//	❯
-//	─────────────────────────
-//	  PR #10396 · esc to interrupt
-//
-// We detect: the ❯ prompt character between two horizontal line separators.
-func detect_idle_prompt(content string) bool {
+// idle_result describes the type of idle state detected.
+type idle_result int
+
+const (
+	not_idle idle_result = iota
+	idle_finished        // empty ❯ prompt — task complete
+	idle_waiting         // tool approval, question, or other input needed
+)
+
+// detect_idle_prompt checks if the captured content indicates Claude Code is
+// waiting for user input. Checks for the ❯ prompt character (empty = finished,
+// with text = selector/approval) and the welcome screen indicator.
+func detect_idle_prompt(content string) idle_result {
 	lines := strings.Split(content, "\n")
-
-	// Scan last 10 non-empty lines
-	has_prompt := false
-	has_separator := false
-	has_hint := false
-
 	checked := 0
-	for i := len(lines) - 1; i >= 0 && checked < 10; i-- {
+
+	has_empty_prompt := false // ❯ alone = task finished, ready for next
+	has_selector := false     // ❯ with text = approval/question, needs input
+	has_welcome := false      // welcome screen = no active task
+
+	for i := len(lines) - 1; i >= 0 && checked < 15; i-- {
 		line := strings.TrimRight(lines[i], " \t")
 		if line == "" {
 			continue
 		}
 		checked++
-
-		// The ❯ prompt (U+276F) or > prompt
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "❯" || trimmed == ">" || trimmed == "❯ " || trimmed == "> " {
-			has_prompt = true
-		}
 
-		// Horizontal separator line (all ─ characters)
-		stripped := strings.TrimSpace(line)
-		if len(stripped) > 10 && strings.Count(stripped, "─") == len([]rune(stripped)) {
-			has_separator = true
+		if trimmed == "❯" {
+			has_empty_prompt = true
+		} else if strings.Contains(line, "❯") {
+			has_selector = true
 		}
-
-		// "esc to interrupt" hint line
-		if strings.Contains(line, "esc to interrupt") {
-			has_hint = true
+		if strings.Contains(line, "Press ? for all keybindings") {
+			has_welcome = true
 		}
 	}
 
-	// Prompt + separator is enough. Hint is optional (confirms Claude Code).
-	return has_prompt && (has_separator || has_hint)
+	if has_selector {
+		return idle_waiting
+	}
+	if has_empty_prompt || has_welcome {
+		return idle_finished
+	}
+	return not_idle
 }

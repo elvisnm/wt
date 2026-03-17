@@ -15,6 +15,7 @@ const (
 	Picker       = "wt-picker-done"
 	Confirm      = "wt-confirm-done"
 	Input        = "wt-input-done"
+	AgentNotify  = "wt-agent-notify"
 )
 
 // Result holds the parsed output of a sentinel file.

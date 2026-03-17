@@ -95,6 +95,8 @@ func main() {
 		runConfirm(os.Args[2:])
 	case "_input":
 		runInput(os.Args[2:])
+	case "_agent-notify":
+		runAgentNotify(os.Args[2:])
 	case "_heihei":
 		if len(os.Args) < 3 {
 			os.Exit(1)
@@ -173,14 +175,22 @@ func launchDashboardOuter() {
 	// Disable tmux status bar — hints are rendered in the bubbletea status bar
 	ts.Run("set-option", "-g", "status", "off")
 
-	// Replace pane 0's shell with the inner process silently (no visible command echo)
+	// Replace pane 0's shell with the inner process silently (no visible command echo).
+	// Pass -c with CWD so the inner process inherits the correct working directory
+	// (tmux respawn-pane defaults to $HOME otherwise).
+	cwd, _ := os.Getwd()
 	inner_env := fmt.Sprintf("WT_INNER=1 WT_SOCKET=%s", ts.Socket())
 	if os.Getenv("WT_DEBUG") == "1" {
 		inner_env += " WT_DEBUG=1"
 	}
-	ts.Run("respawn-pane", "-t", "wt:0.0", "-k",
-		fmt.Sprintf("%s exec %s", inner_env, exe_path),
-	)
+	respawn_args := []string{"respawn-pane", "-t", "wt:0.0", "-k"}
+	inner_cmd := fmt.Sprintf("%s exec %s", inner_env, exe_path)
+	if cwd != "" {
+		// cd before exec so the Go binary inherits the correct CWD
+		inner_cmd = fmt.Sprintf("cd %q && %s", cwd, inner_cmd)
+	}
+	respawn_args = append(respawn_args, inner_cmd)
+	ts.Run(respawn_args...)
 
 	// Block until the inner process signals that discovery is complete.
 	// The splash stays visible during this entire wait.

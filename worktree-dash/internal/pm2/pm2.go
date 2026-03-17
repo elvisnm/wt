@@ -125,14 +125,14 @@ func HomeEnv(pm2_home string) []string {
 }
 
 // Start launches PM2 with the given ecosystem config file.
-// For isolated worktrees, pm2_home should point to the .pm2 directory.
-// extra_env is appended to the process environment (e.g., AWS keys, SKULABS_ENV).
+// The ecosystem config is the sole source of truth for env vars — no --update-env
+// flag is used. Call Kill() first to ensure a clean daemon (matches dc-create.js).
 func Start(pm2_home string, ecosystem_config string, cwd string, extra_env []string) (string, error) {
 	env := append([]string{}, extra_env...)
 	if pm2_home != "" {
 		env = append(env, fmt.Sprintf("PM2_HOME=%s", pm2_home))
 	}
-	return cmdutil.RunCmdDirEnv(env, cwd, "pm2", "start", ecosystem_config, "--update-env")
+	return cmdutil.RunCmdDirEnv(env, cwd, "pm2", "start", ecosystem_config)
 }
 
 // Kill stops the PM2 daemon for an isolated worktree.

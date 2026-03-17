@@ -223,6 +223,16 @@ func (mgr *Manager) ActiveIndex() int {
 	return mgr.active_tab
 }
 
+// ActiveLabel returns the label of the currently active tab, or empty string.
+func (mgr *Manager) ActiveLabel() string {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	if mgr.active_tab >= 0 && mgr.active_tab < len(mgr.sessions) {
+		return mgr.sessions[mgr.active_tab].Label
+	}
+	return ""
+}
+
 // Sessions returns all current sessions
 func (mgr *Manager) Sessions() []*Session {
 	mgr.mu.Lock()
