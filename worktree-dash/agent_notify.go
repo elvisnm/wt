@@ -15,6 +15,13 @@ import (
 //
 // Usage: wt _agent-notify --event idle_prompt|permission_prompt [--worktree name]
 func runAgentNotify(args []string) {
+	// Only notify if running inside a wt dashboard tmux session.
+	// Check two signals: WT_SOCKET env var (set on the tmux server),
+	// or TMUX env var containing a wt- socket path.
+	if os.Getenv("WT_SOCKET") == "" && !strings.Contains(os.Getenv("TMUX"), "/wt-") {
+		os.Exit(0)
+	}
+
 	event := ""
 	worktree_name := ""
 

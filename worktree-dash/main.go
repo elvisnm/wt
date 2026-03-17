@@ -175,6 +175,10 @@ func launchDashboardOuter() {
 	// Disable tmux status bar — hints are rendered in the bubbletea status bar
 	ts.Run("set-option", "-g", "status", "off")
 
+	// Set WT_SOCKET on the tmux server so all new windows (claude, bash, etc.)
+	// inherit it. Used by `wt _agent-notify` to detect it's inside wt.
+	ts.SetEnv("WT_SOCKET", ts.Socket())
+
 	// Replace pane 0's shell with the inner process silently (no visible command echo).
 	// Pass -c with CWD so the inner process inherits the correct working directory
 	// (tmux respawn-pane defaults to $HOME otherwise).
