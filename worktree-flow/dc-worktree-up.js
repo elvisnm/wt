@@ -12,7 +12,7 @@ const {
   apply_skip_worktree: apply_skip_worktree_config,
   copy_setup_files,
 } = require('./lib/skip-worktree');
-const { find_pm2, pm2_home, pm2_start, pm2_cleanup, load_aws_env } = require('./lib/pm2');
+const { find_pm2, pm2_home, pm2_start, pm2_cleanup, pm2_process_name, load_aws_env } = require('./lib/pm2');
 const { generate_config, OUTPUT_FILENAME } = require('./generate-ecosystem-config');
 const { generate_workspace } = require('./generate-workspace-config');
 const { write_traefik_config, is_traefik_routing } = require('./generate-docker-compose');
@@ -661,6 +661,25 @@ function main() {
         if (process.env.WT_INNER !== '1') {
           console.log('Starting PM2 services...');
           pm2_start({ pm2: pm2_bin, pm2_home: home, ecosystem_config: ecosystem_path, env: load_aws_env(), cwd: worktree_path });
+
+          // Restart frontend build watcher if buildScript is configured
+          const build_script_r = config && config.paths && config.paths.buildScript;
+          if (build_script_r) {
+            const build_script_path_r = path.join(worktree_path, build_script_r);
+            if (fs.existsSync(build_script_path_r)) {
+              const wt_suffix_r = target_branch.replace(/\//g, '-');
+              const build_name_r = pm2_process_name('build', wt_suffix_r);
+              const prefix_r = `PM2_HOME="${home}" `;
+              try { execSync(`${prefix_r}${pm2_bin} delete "${build_name_r}"`, { stdio: 'pipe', cwd: worktree_path }); } catch {}
+              const start_cmd_r = `${prefix_r}${pm2_bin} start "node ${build_script_r} develop --watch" --name "${build_name_r}" --cwd "${worktree_path}" --no-autorestart`;
+              try {
+                execSync(start_cmd_r, { stdio: 'inherit', cwd: worktree_path, env: { ...process.env, ...load_aws_env(), PM2_HOME: home } });
+              } catch {
+                console.warn('Warning: Frontend build watcher failed to start.');
+              }
+            }
+          }
+
           console.log('PM2 services restarted.');
         }
       }
@@ -834,6 +853,24 @@ function main() {
         env: load_aws_env(),
         cwd: worktree_path,
       });
+
+      // Start frontend build watcher if buildScript is configured
+      const build_script = config && config.paths && config.paths.buildScript;
+      if (build_script) {
+        const build_script_path = path.join(worktree_path, build_script);
+        if (fs.existsSync(build_script_path)) {
+          const wt_suffix = target_branch.replace(/\//g, '-');
+          const build_name = pm2_process_name('build', wt_suffix);
+          const prefix = `PM2_HOME="${home}" `;
+          const start_cmd = `${prefix}${pm2_bin} start "node ${build_script} develop --watch" --name "${build_name}" --cwd "${worktree_path}" --no-autorestart`;
+          try {
+            execSync(start_cmd, { stdio: 'inherit', cwd: worktree_path, env: { ...process.env, ...load_aws_env(), PM2_HOME: home } });
+          } catch {
+            console.warn('Warning: Frontend build watcher failed to start.');
+          }
+        }
+      }
+
       console.log('PM2 services started.');
     } else {
       // Fallback: start dev server directly (standalone CLI usage)
