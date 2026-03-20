@@ -817,6 +817,13 @@ function main() {
         if (ports[svc]) console.log(`  ${svc.padEnd(22)} ${ports[svc]}`);
       }
 
+      // Write domain to env file so worktree processes know their URL
+      if (domain) {
+        const domain_var = config ? (config_mod.worktree_var(config, 'domain') || 'WORKTREE_DOMAIN') : 'WORKTREE_DOMAIN';
+        const env_file_local = path.join(worktree_path, config ? config.env.filename : '.env.worktree');
+        update_env_key(env_file_local, domain_var, domain);
+      }
+
       if (!options.no_traefik) {
         const traefik_written = write_traefik_config(alias, domain, port_offset);
         if (traefik_written && domain) {
