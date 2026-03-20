@@ -646,9 +646,8 @@ function main() {
         const ecosystem_path = path.join(worktree_path, OUTPUT_FILENAME);
         fs.writeFileSync(ecosystem_path, ecosystem_content, 'utf8');
 
-        const wt_alias = auto_alias(target_branch);
         if (!options.no_traefik) {
-          write_traefik_config(wt_alias, config_mod.domain_for(config, wt_alias), port_offset);
+          write_traefik_config(alias, config_mod.domain_for(config, alias), port_offset);
         }
 
         if (process.env.WT_INNER !== '1') {
@@ -782,8 +781,7 @@ function main() {
 
       // Print port summary
       const ports = config_mod.compute_ports(config, port_offset);
-      const worktree_alias = auto_alias(target_branch);
-      const domain = config_mod.domain_for(config, worktree_alias);
+      const domain = config_mod.domain_for(config, alias);
       console.log('');
       console.log(`Service mode: ${mode}`);
       console.log('Service Ports:');
@@ -792,7 +790,7 @@ function main() {
       }
 
       if (!options.no_traefik) {
-        const traefik_written = write_traefik_config(worktree_alias, domain, port_offset);
+        const traefik_written = write_traefik_config(alias, domain, port_offset);
         if (traefik_written && domain) {
           is_traefik_routing().then((routing) => {
             if (routing) {

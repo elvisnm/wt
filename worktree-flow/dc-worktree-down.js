@@ -90,7 +90,7 @@ function main() {
   const env_filename = config ? config.env.filename : '.env.worktree';
   const shared = config ? config_mod.get_compose_info(config, worktree_path) : null;
   const is_docker = fs.existsSync(compose_file) || !!shared;
-  const alias = is_docker ? read_env(worktree_path, 'WORKTREE_ALIAS') : null;
+  const alias = read_env(worktree_path, 'WORKTREE_ALIAS') || null;
 
   if (is_docker) {
     if (shared) {
