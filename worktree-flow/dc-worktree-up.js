@@ -94,6 +94,14 @@ function read_stored_alias(env_file_path) {
   return match ? match[1].trim() : null;
 }
 
+function read_stored_offset(env_file_path) {
+  if (!fs.existsSync(env_file_path)) return null;
+  const content = fs.readFileSync(env_file_path, 'utf8');
+  const offset_var = config ? config_mod.worktree_var(config, 'portOffset') : 'WORKTREE_PORT_OFFSET';
+  const match = content.match(new RegExp(`^${offset_var}=(.+)$`, 'm'));
+  return match ? parseInt(match[1].trim(), 10) : null;
+}
+
 function get_container_name(alias) {
   if (config) return config_mod.container_name(config, alias);
   return alias; // no config = just use alias
@@ -620,12 +628,12 @@ function main() {
         pm2_cleanup(pm2_bin, home);
 
         // Regenerate ecosystem config
-        const port_offset = find_free_offset(compute_auto_offset(worktree_path));
+        const env_file_local = path.join(worktree_path, config.env.filename || '.env.worktree');
+        const port_offset = read_stored_offset(env_file_local) || find_free_offset(compute_auto_offset(worktree_path));
         const mode = options.mode || config.services.defaultMode || 'full';
         const active_services = config_mod.resolve_services(config, mode);
         const passthrough = config.services.pm2.envPassthrough || [];
         const env_overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development', ...load_aws_env() };
-        const env_file_local = path.join(worktree_path, config.env.filename || '.env.worktree');
         if (fs.existsSync(env_file_local)) {
           const content = fs.readFileSync(env_file_local, 'utf8');
           for (const line of content.split('\n')) {
@@ -745,8 +753,9 @@ function main() {
         }
       }
 
-      // Generate ecosystem config for this worktree
-      const port_offset = find_free_offset(compute_auto_offset(worktree_path));
+      // Read port offset from the env file that was just generated (ensures ecosystem,
+      // Traefik, and env file all use the same offset). Fall back to computing if not found.
+      const port_offset = read_stored_offset(env_file_local) || find_free_offset(compute_auto_offset(worktree_path));
       const mode = options.mode || config.services.defaultMode || 'full';
       const active_services = config_mod.resolve_services(config, mode);
 
