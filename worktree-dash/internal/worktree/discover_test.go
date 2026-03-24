@@ -942,9 +942,9 @@ func TestDiscoverContainerNameFallbackConfig(t *testing.T) {
 	dir := tmp_dir(t)
 	cfg := test_config()
 
-	// No compose file, just env file — container from config.ContainerName
+	// WORKTREE_TYPE=docker with env file — container from config.ContainerName
 	wt_dir := mkdir(t, dir, "env-only")
-	write_file(t, wt_dir, ".env.worktree", "WORKTREE_ALIAS=env-only\n")
+	write_file(t, wt_dir, ".env.worktree", "WORKTREE_ALIAS=env-only\nWORKTREE_TYPE=docker\n")
 
 	results := Discover(dir, nil, cfg)
 	if len(results) != 1 {
@@ -960,9 +960,9 @@ func TestDiscoverContainerNameFallbackConfig(t *testing.T) {
 func TestDiscoverContainerNameFallbackNoConfig(t *testing.T) {
 	dir := tmp_dir(t)
 
-	// No compose file, just env file, no config — container = name
+	// WORKTREE_TYPE=docker with env file, no config — container = name
 	wt_dir := mkdir(t, dir, "simple-wt")
-	write_file(t, wt_dir, ".env.worktree", "WORKTREE_ALIAS=simple\n")
+	write_file(t, wt_dir, ".env.worktree", "WORKTREE_ALIAS=simple\nWORKTREE_TYPE=docker\n")
 
 	results := Discover(dir, nil, nil)
 	if len(results) != 1 {
@@ -971,6 +971,38 @@ func TestDiscoverContainerNameFallbackNoConfig(t *testing.T) {
 
 	if results[0].Container != "simple-wt" {
 		t.Errorf("expected container 'simple-wt' (dir name), got %q", results[0].Container)
+	}
+}
+
+func TestDiscoverEnvOnlyWithoutTypeIsLocal(t *testing.T) {
+	dir := tmp_dir(t)
+
+	// env file without WORKTREE_TYPE and no compose file — should be local
+	wt_dir := mkdir(t, dir, "ambiguous-wt")
+	write_file(t, wt_dir, ".env.worktree", "WORKTREE_ALIAS=ambiguous\n")
+
+	results := Discover(dir, nil, nil)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 worktree, got %d", len(results))
+	}
+	if results[0].Type != TypeLocal {
+		t.Errorf("expected TypeLocal, got %v", results[0].Type)
+	}
+}
+
+func TestDiscoverWorktreeTypeLocal(t *testing.T) {
+	dir := tmp_dir(t)
+
+	// Explicit WORKTREE_TYPE=local without .pm2 — should be local
+	wt_dir := mkdir(t, dir, "typed-local")
+	write_file(t, wt_dir, ".env.worktree", "WORKTREE_ALIAS=typed\nWORKTREE_TYPE=local\n")
+
+	results := Discover(dir, nil, nil)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 worktree, got %d", len(results))
+	}
+	if results[0].Type != TypeLocal {
+		t.Errorf("expected TypeLocal, got %v", results[0].Type)
 	}
 }
 
@@ -1266,6 +1298,7 @@ func TestDiscoverSharedCompose(t *testing.T) {
 	wt_dir := mkdir(t, dir, "shared-wt")
 	write_file(t, wt_dir, ".env.worktree", `WORKTREE_ALIAS=shared-wt
 BRANCH_SLUG=shared-wt
+WORKTREE_TYPE=docker
 `)
 
 	results := Discover(dir, nil, cfg)

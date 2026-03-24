@@ -44,8 +44,14 @@ func Discover(worktrees_dir string, existing []Worktree, cfg *config.Config) []W
 		has_pm2_home := file_exists(filepath.Join(full_path, ".pm2"))
 		has_git := file_exists(filepath.Join(full_path, ".git"))
 
-		// Docker requires a compose file; .env.worktree alone with .pm2 is local
-		has_docker := has_compose || (has_env && !has_pm2_home)
+		// Determine worktree type: check WORKTREE_TYPE env var first (written
+		// by Phase 4 local-setup), fall back to compose file presence.
+		has_docker := has_compose
+		if has_env {
+			if wt_type := read_env_file(full_path, env_filename, "WORKTREE_TYPE"); wt_type != "" {
+				has_docker = (wt_type == "docker")
+			}
+		}
 
 		if !has_docker && !has_git && !has_env {
 			continue
