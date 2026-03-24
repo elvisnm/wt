@@ -72,10 +72,10 @@ func (m *Model) actions_for_worktree(wt worktree.Worktree) []ui.PickerAction {
 		if wt.Running {
 			return m.filter_local_running_actions()
 		}
-		return ui.LocalActions
+		return m.filter_switch_mode(ui.LocalActions)
 	}
 	if !wt.ContainerExists {
-		return ui.LocalActions
+		return m.filter_switch_mode(ui.LocalActions)
 	}
 	if wt.HostBuild {
 		if wt.Running {
@@ -94,7 +94,8 @@ func (m *Model) actions_for_worktree(wt worktree.Worktree) []ui.PickerAction {
 // "Stop service" when no configured services are running.
 func (m *Model) filter_local_running_actions() []ui.PickerAction {
 	has_stopped, has_running := m.service_availability()
-	if has_stopped && has_running {
+	hide_mode := !m.has_modes()
+	if has_stopped && has_running && !hide_mode {
 		return ui.LocalRunningActions
 	}
 	actions := make([]ui.PickerAction, 0, len(ui.LocalRunningActions))
@@ -105,9 +106,32 @@ func (m *Model) filter_local_running_actions() []ui.PickerAction {
 		if !has_running && a.Label == "Stop service" {
 			continue
 		}
+		if hide_mode && a.Key == "m" {
+			continue
+		}
 		actions = append(actions, a)
 	}
 	return actions
+}
+
+// has_modes returns true when the config defines multiple service modes.
+func (m *Model) has_modes() bool {
+	return m.cfg != nil && len(m.cfg.Services.Modes) > 1
+}
+
+// filter_switch_mode removes the "Switch mode" action when no modes are configured.
+func (m *Model) filter_switch_mode(actions []ui.PickerAction) []ui.PickerAction {
+	if m.has_modes() {
+		return actions
+	}
+	filtered := make([]ui.PickerAction, 0, len(actions))
+	for _, a := range actions {
+		if a.Key == "m" {
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	return filtered
 }
 
 // service_availability checks configured services against running PM2 processes
@@ -153,6 +177,21 @@ func cmd_docker_action(action string, wt worktree.Worktree, repo_root string, cf
 				return MsgActionStarted{WtName: wt.Name, Status: status_map[action]}
 			},
 			func() tea.Msg {
+				// Refresh AWS credentials before start/restart so the container
+				// gets fresh session tokens instead of stale ones from dashboard launch.
+				if action != "stop" && cfg != nil && cfg.FeatureEnabled("awsCredentials") {
+					if profile := cfg.AwsSsoProfile(); profile != "" {
+						debug_log("[docker-action] refreshing SSO credentials (profile=%s) before %s", profile, action)
+						if err := export_sso_credentials(profile); err != nil {
+							debug_log("[docker-action] SSO export failed: %v, falling back to credentials file", err)
+							reload_aws_credentials()
+						}
+					} else {
+						debug_log("[docker-action] reloading AWS credentials before %s", action)
+						reload_aws_credentials()
+					}
+				}
+
 				var out string
 				var err error
 				switch action {
@@ -291,7 +330,10 @@ func export_sso_credentials(profile string) error {
 		return fmt.Errorf("export-credentials returned incomplete credentials")
 	}
 
-	// Set env vars for current process + children
+	// Set env vars for current process + children.
+	// Unset AWS_PROFILE so the SDK uses the explicit keys instead of resolving
+	// from the SSO profile cache (which may hold stale credentials).
+	os.Unsetenv("AWS_PROFILE")
 	os.Setenv("AWS_ACCESS_KEY_ID", access_key)
 	os.Setenv("AWS_SECRET_ACCESS_KEY", secret_key)
 	os.Setenv("AWS_SESSION_TOKEN", session_token)
@@ -317,6 +359,44 @@ func export_sso_credentials(profile string) error {
 	debug_log("[aws] export_sso_credentials: wrote %s", creds_path)
 
 	return nil
+}
+
+// switch_mode toggles the service mode between "minimal" and "full" in .env.worktree.
+func (m Model) switch_mode(wt worktree.Worktree) (Model, tea.Cmd) {
+	if m.cfg == nil {
+		m.activity = "No config loaded"
+		return m, nil
+	}
+
+	env_filename := ".env.worktree"
+	if m.cfg.Env.Filename != "" {
+		env_filename = m.cfg.Env.Filename
+	}
+	svc_var := "WORKTREE_SERVICES"
+	if v := m.cfg.WorktreeVar("services"); v != "" {
+		svc_var = v
+	}
+
+	new_mode := "full"
+	if wt.Mode == "full" {
+		new_mode = "minimal"
+	}
+
+	if err := worktree.WriteEnvVar(wt.Path, env_filename, svc_var, new_mode); err != nil {
+		m.activity = fmt.Sprintf("Failed to switch mode: %v", err)
+		return m, nil
+	}
+
+	// Update in-memory state
+	for i := range m.worktrees {
+		if m.worktrees[i].Path == wt.Path {
+			m.worktrees[i].Mode = new_mode
+			break
+		}
+	}
+
+	m.activity = fmt.Sprintf("Switched %s to %s mode (restart to apply)", wt.Alias, new_mode)
+	return m, nil
 }
 
 func run_docker(args ...string) (string, error) {

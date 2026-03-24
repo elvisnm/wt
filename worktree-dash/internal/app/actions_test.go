@@ -112,8 +112,14 @@ func TestActionsForWorktree_LocalStopped(t *testing.T) {
 	m := &Model{}
 	wt := worktree.Worktree{Type: worktree.TypeLocal, Running: false}
 	got := m.actions_for_worktree(wt)
-	if &got[0] != &ui.LocalActions[0] {
-		t.Error("expected LocalActions for stopped local worktree")
+	// No config means no modes → "Switch mode" filtered out
+	for _, a := range got {
+		if a.Key == "m" {
+			t.Error("expected no 'Switch mode' action when no modes configured")
+		}
+	}
+	if len(got) == 0 {
+		t.Error("expected non-empty actions for stopped local worktree")
 	}
 }
 
@@ -121,8 +127,14 @@ func TestActionsForWorktree_NoContainer(t *testing.T) {
 	m := &Model{}
 	wt := worktree.Worktree{Type: worktree.TypeDocker, ContainerExists: false}
 	got := m.actions_for_worktree(wt)
-	if &got[0] != &ui.LocalActions[0] {
-		t.Error("expected LocalActions when container does not exist")
+	// No config means no modes → "Switch mode" filtered out
+	for _, a := range got {
+		if a.Key == "m" {
+			t.Error("expected no 'Switch mode' action when no modes configured")
+		}
+	}
+	if len(got) == 0 {
+		t.Error("expected non-empty actions when container does not exist")
 	}
 }
 

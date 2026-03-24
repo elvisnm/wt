@@ -215,6 +215,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgSsoSessionCheck:
 		if msg.Valid {
 			debug_log("[aws] SSO session valid, pending_action=%s", m.pending_sso_action)
+			// Re-export credentials so ~/.aws/credentials has fresh tokens
+			if profile := m.sso_profile(); profile != "" {
+				if err := export_sso_credentials(profile); err != nil {
+					debug_log("[aws] export_sso_credentials on valid session FAILED: %v", err)
+				}
+			}
 			return m.resolve_sso_action()
 		}
 		debug_log("[aws] SSO session expired, pending_action=%s, opening login", m.pending_sso_action)
@@ -930,6 +936,17 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r":
 		if wt.Running {
+			// SSO check before restarting — ensures credentials are valid
+			if profile := m.sso_profile(); profile != "" {
+				wtCopy := *wt
+				m.pending_sso_action = "restart"
+				m.pending_sso_start = &wtCopy
+				m.activity = "Checking AWS SSO session..."
+				return m, func() tea.Msg {
+					valid := check_sso_session(profile)
+					return MsgSsoSessionCheck{Valid: valid}
+				}
+			}
 			if wt.Type == worktree.TypeLocal {
 				return m.restart_local_services(*wt)
 			}
@@ -1237,6 +1254,17 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 			return m.open_esbuild_watch(*wt)
 		}
 	case "r":
+		// SSO check before restarting — ensures credentials are valid
+		if profile := m.sso_profile(); profile != "" {
+			wtCopy := *wt
+			m.pending_sso_action = "restart"
+			m.pending_sso_start = &wtCopy
+			m.activity = "Checking AWS SSO session..."
+			return m, func() tea.Msg {
+				valid := check_sso_session(profile)
+				return MsgSsoSessionCheck{Valid: valid}
+			}
+		}
 		if wt.Type == worktree.TypeLocal {
 			return m.restart_local_services(*wt)
 		}
@@ -1264,6 +1292,8 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 		return m.open_start_service_picker(*wt)
 	case "p":
 		return m.open_stop_service_picker(*wt)
+	case "m":
+		return m.switch_mode(*wt)
 	case "i":
 		return m.open_worktree_info()
 	case "x":
@@ -2009,13 +2039,50 @@ func (m Model) open_worktree_info() (Model, tea.Cmd) {
 func (m Model) start_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 	debug_log("[services] start_dev_server: alias=%s path=%s isolated=%v", wt.Alias, wt.Path, wt.IsolatedPM2)
 
-	// Reload AWS credentials so PM2 processes get the latest keys
-	reload_aws_credentials()
+	// Export fresh SSO credentials (if configured) then reload into env
+	if profile := m.sso_profile(); profile != "" {
+		if err := export_sso_credentials(profile); err != nil {
+			debug_log("[services] start_dev_server: export_sso_credentials failed: %v", err)
+		}
+	} else {
+		reload_aws_credentials()
+	}
 
-	ecosystem_config := filepath.Join(wt.Path, "ecosystem.worktree.config.js")
+	// Full mode: use the project's ecosystem.dev.config.js (has proper heap sizes).
+	// Other modes: regenerate ecosystem.worktree.config.js with filtered services.
+	var ecosystem_config string
+	if wt.Mode == "full" {
+		dev_config := filepath.Join(wt.Path, "ecosystem.dev.config.js")
+		if _, err := os.Stat(dev_config); err == nil {
+			ecosystem_config = dev_config
+			debug_log("[services] start_dev_server: full mode, using ecosystem.dev.config.js")
+		}
+	}
+
+	if ecosystem_config == "" {
+		ecosystem_config = filepath.Join(wt.Path, "ecosystem.worktree.config.js")
+
+		// Regenerate ecosystem config so it picks up current env (no stale AWS creds)
+		gen_script := filepath.Join(flow_scripts_dir(m.repo_root, m.cfg), "generate-ecosystem-config.js")
+		if _, err := os.Stat(gen_script); err == nil {
+			gen_args := []string{gen_script, "--dir", wt.Path}
+			if wt.Mode != "" {
+				gen_args = append(gen_args, "--mode", wt.Mode)
+			}
+			gen_cmd := exec.Command("node", gen_args...)
+			gen_cmd.Dir = wt.Path
+			gen_cmd.Env = os.Environ()
+			if gen_out, gen_err := gen_cmd.CombinedOutput(); gen_err != nil {
+				debug_log("[services] start_dev_server: regenerate ecosystem failed: %v (%s)", gen_err, string(gen_out))
+			} else {
+				debug_log("[services] start_dev_server: regenerated ecosystem config")
+			}
+		}
+	}
+
 	if _, err := os.Stat(ecosystem_config); os.IsNotExist(err) {
 		debug_log("[services] start_dev_server: ecosystem config not found at %s", ecosystem_config)
-		m.activity = fmt.Sprintf("error: ecosystem.worktree.config.js not found for %s", wt.Alias)
+		m.activity = fmt.Sprintf("error: ecosystem config not found for %s", wt.Alias)
 		return m, nil
 	}
 
@@ -2025,8 +2092,25 @@ func (m Model) start_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 		pm2_home = wt.PM2Home()
 	}
 
+	// Load .env.worktree so ecosystem.dev.config.js can read WORKTREE_PORT_OFFSET, etc.
+	var extra_env []string
+	env_filename := ".env.worktree"
+	if m.cfg != nil && m.cfg.Env.Filename != "" {
+		env_filename = m.cfg.Env.Filename
+	}
+	env_path := filepath.Join(wt.Path, env_filename)
+	if data, err := os.ReadFile(env_path); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			extra_env = append(extra_env, line)
+		}
+	}
+
 	// Start PM2 daemon
-	out, err := pm2.Start(pm2_home, ecosystem_config, wt.Path, nil)
+	out, err := pm2.Start(pm2_home, ecosystem_config, wt.Path, extra_env)
 	if err != nil {
 		debug_log("[services] start_dev_server: PM2 start failed: %v (output: %s)", err, out)
 		m.activity = fmt.Sprintf("PM2 start failed: %v", err)
@@ -2167,10 +2251,18 @@ func (m Model) restart_local_services(wt worktree.Worktree) (Model, tea.Cmd) {
 	debug_log("[aws] restart_local_services: killing dev processes")
 	kill_local_dev_processes(wt.Path)
 
+	// Kill the PM2 daemon so it restarts with fresh env vars (especially AWS keys).
+	// Without this, pm2 start --update-env updates the config but the daemon itself
+	// keeps its old environment and passes stale credentials to spawned processes.
+	if wt.IsolatedPM2 {
+		debug_log("[aws] restart_local_services: killing PM2 daemon (pm2_home=%s)", wt.PM2Home())
+		pm2.Kill(wt.PM2Home())
+	}
+
 	// Close any existing terminal tabs for this worktree
 	m.close_dev_tabs(wt.Alias)
 
-	// Start a fresh dev server (reload_aws_credentials is called inside)
+	// Start a fresh dev server (export_sso_credentials is called inside)
 	return m.start_dev_server(wt)
 }
 
@@ -2465,6 +2557,18 @@ func (m Model) resolve_sso_action() (tea.Model, tea.Cmd) {
 			wt := *m.pending_sso_start
 			m.pending_sso_start = nil
 			return m.start_worktree(wt)
+		}
+	case "restart":
+		if m.pending_sso_start != nil {
+			wt := *m.pending_sso_start
+			m.pending_sso_start = nil
+			if wt.Type == worktree.TypeLocal {
+				return m.restart_local_services(wt)
+			}
+			if wt.HostBuild {
+				return m.restart_host_build(wt)
+			}
+			return m, cmd_docker_action("restart", wt, m.repo_root, m.cfg)
 		}
 	}
 	// No pending action (manual Shift+A) — show timed alert
@@ -2998,6 +3102,15 @@ func (m Model) open_esbuild_watch(wt worktree.Worktree) (Model, tea.Cmd) {
 func (m Model) start_host_build(wt worktree.Worktree) (Model, tea.Cmd) {
 	m.activity = fmt.Sprintf("starting... %s", wt.Alias)
 
+	// Export fresh SSO credentials (if configured) then reload into env
+	if profile := m.sso_profile(); profile != "" {
+		if err := export_sso_credentials(profile); err != nil {
+			debug_log("[host-build] start: export_sso_credentials failed: %v", err)
+		}
+	} else {
+		reload_aws_credentials()
+	}
+
 	return m, tea.Sequence(
 		func() tea.Msg {
 			return MsgActionStarted{WtName: wt.Name, Status: "starting..."}
@@ -3017,6 +3130,15 @@ func (m Model) restart_host_build(wt worktree.Worktree) (Model, tea.Cmd) {
 	build_label := labels.Tab(labels.Build, wt.Alias)
 	m.term_mgr.CloseByLabel(build_label)
 	debug_log("[restart] host-build %s: closed esbuild tab, restarting docker", wt.Alias)
+
+	// Export fresh SSO credentials (if configured) then reload into env
+	if profile := m.sso_profile(); profile != "" {
+		if err := export_sso_credentials(profile); err != nil {
+			debug_log("[host-build] restart: export_sso_credentials failed: %v", err)
+		}
+	} else {
+		reload_aws_credentials()
+	}
 
 	return m, tea.Sequence(
 		func() tea.Msg {

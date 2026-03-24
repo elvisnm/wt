@@ -61,11 +61,14 @@ var MaintenanceActions = []PickerAction{
 	{Key: "r", Label: "Rebuild", Desc: "Rebuild base image"},
 }
 
+var actionSwitchMode = PickerAction{Key: "m", Label: "Switch mode", Desc: "Toggle minimal/full"}
+
 var LocalActions = []PickerAction{
 	{Key: "u", Label: "Start", Desc: "Start dev server"},
 	actionLocalShell,
 	actionClaude,
 	actionPull,
+	actionSwitchMode,
 	{Key: "n", Label: labels.Create, Desc: "Create container"},
 	actionInfo,
 	actionRemove,
@@ -102,6 +105,7 @@ var LocalRunningActions = []PickerAction{
 	{Key: "l", Label: labels.Logs, Desc: "Dev logs"},
 	{Key: "o", Label: "Start service", Desc: "Start a stopped service"},
 	{Key: "p", Label: "Stop service", Desc: "Stop a running service"},
+	actionSwitchMode,
 	{Key: "r", Label: "Restart", Desc: "Restart services"},
 	actionInfo,
 	{Key: "t", Label: "Stop", Desc: "Stop dev server"},
