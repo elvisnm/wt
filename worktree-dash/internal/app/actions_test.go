@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elvisnm/wt/internal/aws"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
@@ -206,9 +207,9 @@ func TestFlowScriptsDir_LegacyFallback(t *testing.T) {
 	}
 }
 
-// ── reload_aws_credentials ───────────────────────────────────────────────
+// ── aws.Refresh ─────────────────────────────────────────────────────────
 
-func TestReloadAWSCredentials(t *testing.T) {
+func TestAWSRefreshFromFile(t *testing.T) {
 	tmp := t.TempDir()
 	creds_path := filepath.Join(tmp, ".aws", "credentials")
 	os.MkdirAll(filepath.Dir(creds_path), 0755)
@@ -218,7 +219,7 @@ aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 aws_session_token = FwoGZXIvYXdzEA==EXAMPLE
 `), 0644)
 
-	// Override HOME so reload_aws_credentials reads our test file
+	// Override HOME so aws.Refresh reads our test file
 	t.Setenv("HOME", tmp)
 
 	// Clear existing values
@@ -226,7 +227,9 @@ aws_session_token = FwoGZXIvYXdzEA==EXAMPLE
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	t.Setenv("AWS_SESSION_TOKEN", "")
 
-	reload_aws_credentials()
+	if err := aws.Refresh(""); err != nil {
+		t.Fatalf("aws.Refresh failed: %v", err)
+	}
 
 	if got := os.Getenv("AWS_ACCESS_KEY_ID"); got != "AKIAIOSFODNN7EXAMPLE" {
 		t.Errorf("AWS_ACCESS_KEY_ID = %q, want AKIAIOSFODNN7EXAMPLE", got)
@@ -239,12 +242,14 @@ aws_session_token = FwoGZXIvYXdzEA==EXAMPLE
 	}
 }
 
-func TestReloadAWSCredentials_MissingFile(t *testing.T) {
+func TestAWSRefresh_MissingFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	// Should not panic, just return silently
-	reload_aws_credentials()
+	// Should return an error, not panic
+	if err := aws.Refresh(""); err == nil {
+		t.Error("expected error when credentials file is missing")
+	}
 }
 
 // ── kill_local_dev_processes ─────────────────────────────────────────────

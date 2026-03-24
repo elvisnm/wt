@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elvisnm/wt/internal/aws"
 	"github.com/elvisnm/wt/internal/beads"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/esbuild"
@@ -217,8 +218,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			debug_log("[aws] SSO session valid, pending_action=%s", m.pending_sso_action)
 			// Re-export credentials so ~/.aws/credentials has fresh tokens
 			if profile := m.sso_profile(); profile != "" {
-				if err := export_sso_credentials(profile); err != nil {
-					debug_log("[aws] export_sso_credentials on valid session FAILED: %v", err)
+				if err := aws.Refresh(profile); err != nil {
+					debug_log("[aws] Refresh on valid session FAILED: %v", err)
 				}
 			}
 			return m.resolve_sso_action()
@@ -398,37 +399,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.focus_worktrees_if_empty()
 						return m, tick_after(100*time.Millisecond, "render")
 					}
-					is_sso := m.cfg != nil && m.cfg.AwsSsoProfile() != ""
-					if is_sso {
-						debug_log("[aws] SUCCESS (SSO): exporting credentials from SSO session")
-						if err := export_sso_credentials(m.cfg.AwsSsoProfile()); err != nil {
-							debug_log("[aws] export_sso_credentials FAILED: %v", err)
-							m.activity = fmt.Sprintf("SSO login OK but credential export failed: %v", err)
-							m.focus_worktrees_if_empty()
-							return m, tick_after(100*time.Millisecond, "render")
-						}
-						// Propagate SSO-exported keys to tmux server
-						if server := m.term_mgr.Server(); server != nil {
-							for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
-								if val := os.Getenv(key); val != "" {
-									server.SetEnv(key, val)
-								}
-							}
-							debug_log("[aws] propagated SSO-exported keys to tmux server")
-						}
-					} else {
-						debug_log("[aws] SUCCESS (paste): reloading credentials and restarting services")
-						reload_aws_credentials()
-						// Propagate AWS env vars to tmux server so new windows inherit them
-						if server := m.term_mgr.Server(); server != nil {
-							for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
-								if val := os.Getenv(key); val != "" {
-									server.SetEnv(key, val)
-								}
-							}
-							debug_log("[aws] propagated AWS keys to tmux server")
-						}
+					profile := ""
+					if m.cfg != nil {
+						profile = m.cfg.AwsSsoProfile()
 					}
+					debug_log("[aws] SUCCESS: refreshing credentials (profile=%q)", profile)
+					if err := aws.Refresh(profile); err != nil {
+						debug_log("[aws] Refresh FAILED: %v", err)
+						m.activity = fmt.Sprintf("AWS credential refresh failed: %v", err)
+						m.focus_worktrees_if_empty()
+						return m, tick_after(100*time.Millisecond, "render")
+					}
+					aws.PropagateToTmux(m.term_mgr.Server())
+					debug_log("[aws] propagated credentials to tmux server")
 					// If a deferred action was pending, execute it
 					if m.pending_sso_action != "" {
 						debug_log("[aws] SSO login done, resolving pending action=%s", m.pending_sso_action)
@@ -902,7 +885,7 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pending_sso_action = "create"
 			m.activity = "Checking AWS SSO session..."
 			return m, func() tea.Msg {
-				valid := check_sso_session(profile)
+				valid := aws.CheckSession(profile)
 				return MsgSsoSessionCheck{Valid: valid}
 			}
 		}
@@ -943,7 +926,7 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.pending_sso_start = &wtCopy
 				m.activity = "Checking AWS SSO session..."
 				return m, func() tea.Msg {
-					valid := check_sso_session(profile)
+					valid := aws.CheckSession(profile)
 					return MsgSsoSessionCheck{Valid: valid}
 				}
 			}
@@ -974,7 +957,7 @@ func (m Model) handle_worktree_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.pending_sso_start = &wtCopy
 				m.activity = "Checking AWS SSO session..."
 				return m, func() tea.Msg {
-					valid := check_sso_session(profile)
+					valid := aws.CheckSession(profile)
 					return MsgSsoSessionCheck{Valid: valid}
 				}
 			}
@@ -1261,7 +1244,7 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 			m.pending_sso_start = &wtCopy
 			m.activity = "Checking AWS SSO session..."
 			return m, func() tea.Msg {
-				valid := check_sso_session(profile)
+				valid := aws.CheckSession(profile)
 				return MsgSsoSessionCheck{Valid: valid}
 			}
 		}
@@ -1491,17 +1474,9 @@ func (m Model) open_logs(wt worktree.Worktree) (Model, tea.Cmd) {
 
 // open_create runs the interactive dc-create.js script to create a new container
 func (m Model) open_create(wt *worktree.Worktree) (Model, tea.Cmd) {
-	// Reload AWS credentials so the spawned process inherits the latest keys
-	reload_aws_credentials()
-
-	// Propagate AWS env vars to the tmux server so new windows inherit them
-	if server := m.term_mgr.Server(); server != nil {
-		for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
-			if val := os.Getenv(key); val != "" {
-				server.SetEnv(key, val)
-			}
-		}
-	}
+	// Refresh AWS credentials so the spawned process inherits the latest keys
+	aws.Refresh(m.sso_profile())
+	aws.PropagateToTmux(m.term_mgr.Server())
 
 	w, h := m.right_pane_dimensions()
 
@@ -2039,13 +2014,9 @@ func (m Model) open_worktree_info() (Model, tea.Cmd) {
 func (m Model) start_dev_server(wt worktree.Worktree) (Model, tea.Cmd) {
 	debug_log("[services] start_dev_server: alias=%s path=%s isolated=%v", wt.Alias, wt.Path, wt.IsolatedPM2)
 
-	// Export fresh SSO credentials (if configured) then reload into env
-	if profile := m.sso_profile(); profile != "" {
-		if err := export_sso_credentials(profile); err != nil {
-			debug_log("[services] start_dev_server: export_sso_credentials failed: %v", err)
-		}
-	} else {
-		reload_aws_credentials()
+	// Refresh AWS credentials so PM2 processes get the latest keys
+	if err := aws.Refresh(m.sso_profile()); err != nil {
+		debug_log("[services] start_dev_server: aws.Refresh failed: %v", err)
 	}
 
 	// Full mode: use the project's ecosystem.dev.config.js (has proper heap sizes).
@@ -2262,7 +2233,7 @@ func (m Model) restart_local_services(wt worktree.Worktree) (Model, tea.Cmd) {
 	// Close any existing terminal tabs for this worktree
 	m.close_dev_tabs(wt.Alias)
 
-	// Start a fresh dev server (export_sso_credentials is called inside)
+	// Start a fresh dev server (aws.Refresh is called inside)
 	return m.start_dev_server(wt)
 }
 
@@ -2602,15 +2573,6 @@ func (m Model) start_worktree(wt worktree.Worktree) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// check_sso_session runs `aws sts get-caller-identity` to verify the SSO session.
-// Returns true if the session is valid, false if expired or error.
-func check_sso_session(profile string) bool {
-	cmd := exec.Command("aws", "sts", "get-caller-identity", "--profile", profile, "--output", "json")
-	cmd.Env = os.Environ()
-	err := cmd.Run()
-	return err == nil
-}
-
 // MsgSsoSessionCheck is sent after an async SSO session check completes.
 type MsgSsoSessionCheck struct {
 	Valid bool
@@ -2622,7 +2584,7 @@ func (m Model) check_sso_then_login() (tea.Model, tea.Cmd) {
 	debug_log("[aws] checking SSO session for profile=%s", profile)
 	m.activity = "Checking AWS SSO session..."
 	return m, func() tea.Msg {
-		valid := check_sso_session(profile)
+		valid := aws.CheckSession(profile)
 		return MsgSsoSessionCheck{Valid: valid}
 	}
 }
@@ -3102,13 +3064,9 @@ func (m Model) open_esbuild_watch(wt worktree.Worktree) (Model, tea.Cmd) {
 func (m Model) start_host_build(wt worktree.Worktree) (Model, tea.Cmd) {
 	m.activity = fmt.Sprintf("starting... %s", wt.Alias)
 
-	// Export fresh SSO credentials (if configured) then reload into env
-	if profile := m.sso_profile(); profile != "" {
-		if err := export_sso_credentials(profile); err != nil {
-			debug_log("[host-build] start: export_sso_credentials failed: %v", err)
-		}
-	} else {
-		reload_aws_credentials()
+	// Refresh AWS credentials so the container gets fresh tokens
+	if err := aws.Refresh(m.sso_profile()); err != nil {
+		debug_log("[host-build] start: aws.Refresh failed: %v", err)
 	}
 
 	return m, tea.Sequence(
@@ -3131,13 +3089,9 @@ func (m Model) restart_host_build(wt worktree.Worktree) (Model, tea.Cmd) {
 	m.term_mgr.CloseByLabel(build_label)
 	debug_log("[restart] host-build %s: closed esbuild tab, restarting docker", wt.Alias)
 
-	// Export fresh SSO credentials (if configured) then reload into env
-	if profile := m.sso_profile(); profile != "" {
-		if err := export_sso_credentials(profile); err != nil {
-			debug_log("[host-build] restart: export_sso_credentials failed: %v", err)
-		}
-	} else {
-		reload_aws_credentials()
+	// Refresh AWS credentials so the container gets fresh tokens
+	if err := aws.Refresh(m.sso_profile()); err != nil {
+		debug_log("[host-build] restart: aws.Refresh failed: %v", err)
 	}
 
 	return m, tea.Sequence(

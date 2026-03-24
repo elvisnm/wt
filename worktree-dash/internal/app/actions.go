@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/elvisnm/wt/internal/aws"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
@@ -180,15 +181,10 @@ func cmd_docker_action(action string, wt worktree.Worktree, repo_root string, cf
 				// Refresh AWS credentials before start/restart so the container
 				// gets fresh session tokens instead of stale ones from dashboard launch.
 				if action != "stop" && cfg != nil && cfg.FeatureEnabled("awsCredentials") {
-					if profile := cfg.AwsSsoProfile(); profile != "" {
-						debug_log("[docker-action] refreshing SSO credentials (profile=%s) before %s", profile, action)
-						if err := export_sso_credentials(profile); err != nil {
-							debug_log("[docker-action] SSO export failed: %v, falling back to credentials file", err)
-							reload_aws_credentials()
-						}
-					} else {
-						debug_log("[docker-action] reloading AWS credentials before %s", action)
-						reload_aws_credentials()
+					profile := cfg.AwsSsoProfile()
+					debug_log("[docker-action] refreshing AWS credentials (profile=%q) before %s", profile, action)
+					if err := aws.Refresh(profile); err != nil {
+						debug_log("[docker-action] AWS refresh failed: %v", err)
 					}
 				}
 
@@ -247,119 +243,6 @@ func kill_local_dev_processes(wt_path string) bool {
 	return killed
 }
 
-// reload_aws_credentials reads ~/.aws/credentials and sets env vars
-// so child processes (like pnpm dev) inherit the fresh keys.
-func reload_aws_credentials() {
-	debug_log("[aws] reload_aws_credentials: start")
-	home, err := os.UserHomeDir()
-	if err != nil {
-		debug_log("[aws] reload_aws_credentials: UserHomeDir error: %v", err)
-		return
-	}
-	creds_path := filepath.Join(home, ".aws", "credentials")
-	data, err := os.ReadFile(creds_path)
-	if err != nil {
-		debug_log("[aws] reload_aws_credentials: ReadFile error: %v", err)
-		return
-	}
-	debug_log("[aws] reload_aws_credentials: read %s (%d bytes)", creds_path, len(data))
-	keys_set := 0
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "[") || line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		val := strings.TrimSpace(parts[1])
-		switch key {
-		case "aws_access_key_id":
-			os.Setenv("AWS_ACCESS_KEY_ID", val)
-			safe := val
-			if len(safe) > 8 {
-				safe = safe[:8]
-			}
-			debug_log("[aws] reload_aws_credentials: set AWS_ACCESS_KEY_ID=%s...", safe)
-			keys_set++
-		case "aws_secret_access_key":
-			os.Setenv("AWS_SECRET_ACCESS_KEY", val)
-			debug_log("[aws] reload_aws_credentials: set AWS_SECRET_ACCESS_KEY=[hidden]")
-			keys_set++
-		case "aws_session_token":
-			os.Setenv("AWS_SESSION_TOKEN", val)
-			debug_log("[aws] reload_aws_credentials: set AWS_SESSION_TOKEN=[hidden]")
-			keys_set++
-		}
-	}
-	debug_log("[aws] reload_aws_credentials: done, set %d keys", keys_set)
-}
-
-// export_sso_credentials runs `aws configure export-credentials` to extract
-// temporary credentials from the SSO session, writes them to ~/.aws/credentials,
-// and sets them as env vars so child processes (PM2, pnpm dev) inherit them.
-func export_sso_credentials(profile string) error {
-	debug_log("[aws] export_sso_credentials: profile=%s", profile)
-	cmd := exec.Command("aws", "configure", "export-credentials", "--profile", profile, "--format", "env-no-export")
-	cmd.Env = os.Environ()
-	out, err := cmd.Output()
-	if err != nil {
-		debug_log("[aws] export_sso_credentials: command failed: %v", err)
-		return fmt.Errorf("aws configure export-credentials failed: %w", err)
-	}
-
-	// Parse KEY=VALUE lines
-	creds := map[string]string{}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		creds[parts[0]] = parts[1]
-	}
-
-	access_key := creds["AWS_ACCESS_KEY_ID"]
-	secret_key := creds["AWS_SECRET_ACCESS_KEY"]
-	session_token := creds["AWS_SESSION_TOKEN"]
-
-	if access_key == "" || secret_key == "" {
-		debug_log("[aws] export_sso_credentials: missing credentials in output")
-		return fmt.Errorf("export-credentials returned incomplete credentials")
-	}
-
-	// Set env vars for current process + children.
-	// Unset AWS_PROFILE so the SDK uses the explicit keys instead of resolving
-	// from the SSO profile cache (which may hold stale credentials).
-	os.Unsetenv("AWS_PROFILE")
-	os.Setenv("AWS_ACCESS_KEY_ID", access_key)
-	os.Setenv("AWS_SECRET_ACCESS_KEY", secret_key)
-	os.Setenv("AWS_SESSION_TOKEN", session_token)
-	safe := access_key
-	if len(safe) > 8 {
-		safe = safe[:8]
-	}
-	debug_log("[aws] export_sso_credentials: set env vars (key=%s...)", safe)
-
-	// Write to ~/.aws/credentials so the SDK credential chain picks them up
-	home, err := os.UserHomeDir()
-	if err != nil {
-		debug_log("[aws] export_sso_credentials: UserHomeDir error: %v", err)
-		return nil // env vars are set, credentials file is best-effort
-	}
-	creds_content := fmt.Sprintf("[default]\naws_access_key_id = %s\naws_secret_access_key = %s\naws_session_token = %s\n",
-		access_key, secret_key, session_token)
-	creds_path := filepath.Join(home, ".aws", "credentials")
-	if err := os.WriteFile(creds_path, []byte(creds_content), 0600); err != nil {
-		debug_log("[aws] export_sso_credentials: WriteFile error: %v", err)
-		return nil // env vars are set, credentials file is best-effort
-	}
-	debug_log("[aws] export_sso_credentials: wrote %s", creds_path)
-
-	return nil
-}
 
 // switch_mode toggles the service mode between "minimal" and "full" in .env.worktree.
 func (m Model) switch_mode(wt worktree.Worktree) (Model, tea.Cmd) {
