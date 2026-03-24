@@ -16,6 +16,7 @@ const { find_pm2, pm2_home, pm2_start, pm2_cleanup, pm2_process_name, load_aws_e
 const { generate_config, OUTPUT_FILENAME } = require('./generate-ecosystem-config');
 const { generate_workspace } = require('./generate-workspace-config');
 const { write_traefik_config, is_traefik_routing } = require('./generate-docker-compose');
+const local_setup = require('./lib/local-setup');
 
 const scripts_dir = __dirname;
 
@@ -617,69 +618,16 @@ function main() {
         fs.copyFileSync(config_src, path.join(worktree_path, 'workflow.config.js'));
       }
 
-      // Restart PM2 services if localDev is enabled
-      const use_local_dev = config && config_mod.feature_enabled(config, 'localDev')
-        && config.services.pm2 && config.services.pm2.ecosystemConfig;
-      if (use_local_dev) {
-        const home = pm2_home(worktree_path);
-        const pm2_bin = find_pm2(repo_root);
+      if (local_setup.is_local_dev_enabled()) {
+        local_setup.stop_services(worktree_path, repo_root);
 
-        // Stop existing PM2 daemon first
-        pm2_cleanup(pm2_bin, home);
-
-        // Regenerate ecosystem config
-        const env_file_local = path.join(worktree_path, config.env.filename || '.env.worktree');
-        const port_offset = read_stored_offset(env_file_local) || find_free_offset(compute_auto_offset(worktree_path));
+        const port_offset = local_setup.resolve_offset(worktree_path);
         const mode = options.mode || config.services.defaultMode || 'full';
-        const active_services = config_mod.resolve_services(config, mode);
-        const passthrough = config.services.pm2.envPassthrough || [];
-        const env_overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development', ...load_aws_env() };
-        if (fs.existsSync(env_file_local)) {
-          const content = fs.readFileSync(env_file_local, 'utf8');
-          for (const line of content.split('\n')) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith('#')) continue;
-            const idx = trimmed.indexOf('=');
-            if (idx === -1) continue;
-            const key = trimmed.slice(0, idx).trim();
-            if (passthrough.includes(key) || key.startsWith('WORKTREE_') || key === 'PM2_HOME') {
-              env_overrides[key] = trimmed.slice(idx + 1).trim();
-            }
-          }
-        }
-        const ecosystem_content = generate_config(
-          config, worktree_path, target_branch.replace(/\//g, '-'),
-          port_offset, active_services, env_overrides,
-        );
-        const ecosystem_path = path.join(worktree_path, OUTPUT_FILENAME);
-        fs.writeFileSync(ecosystem_path, ecosystem_content, 'utf8');
-
-        if (!options.no_traefik) {
-          write_traefik_config(alias, config_mod.domain_for(config, alias), port_offset);
-        }
+        local_setup.generate_ecosystem(worktree_path, target_branch, port_offset, mode);
+        local_setup.setup_traefik(alias, port_offset, options);
 
         if (process.env.WT_INNER !== '1') {
-          console.log('Starting PM2 services...');
-          pm2_start({ pm2: pm2_bin, pm2_home: home, ecosystem_config: ecosystem_path, env: load_aws_env(), cwd: worktree_path });
-
-          // Restart frontend build watcher if buildScript is configured
-          const build_script_r = config && config.paths && config.paths.buildScript;
-          if (build_script_r) {
-            const build_script_path_r = path.join(worktree_path, build_script_r);
-            if (fs.existsSync(build_script_path_r)) {
-              const wt_suffix_r = target_branch.replace(/\//g, '-');
-              const build_name_r = pm2_process_name('build', wt_suffix_r);
-              const prefix_r = `PM2_HOME="${home}" `;
-              try { execSync(`${prefix_r}${pm2_bin} delete "${build_name_r}"`, { stdio: 'pipe', cwd: worktree_path }); } catch {}
-              const start_cmd_r = `${prefix_r}${pm2_bin} start "node ${build_script_r} develop --watch" --name "${build_name_r}" --cwd "${worktree_path}" --no-autorestart`;
-              try {
-                execSync(start_cmd_r, { stdio: 'inherit', cwd: worktree_path, env: { ...process.env, ...load_aws_env(), PM2_HOME: home } });
-              } catch {
-                console.warn('Warning: Frontend build watcher failed to start.');
-              }
-            }
-          }
-
+          local_setup.start_services(worktree_path, target_branch, repo_root);
           console.log('PM2 services restarted.');
         }
       }
@@ -747,14 +695,10 @@ function main() {
       }
     }
 
-    // Generate .env.worktree for local worktree
-    const use_local_dev = config && config_mod.feature_enabled(config, 'localDev')
-      && config.services.pm2 && config.services.pm2.ecosystemConfig;
+    const use_local_dev = local_setup.is_local_dev_enabled();
 
     if (use_local_dev) {
-      const home = pm2_home(worktree_path);
-      const env_filename_local = config ? config.env.filename : '.env.worktree';
-      const env_file_local = path.join(worktree_path, env_filename_local);
+      const env_file_local = path.join(worktree_path, local_setup.env_filename());
 
       // Generate the env file if it doesn't exist
       if (!fs.existsSync(env_file_local)) {
@@ -762,8 +706,7 @@ function main() {
         execSync(`node "${create_env_script}" --auto --dir "${worktree_path}"`, { stdio: 'inherit' });
       }
 
-      // Ensure WORKTREE_ALIAS is in the env file (the alias from --alias flag
-      // or auto_alias may differ from the directory name)
+      // Ensure WORKTREE_ALIAS is in the env file
       const alias_var_local = config ? config_mod.worktree_var(config, 'alias') : 'WORKTREE_ALIAS';
       if (alias_var_local && alias) {
         const env_content = fs.existsSync(env_file_local) ? fs.readFileSync(env_file_local, 'utf8') : '';
@@ -772,35 +715,12 @@ function main() {
         }
       }
 
-      // Read port offset from the env file that was just generated (ensures ecosystem,
-      // Traefik, and env file all use the same offset). Fall back to computing if not found.
-      const port_offset = read_stored_offset(env_file_local) || find_free_offset(compute_auto_offset(worktree_path));
+      // Write WORKTREE_TYPE for explicit discovery
+      local_setup.write_worktree_type(worktree_path);
+
+      const port_offset = local_setup.resolve_offset(worktree_path);
       const mode = options.mode || config.services.defaultMode || 'full';
-      const active_services = config_mod.resolve_services(config, mode);
-
-      // Build env overrides from passthrough keys + env file
-      const passthrough = config.services.pm2.envPassthrough || [];
-      const env_overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development', ...load_aws_env() };
-      if (fs.existsSync(env_file_local)) {
-        const content = fs.readFileSync(env_file_local, 'utf8');
-        for (const line of content.split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) continue;
-          const idx = trimmed.indexOf('=');
-          if (idx === -1) continue;
-          const key = trimmed.slice(0, idx).trim();
-          if (passthrough.includes(key) || key.startsWith('WORKTREE_') || key === 'PM2_HOME') {
-            env_overrides[key] = trimmed.slice(idx + 1).trim();
-          }
-        }
-      }
-
-      const ecosystem_content = generate_config(
-        config, worktree_path, target_branch.replace(/\//g, '-'),
-        port_offset, active_services, env_overrides,
-      );
-      const ecosystem_path = path.join(worktree_path, OUTPUT_FILENAME);
-      fs.writeFileSync(ecosystem_path, ecosystem_content, 'utf8');
+      const { active_services, env_overrides } = local_setup.generate_ecosystem(worktree_path, target_branch, port_offset, mode);
       console.log(`Generated ${OUTPUT_FILENAME}`);
 
       // Generate VS Code workspace file
@@ -817,16 +737,15 @@ function main() {
         if (ports[svc]) console.log(`  ${svc.padEnd(22)} ${ports[svc]}`);
       }
 
-      // Write domain to env file so worktree processes know their URL
+      // Write domain to env file
       if (domain) {
         const domain_var = config ? (config_mod.worktree_var(config, 'domain') || 'WORKTREE_DOMAIN') : 'WORKTREE_DOMAIN';
-        const env_file_local = path.join(worktree_path, config ? config.env.filename : '.env.worktree');
         update_env_key(env_file_local, domain_var, domain);
       }
 
+      local_setup.setup_traefik(alias, port_offset, options);
       if (!options.no_traefik) {
-        const traefik_written = write_traefik_config(alias, domain, port_offset);
-        if (traefik_written && domain) {
+        if (domain) {
           is_traefik_routing().then((routing) => {
             if (routing) {
               console.log(`Domain: http://${domain}/`);
@@ -849,35 +768,7 @@ function main() {
 
     // Start services
     if (use_local_dev) {
-      const home = pm2_home(worktree_path);
-      const pm2_bin = find_pm2(repo_root);
-      const ecosystem_path = path.join(worktree_path, OUTPUT_FILENAME);
-      console.log('Starting PM2 services...');
-      pm2_start({
-        pm2: pm2_bin,
-        pm2_home: home,
-        ecosystem_config: ecosystem_path,
-        env: load_aws_env(),
-        cwd: worktree_path,
-      });
-
-      // Start frontend build watcher if buildScript is configured
-      const build_script = config && config.paths && config.paths.buildScript;
-      if (build_script) {
-        const build_script_path = path.join(worktree_path, build_script);
-        if (fs.existsSync(build_script_path)) {
-          const wt_suffix = target_branch.replace(/\//g, '-');
-          const build_name = pm2_process_name('build', wt_suffix);
-          const prefix = `PM2_HOME="${home}" `;
-          const start_cmd = `${prefix}${pm2_bin} start "node ${build_script} develop --watch" --name "${build_name}" --cwd "${worktree_path}" --no-autorestart`;
-          try {
-            execSync(start_cmd, { stdio: 'inherit', cwd: worktree_path, env: { ...process.env, ...load_aws_env(), PM2_HOME: home } });
-          } catch {
-            console.warn('Warning: Frontend build watcher failed to start.');
-          }
-        }
-      }
-
+      local_setup.start_services(worktree_path, target_branch, repo_root);
       console.log('PM2 services started.');
     } else {
       // Fallback: start dev server directly (standalone CLI usage)
