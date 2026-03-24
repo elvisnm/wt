@@ -15,7 +15,8 @@
 const fs = require('fs');
 const path = require('path');
 const { config, config_mod, read_env_multi } = require('./lib/utils');
-const { pm2_process_name, load_aws_env } = require('./lib/pm2');
+const { pm2_process_name } = require('./lib/pm2');
+const { load_aws_env } = require('./lib/aws');
 
 const OUTPUT_FILENAME = 'ecosystem.worktree.config.js';
 

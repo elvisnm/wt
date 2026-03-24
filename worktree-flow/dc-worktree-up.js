@@ -12,7 +12,7 @@ const {
   apply_skip_worktree: apply_skip_worktree_config,
   copy_setup_files,
 } = require('./lib/skip-worktree');
-const { find_pm2, pm2_home, pm2_start, pm2_cleanup, pm2_process_name, load_aws_env } = require('./lib/pm2');
+const { find_pm2, pm2_home, pm2_start, pm2_cleanup, pm2_process_name } = require('./lib/pm2');
 const { generate_config, OUTPUT_FILENAME } = require('./generate-ecosystem-config');
 const { generate_workspace } = require('./generate-workspace-config');
 const { write_traefik_config, is_traefik_routing } = require('./generate-docker-compose');

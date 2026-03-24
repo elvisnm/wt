@@ -10,7 +10,8 @@ const fs = require('fs');
 const path = require('path');
 
 const { config, config_mod, compute_auto_offset, update_env_key, read_offset } = require('./utils');
-const { find_pm2, pm2_home, pm2_start, pm2_cleanup, pm2_process_name, load_aws_env } = require('./pm2');
+const { find_pm2, pm2_home, pm2_start, pm2_cleanup, pm2_process_name } = require('./pm2');
+const { refresh_credentials } = require('./aws');
 const { find_free_offset } = require('../service-ports');
 const { generate_config, OUTPUT_FILENAME } = require('../generate-ecosystem-config');
 const { write_traefik_config } = require('../generate-docker-compose');
@@ -43,7 +44,7 @@ function resolve_offset(worktree_path) {
  */
 function build_env_overrides(worktree_path) {
   const passthrough = config.services.pm2.envPassthrough || [];
-  const overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development', ...load_aws_env() };
+  const overrides = { SKULABS_ENV: 'development', NODE_ENV: 'development', ...refresh_credentials(config) };
   const env_file = path.join(worktree_path, env_filename());
 
   if (fs.existsSync(env_file)) {
@@ -103,7 +104,7 @@ function start_services(worktree_path, branch, repo_root) {
     pm2: pm2_bin,
     pm2_home: home,
     ecosystem_config: ecosystem_path,
-    env: load_aws_env(),
+    env: refresh_credentials(config),
     cwd: worktree_path,
   });
 
@@ -138,7 +139,7 @@ function start_build_watcher(worktree_path, branch, home, pm2_bin) {
 
   const start_cmd = `${prefix}${pm2_bin} start "node ${build_script} develop --watch" --name "${build_name}" --cwd "${worktree_path}" --no-autorestart`;
   try {
-    execSync(start_cmd, { stdio: 'inherit', cwd: worktree_path, env: { ...process.env, ...load_aws_env(), PM2_HOME: home } });
+    execSync(start_cmd, { stdio: 'inherit', cwd: worktree_path, env: { ...process.env, ...refresh_credentials(config), PM2_HOME: home } });
   } catch {
     console.warn('Warning: Frontend build watcher failed to start.');
   }

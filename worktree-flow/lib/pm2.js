@@ -1,6 +1,5 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
 /**
@@ -179,44 +178,9 @@ function pm2_process_name(base_name, worktree_suffix) {
   return `${base_name}-${safe_suffix}`;
 }
 
-// ── AWS credential loading ──────────────────────────────────────────────
+// ── AWS credential loading (delegated to lib/aws.js) ────────────────────
 
-/**
- * Read ~/.aws/credentials and return an env object with AWS_* vars.
- * Returns {} if the file doesn't exist or can't be parsed.
- * This ensures PM2 processes get explicit env vars that override
- * any SSO profile configured in ~/.aws/config.
- */
-function load_aws_env() {
-  const creds_path = path.join(os.homedir(), '.aws', 'credentials');
-  let data;
-  try {
-    data = fs.readFileSync(creds_path, 'utf8');
-  } catch {
-    return {};
-  }
-
-  const env = {};
-  const key_map = {
-    aws_access_key_id: 'AWS_ACCESS_KEY_ID',
-    aws_secret_access_key: 'AWS_SECRET_ACCESS_KEY',
-    aws_session_token: 'AWS_SESSION_TOKEN',
-  };
-
-  for (const line of data.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('[') || trimmed === '') continue;
-    const idx = trimmed.indexOf('=');
-    if (idx === -1) continue;
-    const key = trimmed.slice(0, idx).trim();
-    const val = trimmed.slice(idx + 1).trim();
-    if (key_map[key]) {
-      env[key_map[key]] = val;
-    }
-  }
-
-  return env;
-}
+const { load_aws_env } = require('./aws');
 
 module.exports = {
   find_pm2,
