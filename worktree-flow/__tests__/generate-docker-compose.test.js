@@ -308,31 +308,11 @@ describe('generate (no-config legacy path)', () => {
   // ── Port mapping tests ──────────────────────────────────────────────
 
   describe('port mappings', () => {
-    test('applies port offset to base ports', () => {
+    test('generates no port mappings without config', () => {
       const yaml = call_generate({ port_offset: 200 });
-      // The SERVICE_PORTS from service-ports.js are used in legacy mode.
-      // socket_server = 3000, so host port = 3200
-      expect(yaml).toContain('"3200:3000"');
-    });
-
-    test('livereload uses host_port for both sides', () => {
-      // livereload base is 53099, offset 100 -> host = 53199, container = 53199
-      const yaml = call_generate({ port_offset: 100, service_mode: 'full' });
-      expect(yaml).toContain('"53199:53199"');
-    });
-
-    test('non-livereload ports use base as container port', () => {
-      const yaml = call_generate({ port_offset: 50, service_mode: 'full' });
-      // app base = 3001, host = 3051, container = 3001
-      expect(yaml).toContain('"3051:3001"');
-    });
-
-    test('mode filter reduces port entries', () => {
-      const yaml_minimal = call_generate({ service_mode: 'minimal', port_offset: 10 });
-      const yaml_full = call_generate({ service_mode: 'full', port_offset: 10 });
-
-      const count_ports = (yaml) => (yaml.match(/"(\d+):(\d+)"/g) || []).length;
-      expect(count_ports(yaml_minimal)).toBeLessThan(count_ports(yaml_full));
+      // No config means SERVICE_PORTS is empty — no port entries
+      const port_lines = yaml.match(/"(\d+):(\d+)"/g) || [];
+      expect(port_lines.length).toBe(0);
     });
   });
 
@@ -349,12 +329,11 @@ describe('generate (no-config legacy path)', () => {
       expect(yaml).not.toContain('--no-build');
     });
 
-    test('excludes livereload port when host_build is true (legacy)', () => {
+    test('excludes livereload port when host_build is true (no-config = no ports)', () => {
       const yaml = call_generate({ host_build: true, service_mode: 'full', port_offset: 100 });
-      // livereload base = 53099, offset 100 -> would be "53199:53199"
-      expect(yaml).not.toContain('"53199:53199"');
-      // But other ports should still be present (e.g., app base 3001 -> "3101:3001")
-      expect(yaml).toContain('"3101:3001"');
+      // No config means no ports are generated at all
+      const port_lines = yaml.match(/"(\d+):(\d+)"/g) || [];
+      expect(port_lines.length).toBe(0);
     });
   });
 
@@ -819,11 +798,10 @@ describe('YAML structural integrity', () => {
     expect(yaml).not.toContain('\t');
   });
 
-  test('port entries are properly formatted as "host:container"', () => {
+  test('ports section is empty without config', () => {
     const yaml = generate_default();
     const port_lines = yaml.match(/^\s*- "\d+:\d+"$/gm);
-    expect(port_lines).not.toBeNull();
-    expect(port_lines.length).toBeGreaterThan(0);
+    expect(port_lines).toBeNull();
   });
 
   test('service name appears under services: key', () => {

@@ -110,9 +110,13 @@ function format_info(worktree_name, worktree_path, { compact = false } = {}) {
       const summary = Object.entries(cfg_ports).map(([s, p]) => `${s}:${p}`).join('  ');
       console.log(`  ${state_text}  offset=${offset}  ${summary}`);
     } else {
-      const ports = compute_ports(offset);
-      const summary = MINIMAL_SERVICES.map((s) => `${s}:${ports[s]}`).join('  ');
-      console.log(`  ${state_text}  offset=${offset}  ${summary}`);
+      if (Object.keys(require('./service-ports').SERVICE_PORTS).length > 0) {
+        const ports = compute_ports(offset);
+        const summary = Object.entries(ports).slice(0, 5).map(([s, p]) => `${s}:${p}`).join('  ');
+        console.log(`  ${state_text}  offset=${offset}  ${summary}`);
+      } else {
+        console.log(`  ${state_text}  offset=${offset}`);
+      }
     }
     console.log('');
     return true;

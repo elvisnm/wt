@@ -11,10 +11,10 @@ function generate(worktree_path, worktree_name, port_offset, repo_root, service_
   const aws_dir = path.join(os.homedir(), '.aws');
   const docker_dir = path.join(repo_root, 'docker');
 
-  const svc_ports = config ? config.services.ports : SERVICE_PORTS;
+  const svc_ports = SERVICE_PORTS;
   const mode_filter = config
     ? config_mod.services_for_mode(config, service_mode)
-    : SERVICE_MODE_FILTERS[service_mode];
+    : SERVICE_MODE_FILTERS[service_mode] || null;
   let port_entries = mode_filter
     ? Object.entries(svc_ports).filter(([name]) => mode_filter.includes(name))
     : Object.entries(svc_ports);

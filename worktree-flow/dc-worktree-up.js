@@ -251,7 +251,7 @@ function open_in_cursor(worktree_path) {
 function find_conflicting_containers(exclude_name) {
   try {
     const lines = run('docker ps --format json').split('\n').filter(Boolean);
-    const base_ports = config ? Object.values(config.services.ports) : Object.values(SERVICE_PORTS);
+    const base_ports = Object.values(SERVICE_PORTS);
     const port_patterns = base_ports.map((p) => `:${p}->`);
     const conflicts = [];
 
@@ -579,7 +579,7 @@ function main() {
     process.exit(1);
   }
 
-  const valid_modes = config ? Object.keys(config.services.modes) : VALID_SERVICE_MODES;
+  const valid_modes = VALID_SERVICE_MODES;
   if (!options.no_docker && !valid_modes.includes(options.mode)) {
     console.error(`Invalid service mode: ${options.mode}. Valid modes: ${valid_modes.join(', ')}`);
     process.exit(1);
@@ -1234,7 +1234,7 @@ function restart_generate(repo_root, worktree_path, target_branch, alias, env_fi
   });
   wait_for_healthy(get_container_name(alias));
 
-  const ports = config ? config_mod.compute_ports(config, restart_offset) : compute_ports(restart_offset);
+  const ports = compute_ports(restart_offset);
   const domain = get_domain(alias);
 
   console.log(`Alias: ${alias}`);
@@ -1297,7 +1297,7 @@ function create_generate(repo_root, worktree_path, target_branch, alias, env_fil
 
   wait_for_healthy(get_container_name(alias));
 
-  const ports = config ? config_mod.compute_ports(config, port_offset) : compute_ports(port_offset);
+  const ports = compute_ports(port_offset);
   const domain = get_domain(alias);
 
   console.log(`Worktree created at: ${worktree_path}`);
