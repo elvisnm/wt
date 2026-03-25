@@ -8,13 +8,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// TabInfo holds display data for a tab
+// TabInfo holds display data for a tab entry.
 type TabInfo struct {
-	Index  int
-	Label  string
-	Active bool
-	Alive  bool
-	Idle   bool // agent is waiting for input
+	Index        int
+	Label        string
+	Active       bool
+	Alive        bool
+	Idle         bool     // agent is waiting for input
+	IsGroupChild bool     // true for 2nd+ session in a group
+	GroupSize    int      // total sessions in this group
+	LayoutMap    []string // 3-line mini layout map (only on last child)
 }
 
 // RenderTabsPanel renders the active tabs as a bordered panel matching

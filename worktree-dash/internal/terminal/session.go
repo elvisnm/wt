@@ -14,6 +14,11 @@ type Session struct {
 	Label string
 	Alive bool
 
+	// Worktree context — which worktree this session belongs to.
+	// Used by the split picker to scope session types to the same worktree.
+	WorktreeAlias string
+	WorktreeDir   string
+
 	server  *TmuxServer
 	window  string // tmux window name "w{id}"
 	target  string // "{window}.0" — the pane target
@@ -156,6 +161,13 @@ func (s *Session) monitor_loop() {
 			return
 		}
 	}
+}
+
+// SetWorktree sets the worktree context for this session.
+// Used by the split picker to scope session types to the same worktree.
+func (s *Session) SetWorktree(alias, dir string) {
+	s.WorktreeAlias = alias
+	s.WorktreeDir = dir
 }
 
 // Resize changes the tmux pane dimensions.

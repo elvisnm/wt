@@ -1,6 +1,8 @@
 package app
 
 import (
+	"strings"
+
 	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
@@ -27,10 +29,13 @@ func (m Model) View() string {
 	tab_infos := make([]ui.TabInfo, len(tab_labels))
 	for i, l := range tab_labels {
 		tab_infos[i] = ui.TabInfo{
-			Index:  l.Index,
-			Label:  l.Label,
-			Active: l.Active,
-			Alive:  l.Alive,
+			Index:        l.Index,
+			Label:        l.Label,
+			Active:       l.Active,
+			Alive:        l.Alive,
+			IsGroupChild: l.IsGroupChild,
+			GroupSize:    l.GroupSize,
+			LayoutMap:    l.LayoutMap,
 		}
 	}
 	tabs_panel := ui.RenderTabsPanel(
@@ -85,6 +90,19 @@ func (m Model) View() string {
 	}
 
 	left_col := lipgloss.JoinVertical(lipgloss.Left, panels...)
+
+	// Debug: detect height overflow
+	rendered_lines := strings.Count(left_col, "\n") + 1
+	if rendered_lines != m.height {
+		for i, p := range panels {
+			pl := strings.Count(p, "\n") + 1
+			debug_log("[view] panel[%d]: rendered=%d", i, pl)
+		}
+		debug_log("[view] HEIGHT MISMATCH: rendered=%d allocated=%d (notify=%d tabs=%d wt=%d svc=%d det=%d usage=%d tasks=%d)",
+			rendered_lines, m.height,
+			m.layout.NotifyHeight, m.layout.TabsHeight, m.layout.WorktreeHeight,
+			m.layout.ServicesHeight, m.layout.DetailsHeight, m.layout.UsageHeight, m.layout.TasksHeight)
+	}
 
 	if m.result_text != "" {
 		result_bar := ui.RenderResultBar(m.width, m.result_text)

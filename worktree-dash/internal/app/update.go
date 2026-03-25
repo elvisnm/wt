@@ -1189,16 +1189,16 @@ func (m Model) open_bash(wt worktree.Worktree) (Model, tea.Cmd) {
 	}
 
 	label := labels.Tab(labels.Shell, wt.Alias)
-	_, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
+	s, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
 	if err != nil {
 		m.terminal_output = fmt.Sprintf("Failed to open bash: %v", err)
 		m.prev_focus = m.focus; m.focus = PanelTerminal
 		return m, nil
 	}
+	s.SetWorktree(wt.Alias, wt.Path)
 
 	m.terminal_output = ""
 	m.prev_focus = m.focus; m.focus = PanelTerminal
-	// Focus the right pane for native terminal interaction
 	if m.pane_layout != nil {
 		m.pane_layout.FocusRight()
 	}
@@ -1252,12 +1252,13 @@ func (m Model) open_claude(wt worktree.Worktree) (Model, tea.Cmd) {
 	dir = wt.Path
 
 	label := labels.Tab(labels.Claude, wt.Alias)
-	_, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
+	s, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
 	if err != nil {
 		m.terminal_output = fmt.Sprintf("Failed to open Claude: %v", err)
 		m.prev_focus = m.focus; m.focus = PanelTerminal
 		return m, nil
 	}
+	s.SetWorktree(wt.Alias, wt.Path)
 
 	m.terminal_output = ""
 	m.prev_focus = m.focus
@@ -1278,16 +1279,16 @@ func (m Model) open_local_shell(wt worktree.Worktree) (Model, tea.Cmd) {
 	}
 
 	label := labels.Tab(labels.Zsh, wt.Alias)
-	_, err := m.term_mgr.OpenNew(label, shell, nil, w, h, wt.Path)
+	s, err := m.term_mgr.OpenNew(label, shell, nil, w, h, wt.Path)
 	if err != nil {
 		m.terminal_output = fmt.Sprintf("Failed to open shell: %v", err)
 		m.prev_focus = m.focus; m.focus = PanelTerminal
 		return m, nil
 	}
+	s.SetWorktree(wt.Alias, wt.Path)
 
 	m.terminal_output = ""
 	m.prev_focus = m.focus; m.focus = PanelTerminal
-	// Focus the right pane for native terminal interaction
 	if m.pane_layout != nil {
 		m.pane_layout.FocusRight()
 	}
@@ -1337,12 +1338,13 @@ func (m Model) open_logs(wt worktree.Worktree) (Model, tea.Cmd) {
 		dir = wt.Path
 	}
 
-	_, err := m.term_mgr.Open(label, cmd_name, args, w, h, dir)
+	s, err := m.term_mgr.Open(label, cmd_name, args, w, h, dir)
 	if err != nil {
 		m.terminal_output = fmt.Sprintf("Failed to open logs: %v", err)
 		m.prev_focus = m.focus; m.focus = PanelTerminal
 		return m, nil
 	}
+	s.SetWorktree(wt.Alias, wt.Path)
 
 	m.terminal_output = ""
 	m.prev_focus = m.focus; m.focus = PanelTerminal

@@ -8,19 +8,20 @@ import (
 	"github.com/elvisnm/wt/internal/labels"
 )
 
-// Manager handles multiple tmux-backed terminal sessions (tabs).
-// Integrates with PaneLayout to swap the active session into the right viewport.
+// Manager handles multiple tmux-backed terminal sessions organized in tab groups.
+// Each tab group contains 1+ sessions arranged in a split layout.
+// Integrates with PaneLayout to swap the active group into the right viewport.
 type Manager struct {
-	sessions   []*Session
-	active_tab int
-	next_id    int
-	server     *TmuxServer
-	panes      *PaneLayout
-	mu         sync.Mutex
+	groups       []*TabGroup
+	active_tab   int
+	next_id      int // session IDs
+	next_group_id int
+	server       *TmuxServer
+	panes        *PaneLayout
+	mu           sync.Mutex
 }
 
 // NewManager creates a Manager that owns its own TmuxServer.
-// Used when running as a standalone process (not inner mode).
 func NewManager() *Manager {
 	return &Manager{
 		server:  NewTmuxServer(),
@@ -29,16 +30,14 @@ func NewManager() *Manager {
 }
 
 // NewManagerWithServer creates a Manager using an existing TmuxServer.
-// Used in inner mode where the outer process owns the server.
 func NewManagerWithServer(server *TmuxServer) *Manager {
 	return &Manager{
 		server:  server,
-		next_id: 1, // Start at 1; id 0 is reserved for preview sessions
+		next_id: 1,
 	}
 }
 
 // SetPaneLayout attaches a PaneLayout for swap-pane integration.
-// Must be called before opening sessions.
 func (mgr *Manager) SetPaneLayout(pl *PaneLayout) {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
@@ -52,14 +51,15 @@ func (mgr *Manager) PaneLayout() *PaneLayout {
 	return mgr.panes
 }
 
-// Server returns the underlying TmuxServer for direct use.
+// Server returns the underlying TmuxServer.
 func (mgr *Manager) Server() *TmuxServer {
 	return mgr.server
 }
 
-// Open creates a new session and makes it active.
-// If a live session with the same label already exists, it focuses that tab instead.
-// When a PaneLayout is attached, swaps the session into the right viewport.
+// ── Open / Create ───────────────────────────────────────────────────────
+
+// Open creates a new session in its own tab group and makes it active.
+// If a live session with the same label already exists, focuses that tab instead.
 func (mgr *Manager) Open(label string, cmd_name string, args []string, width, height int, dir string) (*Session, error) {
 	if s := mgr.FocusByLabel(label); s != nil {
 		return s, nil
@@ -68,6 +68,8 @@ func (mgr *Manager) Open(label string, cmd_name string, args []string, width, he
 	mgr.mu.Lock()
 	id := mgr.next_id
 	mgr.next_id++
+	gid := mgr.next_group_id
+	mgr.next_group_id++
 	mgr.mu.Unlock()
 
 	s, err := NewSession(id, label, cmd_name, args, width, height, dir, mgr.server)
@@ -75,9 +77,11 @@ func (mgr *Manager) Open(label string, cmd_name string, args []string, width, he
 		return nil, err
 	}
 
+	g := NewTabGroup(gid, s)
+
 	mgr.mu.Lock()
-	mgr.sessions = append(mgr.sessions, s)
-	mgr.active_tab = len(mgr.sessions) - 1
+	mgr.groups = append(mgr.groups, g)
+	mgr.active_tab = len(mgr.groups) - 1
 	pl := mgr.panes
 	mgr.mu.Unlock()
 
@@ -88,15 +92,16 @@ func (mgr *Manager) Open(label string, cmd_name string, args []string, width, he
 	return s, nil
 }
 
-// OpenNew always creates a new session, even if one with a similar label exists.
+// OpenNew always creates a new session in its own tab group.
 // Appends a number (#2, #3, ...) if a live session with the same base label exists.
-// When a PaneLayout is attached, swaps the session into the right viewport.
 func (mgr *Manager) OpenNew(label string, cmd_name string, args []string, width, height int, dir string) (*Session, error) {
 	mgr.mu.Lock()
 	count := 0
-	for _, s := range mgr.sessions {
-		if s.Label == label || (len(s.Label) > len(label) && s.Label[:len(label)] == label && s.Label[len(label):len(label)+2] == " #") {
-			count++
+	for _, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if s.Label == label || (len(s.Label) > len(label) && s.Label[:len(label)] == label && s.Label[len(label):len(label)+2] == " #") {
+				count++
+			}
 		}
 	}
 	final_label := label
@@ -105,6 +110,8 @@ func (mgr *Manager) OpenNew(label string, cmd_name string, args []string, width,
 	}
 	id := mgr.next_id
 	mgr.next_id++
+	gid := mgr.next_group_id
+	mgr.next_group_id++
 	mgr.mu.Unlock()
 
 	s, err := NewSession(id, final_label, cmd_name, args, width, height, dir, mgr.server)
@@ -112,9 +119,11 @@ func (mgr *Manager) OpenNew(label string, cmd_name string, args []string, width,
 		return nil, err
 	}
 
+	g := NewTabGroup(gid, s)
+
 	mgr.mu.Lock()
-	mgr.sessions = append(mgr.sessions, s)
-	mgr.active_tab = len(mgr.sessions) - 1
+	mgr.groups = append(mgr.groups, g)
+	mgr.active_tab = len(mgr.groups) - 1
 	pl := mgr.panes
 	mgr.mu.Unlock()
 
@@ -125,40 +134,40 @@ func (mgr *Manager) OpenNew(label string, cmd_name string, args []string, width,
 	return s, nil
 }
 
-// FocusByLabel finds a live session by label and makes it active.
-// Returns the session if found, nil otherwise.
-// When a PaneLayout is attached, swaps the session into the right viewport.
+// ── Focus / Navigation ──────────────────────────────────────────────────
+
+// FocusByLabel finds a live session by label across all groups and focuses its group.
 func (mgr *Manager) FocusByLabel(label string) *Session {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 
-	for i, s := range mgr.sessions {
-		if s.Label == label && s.IsAlive() {
-			old_idx := mgr.active_tab
-			mgr.active_tab = i
+	for i, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if s.Label == label && s.IsAlive() {
+				old_idx := mgr.active_tab
+				mgr.active_tab = i
 
-			if mgr.panes != nil && old_idx != i {
-				var old_win string
-				if old_idx >= 0 && old_idx < len(mgr.sessions) {
-					old_win = mgr.sessions[old_idx].Window()
+				if mgr.panes != nil && old_idx != i {
+					var old_win string
+					if old_idx >= 0 && old_idx < len(mgr.groups) {
+						old_win = mgr.groups[old_idx].Primary().Window()
+					}
+					mgr.panes.SwitchTab(old_win, g.Primary().Window())
 				}
-				mgr.panes.SwitchTab(old_win, s.Window())
-			}
 
-			return s
+				return s
+			}
 		}
 	}
 	return nil
 }
 
-// FocusByIndex makes the session at the given index active.
-// Returns the session if found, nil otherwise.
-// When a PaneLayout is attached, swaps the session into the right viewport.
+// FocusByIndex makes the group at the given index active.
 func (mgr *Manager) FocusByIndex(idx int) *Session {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 
-	if idx < 0 || idx >= len(mgr.sessions) {
+	if idx < 0 || idx >= len(mgr.groups) {
 		return nil
 	}
 
@@ -167,191 +176,221 @@ func (mgr *Manager) FocusByIndex(idx int) *Session {
 
 	if mgr.panes != nil && old_idx != idx {
 		var old_win string
-		if old_idx >= 0 && old_idx < len(mgr.sessions) {
-			old_win = mgr.sessions[old_idx].Window()
+		if old_idx >= 0 && old_idx < len(mgr.groups) {
+			old_win = mgr.groups[old_idx].Primary().Window()
 		}
-		mgr.panes.SwitchTab(old_win, mgr.sessions[idx].Window())
+		mgr.panes.SwitchTab(old_win, mgr.groups[idx].Primary().Window())
 	}
 
-	return mgr.sessions[idx]
+	return mgr.groups[idx].Primary()
 }
 
-// HasLabel returns true if any session (alive or dead) exists with this label
+// HasLabel returns true if any session (alive or dead) exists with this label.
 func (mgr *Manager) HasLabel(label string) bool {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-
-	for _, s := range mgr.sessions {
-		if s.Label == label {
-			return true
+	for _, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if s.Label == label {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// IsLabelAlive returns true if a session with this label exists and is still running
+// IsLabelAlive returns true if a session with this label exists and is running.
 func (mgr *Manager) IsLabelAlive(label string) bool {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-
-	for _, s := range mgr.sessions {
-		if s.Label == label {
-			return s.IsAlive()
+	for _, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if s.Label == label {
+				return s.IsAlive()
+			}
 		}
 	}
 	return false
 }
 
-// Active returns the currently active session, or nil if none
+// Active returns the primary session of the active group, or nil.
 func (mgr *Manager) Active() *Session {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-
-	if len(mgr.sessions) == 0 {
+	if len(mgr.groups) == 0 || mgr.active_tab < 0 || mgr.active_tab >= len(mgr.groups) {
 		return nil
 	}
-	if mgr.active_tab < 0 || mgr.active_tab >= len(mgr.sessions) {
-		return nil
-	}
-	return mgr.sessions[mgr.active_tab]
+	return mgr.groups[mgr.active_tab].Primary()
 }
 
-// ActiveIndex returns the active tab index
+// ActiveGroup returns the currently active tab group, or nil.
+func (mgr *Manager) ActiveGroup() *TabGroup {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	if len(mgr.groups) == 0 || mgr.active_tab < 0 || mgr.active_tab >= len(mgr.groups) {
+		return nil
+	}
+	return mgr.groups[mgr.active_tab]
+}
+
+// ActiveIndex returns the active tab (group) index.
 func (mgr *Manager) ActiveIndex() int {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 	return mgr.active_tab
 }
 
-// ActiveLabel returns the label of the currently active tab, or empty string.
+// ActiveLabel returns the label of the active group's primary session.
 func (mgr *Manager) ActiveLabel() string {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-	if mgr.active_tab >= 0 && mgr.active_tab < len(mgr.sessions) {
-		return mgr.sessions[mgr.active_tab].Label
+	if mgr.active_tab >= 0 && mgr.active_tab < len(mgr.groups) {
+		return mgr.groups[mgr.active_tab].Label()
 	}
 	return ""
 }
 
-// Sessions returns all current sessions
+// Sessions returns all sessions across all groups (flat list).
 func (mgr *Manager) Sessions() []*Session {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-	result := make([]*Session, len(mgr.sessions))
-	copy(result, mgr.sessions)
+	var result []*Session
+	for _, g := range mgr.groups {
+		result = append(result, g.sessions...)
+	}
 	return result
 }
 
-// Count returns the number of sessions
+// Groups returns all tab groups.
+func (mgr *Manager) Groups() []*TabGroup {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	result := make([]*TabGroup, len(mgr.groups))
+	copy(result, mgr.groups)
+	return result
+}
+
+// Count returns the number of tab groups (tabs).
 func (mgr *Manager) Count() int {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-	return len(mgr.sessions)
+	return len(mgr.groups)
 }
 
-// NextTab switches to the next tab.
-// When a PaneLayout is attached, swaps the visible session.
+// ── Tab Switching ───────────────────────────────────────────────────────
+
+// NextTab switches to the next tab group.
 func (mgr *Manager) NextTab() {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-	if len(mgr.sessions) <= 1 {
+	if len(mgr.groups) <= 1 {
 		return
 	}
 	old_tab := mgr.active_tab
-	mgr.active_tab = (mgr.active_tab + 1) % len(mgr.sessions)
+	mgr.active_tab = (mgr.active_tab + 1) % len(mgr.groups)
 
 	if mgr.panes != nil {
 		mgr.panes.SwitchTab(
-			mgr.sessions[old_tab].Window(),
-			mgr.sessions[mgr.active_tab].Window(),
+			mgr.groups[old_tab].Primary().Window(),
+			mgr.groups[mgr.active_tab].Primary().Window(),
 		)
 	}
 }
 
-// PrevTab switches to the previous tab.
-// When a PaneLayout is attached, swaps the visible session.
+// PrevTab switches to the previous tab group.
 func (mgr *Manager) PrevTab() {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-	if len(mgr.sessions) <= 1 {
+	if len(mgr.groups) <= 1 {
 		return
 	}
 	old_tab := mgr.active_tab
-	mgr.active_tab = (mgr.active_tab - 1 + len(mgr.sessions)) % len(mgr.sessions)
+	mgr.active_tab = (mgr.active_tab - 1 + len(mgr.groups)) % len(mgr.groups)
 
 	if mgr.panes != nil {
 		mgr.panes.SwitchTab(
-			mgr.sessions[old_tab].Window(),
-			mgr.sessions[mgr.active_tab].Window(),
+			mgr.groups[old_tab].Primary().Window(),
+			mgr.groups[mgr.active_tab].Primary().Window(),
 		)
 	}
 }
 
-// CloseActive closes the current tab and returns whether any tabs remain.
-// When a PaneLayout is attached, returns the pane and shows the next session.
+// ── Close ───────────────────────────────────────────────────────────────
+
+// CloseActive closes the current tab group and returns whether any tabs remain.
 func (mgr *Manager) CloseActive() bool {
 	mgr.mu.Lock()
 
-	if len(mgr.sessions) == 0 {
+	if len(mgr.groups) == 0 {
 		mgr.mu.Unlock()
 		return false
 	}
 
-	s := mgr.sessions[mgr.active_tab]
+	g := mgr.groups[mgr.active_tab]
 	pl := mgr.panes
 
-	// Return the session pane from the viewport before closing
 	if pl != nil {
 		pl.ReturnSession()
 	}
 
-	go s.Close()
+	// Close all sessions in the group
+	for _, s := range g.sessions {
+		go s.Close()
+	}
 
-	mgr.sessions = append(mgr.sessions[:mgr.active_tab], mgr.sessions[mgr.active_tab+1:]...)
+	mgr.groups = append(mgr.groups[:mgr.active_tab], mgr.groups[mgr.active_tab+1:]...)
 
-	if mgr.active_tab >= len(mgr.sessions) && mgr.active_tab > 0 {
+	if mgr.active_tab >= len(mgr.groups) && mgr.active_tab > 0 {
 		mgr.active_tab--
 	}
 
-	has_tabs := len(mgr.sessions) > 0
+	has_tabs := len(mgr.groups) > 0
 
-	// Show the new active session in the viewport
 	if has_tabs && pl != nil {
-		pl.ShowSession(mgr.sessions[mgr.active_tab].Window())
+		pl.ShowSession(mgr.groups[mgr.active_tab].Primary().Window())
 	}
 
 	mgr.mu.Unlock()
 	return has_tabs
 }
 
-// CloseByLabel closes the first session matching the given label.
-// When a PaneLayout is attached, handles viewport swapping.
+// CloseByLabel closes the first session matching the label.
+// If the session is the only one in its group, the group is removed.
+// If the session is part of a multi-session group, only that session is removed.
 func (mgr *Manager) CloseByLabel(label string) {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 
-	for i, s := range mgr.sessions {
-		if s.Label == label {
+	for i, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if s.Label != label {
+				continue
+			}
+
 			pl := mgr.panes
 			was_active := (i == mgr.active_tab)
 
-			// If this session is currently displayed, return it first
-			if pl != nil && was_active {
-				pl.ReturnSession()
-			}
+			if g.Count() == 1 {
+				// Only session in group — remove the group
+				if pl != nil && was_active {
+					pl.ReturnSession()
+				}
 
-			mgr.sessions = append(mgr.sessions[:i], mgr.sessions[i+1:]...)
-			if mgr.active_tab >= len(mgr.sessions) && mgr.active_tab > 0 {
-				mgr.active_tab--
-			}
+				mgr.groups = append(mgr.groups[:i], mgr.groups[i+1:]...)
+				if mgr.active_tab >= len(mgr.groups) && mgr.active_tab > 0 {
+					mgr.active_tab--
+				}
 
-			// Show the new active session if the closed one was visible
-			if len(mgr.sessions) > 0 && pl != nil && was_active {
-				pl.ShowSession(mgr.sessions[mgr.active_tab].Window())
-			}
+				if len(mgr.groups) > 0 && pl != nil && was_active {
+					pl.ShowSession(mgr.groups[mgr.active_tab].Primary().Window())
+				}
 
-			// Kill the tmux window after swap-pane completes to avoid races
-			go s.Close()
+				go s.Close()
+			} else {
+				// Multi-session group — remove just this session
+				g.Remove(s.ID)
+				go s.Close()
+			}
 
 			return
 		}
@@ -362,9 +401,11 @@ func (mgr *Manager) CloseByLabel(label string) {
 func (mgr *Manager) CloseByPrefix(prefix string) {
 	mgr.mu.Lock()
 	var matched []string
-	for _, s := range mgr.sessions {
-		if strings.HasPrefix(s.Label, prefix) {
-			matched = append(matched, s.Label)
+	for _, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if strings.HasPrefix(s.Label, prefix) {
+				matched = append(matched, s.Label)
+			}
 		}
 	}
 	mgr.mu.Unlock()
@@ -374,14 +415,15 @@ func (mgr *Manager) CloseByPrefix(prefix string) {
 	}
 }
 
-// CloseDeadByPrefix closes any dead sessions whose labels match the prefix
-// (exact match or HasPrefix). Returns true if any sessions were closed.
+// CloseDeadByPrefix closes any dead sessions whose labels match the prefix.
 func (mgr *Manager) CloseDeadByPrefix(prefix string) bool {
 	mgr.mu.Lock()
 	var dead_labels []string
-	for _, s := range mgr.sessions {
-		if !s.IsAlive() && strings.HasPrefix(s.Label, prefix) {
-			dead_labels = append(dead_labels, s.Label)
+	for _, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if !s.IsAlive() && strings.HasPrefix(s.Label, prefix) {
+				dead_labels = append(dead_labels, s.Label)
+			}
 		}
 	}
 	mgr.mu.Unlock()
@@ -393,18 +435,19 @@ func (mgr *Manager) CloseDeadByPrefix(prefix string) bool {
 }
 
 // CloseDeadByPrefixIfClean closes dead sessions matching the prefix only if
-// they exited with code 0. Sessions that crashed (non-zero exit) are kept open
-// so the user can read the error output. Returns true if any were closed.
+// they exited with code 0. Returns true if any were closed.
 func (mgr *Manager) CloseDeadByPrefixIfClean(prefix string) bool {
 	mgr.mu.Lock()
 	var clean_labels []string
-	for _, s := range mgr.sessions {
-		if !s.IsAlive() && strings.HasPrefix(s.Label, prefix) {
-			s.mu.Lock()
-			code := s.ExitCode
-			s.mu.Unlock()
-			if code == 0 {
-				clean_labels = append(clean_labels, s.Label)
+	for _, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if !s.IsAlive() && strings.HasPrefix(s.Label, prefix) {
+				s.mu.Lock()
+				code := s.ExitCode
+				s.mu.Unlock()
+				if code == 0 {
+					clean_labels = append(clean_labels, s.Label)
+				}
 			}
 		}
 	}
@@ -417,19 +460,22 @@ func (mgr *Manager) CloseDeadByPrefixIfClean(prefix string) bool {
 }
 
 // CloseDeadLogs closes any dead sessions whose labels start with "Logs".
-// Returns true if any sessions were closed.
 func (mgr *Manager) CloseDeadLogs() bool {
 	return mgr.CloseDeadByPrefix(labels.Logs)
 }
 
 // CloseDeadByLabel closes a dead session with the exact label.
-// Returns true if a session was closed.
 func (mgr *Manager) CloseDeadByLabel(label string) bool {
 	mgr.mu.Lock()
 	found := false
-	for _, s := range mgr.sessions {
-		if s.Label == label && !s.IsAlive() {
-			found = true
+	for _, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if s.Label == label && !s.IsAlive() {
+				found = true
+				break
+			}
+		}
+		if found {
 			break
 		}
 	}
@@ -444,54 +490,80 @@ func (mgr *Manager) CloseDeadByLabel(label string) bool {
 // CloseAll closes all sessions and kills the tmux server.
 func (mgr *Manager) CloseAll() {
 	mgr.mu.Lock()
-	sessions := make([]*Session, len(mgr.sessions))
-	copy(sessions, mgr.sessions)
-	mgr.sessions = nil
+	var all_sessions []*Session
+	for _, g := range mgr.groups {
+		all_sessions = append(all_sessions, g.sessions...)
+	}
+	mgr.groups = nil
 	mgr.active_tab = 0
 	mgr.mu.Unlock()
 
-	for _, s := range sessions {
+	for _, s := range all_sessions {
 		s.Close()
 	}
 
 	mgr.server.Kill()
 }
 
-// HasLiveSessions checks if any sessions are still running
+// ── Query ───────────────────────────────────────────────────────────────
+
+// HasLiveSessions checks if any sessions are still running.
 func (mgr *Manager) HasLiveSessions() bool {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-	for _, s := range mgr.sessions {
-		if s.IsAlive() {
-			return true
+	for _, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if s.IsAlive() {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// TabLabels returns the labels for the tab bar
+// TabLabels returns the labels for the tab bar, including group hierarchy.
 func (mgr *Manager) TabLabels() []TabLabel {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 
-	labels := make([]TabLabel, len(mgr.sessions))
-	for i, s := range mgr.sessions {
-		labels[i] = TabLabel{
-			Index:  i + 1,
-			Label:  s.Label,
-			Active: i == mgr.active_tab,
-			Alive:  s.IsAlive(),
+	var result []TabLabel
+	for i, g := range mgr.groups {
+		is_active := i == mgr.active_tab
+		sessions := g.Sessions()
+		layout_map := g.LayoutMap()
+
+		for j, s := range sessions {
+			tl := TabLabel{
+				Index:        i + 1,
+				Label:        s.Label,
+				Active:       is_active,
+				Alive:        s.IsAlive(),
+				SessionID:    s.ID,
+				GroupID:      g.ID,
+				IsGroupChild: j > 0,
+				GroupSize:    len(sessions),
+			}
+			// Attach layout map to the last session in the group
+			if layout_map != nil && j == len(sessions)-1 {
+				tl.LayoutMap = layout_map
+			}
+			result = append(result, tl)
 		}
 	}
-	return labels
+	return result
 }
 
-// TabLabel holds display info for a tab
+// TabLabel holds display info for a tab entry.
 type TabLabel struct {
-	Index  int
-	Label  string
-	Active bool
-	Alive  bool
+	Index        int
+	Label        string
+	Active       bool
+	Alive        bool
+	SessionID    int
+	GroupID      int
+	IsGroupChild bool     // true for 2nd+ session in a group
+	GroupSize    int      // total sessions in the group
+	LayoutMap    []string // 3-line mini layout map (only on last child)
 }
 
 func (t TabLabel) String() string {
