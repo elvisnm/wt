@@ -19,9 +19,8 @@ func (m Model) View() string {
 		selected_wt = &wt
 	}
 
-	// In pane layout mode, this app runs in the left tmux pane.
-	// Layout order: status bar, tabs, worktrees, services, details.
-	// The right pane (terminal) is managed natively by tmux.
+	// 0 - Notification area (top of left column)
+	notify_panel := m.render_notify_panel(selected_wt)
 
 	// 1 - Active Tabs panel
 	tab_labels := m.term_mgr.TabLabels()
@@ -56,7 +55,7 @@ func (m Model) View() string {
 	)
 
 	// Build left column panels
-	panels := []string{tabs_panel, worktree_panel, services_panel}
+	panels := []string{notify_panel, tabs_panel, worktree_panel, services_panel}
 
 	if m.details_visible {
 		details_panel := ui.RenderDetailsPanel(
@@ -87,67 +86,67 @@ func (m Model) View() string {
 
 	left_col := lipgloss.JoinVertical(lipgloss.Left, panels...)
 
-	// Picker overlay — rendered within the left pane
-	if m.picker_open {
-		var picker_title string
-		switch m.picker_context {
-		case pickerDB:
-			picker_title = labels.Database
-			if selected_wt != nil {
-				picker_title = labels.Tab(labels.Database, selected_wt.Alias)
-			}
-		case pickerMaintenance:
-			picker_title = labels.Maintenance
-		case pickerStartService:
-			picker_title = "Start Service"
-			if selected_wt != nil {
-				picker_title = labels.Tab("Start Service", selected_wt.Alias)
-			}
-		case pickerStopService:
-			picker_title = "Stop Service"
-			if selected_wt != nil {
-				picker_title = labels.Tab("Stop Service", selected_wt.Alias)
-			}
-		case pickerRemove:
-			picker_title = labels.Remove
-			if selected_wt != nil {
-				picker_title = labels.Tab(labels.Remove, selected_wt.Alias)
-			}
-		default:
-			picker_title = labels.Actions
-			if selected_wt != nil {
-				picker_title = labels.Tab(labels.Actions, selected_wt.Alias)
-			}
-		}
-		picker_h := len(m.picker_actions) + 2
-		if picker_h > m.height/2 {
-			picker_h = m.height / 2
-		}
-		picker := ui.RenderPicker(
-			m.picker_actions, m.picker_cursor,
-			m.width, picker_h,
-			picker_title,
-		)
-		return ui.OverlayCentered(left_col, picker, m.width, m.height)
-	}
-
-	if m.confirm_open {
-		modal := ui.RenderConfirmModal(m.confirm_prompt, m.width, m.height)
-		return ui.OverlayCentered(left_col, modal, m.width, m.height)
-	}
-
-	// Status bar input modes
-	if m.input_active {
-		input_bar := ui.RenderInputBar(m.width, m.input_prompt, m.input_value)
-		return lipgloss.JoinVertical(lipgloss.Left, left_col, input_bar)
-	}
-
 	if m.result_text != "" {
 		result_bar := ui.RenderResultBar(m.width, m.result_text)
 		return lipgloss.JoinVertical(lipgloss.Left, left_col, result_bar)
 	}
 
 	return left_col
+}
+
+// render_notify_panel renders the notification area at the top of the left column.
+func (m Model) render_notify_panel(selected_wt *worktree.Worktree) string {
+	h := m.layout.NotifyHeight
+	switch {
+	case m.picker_open:
+		picker_title := m.picker_title(selected_wt)
+		return ui.RenderNotifyPicker(m.picker_actions, m.picker_cursor, m.width, picker_title)
+
+	case m.confirm_open:
+		return ui.RenderNotifyConfirm(m.confirm_prompt, m.width, h)
+
+	case m.input_active:
+		return ui.RenderNotifyInput(m.input_prompt, m.input_value, m.width, h)
+
+	case m.notify_open:
+		return ui.RenderNotifyMessage(m.notify_title, m.notify_message, m.width, h)
+
+	default:
+		return ui.RenderNotifyIdle(m.width)
+	}
+}
+
+// picker_title returns the title string for the current picker context.
+func (m Model) picker_title(selected_wt *worktree.Worktree) string {
+	switch m.picker_context {
+	case pickerDB:
+		if selected_wt != nil {
+			return labels.Tab(labels.Database, selected_wt.Alias)
+		}
+		return labels.Database
+	case pickerMaintenance:
+		return labels.Maintenance
+	case pickerStartService:
+		if selected_wt != nil {
+			return labels.Tab("Start Service", selected_wt.Alias)
+		}
+		return "Start Service"
+	case pickerStopService:
+		if selected_wt != nil {
+			return labels.Tab("Stop Service", selected_wt.Alias)
+		}
+		return "Stop Service"
+	case pickerRemove:
+		if selected_wt != nil {
+			return labels.Tab(labels.Remove, selected_wt.Alias)
+		}
+		return labels.Remove
+	default:
+		if selected_wt != nil {
+			return labels.Tab(labels.Actions, selected_wt.Alias)
+		}
+		return labels.Actions
+	}
 }
 
 func (m Model) loading_view() string {

@@ -2,9 +2,6 @@ package terminal
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 )
@@ -29,9 +26,7 @@ type PaneLayout struct {
 	active_win string // which session window is currently displayed in the right pane
 
 	// Stable tmux pane IDs (e.g. "%0", "%1", "%5") — survive splits and swaps
-	left_pane_id   string // bubbletea control app
-	notify_pane_id string // notification/menu panel
-	notify_width   int    // cached width of notification pane
+	left_pane_id string // bubbletea control app
 
 	mu sync.Mutex
 }
@@ -62,54 +57,30 @@ func SetupPaneLayout(ts *TmuxServer, left_pct int, exe_path string) (*PaneLayout
 	}
 
 	// Capture stable pane IDs
+	// Layout: left=idx0, right=idx1. No notification pane —
+	// notifications render inline in the bubbletea left pane.
 	left_id := capture_pane_id(ts, "wt:0.0")
-	right_id := capture_pane_id(ts, "wt:0.1")
-
-	// Create the notification pane ABOVE the right pane (-b = before).
-	// Layout after split: left=idx0, notify=idx1, right=idx2.
-	// All swap-pane operations use wt:0.2 to target the right viewport.
-	ts.Run("split-window", "-v", "-b", "-d",
-		"-t", right_id,
-		"-l", "2",
-		holdPaneCmd,
-	)
-
-	// After the split, right_id is still valid (pane IDs are stable).
-	// Discover the new notification pane by exclusion.
-	notify_id := discover_pane_excluding(ts, left_id, right_id)
-
-	// Keep remain-on-exit ON for the notify pane (inherited from global).
-	// respawn-pane -k handles the kill+restart atomically so the pane
-	// never shows "Pane is dead" to the user.
 
 	// Focus back to the left pane so bubbletea gets input first
 	ts.Run("select-pane", "-t", left_id)
 
 	pl := &PaneLayout{
-		server:         ts,
-		left_pane_id:   left_id,
-		notify_pane_id: notify_id,
-		notify_width:   query_pane_width(ts, notify_id),
+		server:       ts,
+		left_pane_id: left_id,
 	}
-
-	// Render the initial empty notification box
-	pl.ClearNotifyPane()
 
 	return pl, nil
 }
 
 // NewPaneLayout creates a PaneLayout connected to an existing tmux server.
 // Used by the inner-mode bubbletea app to manage pane operations.
-// Layout: left=idx0, notify=idx1, right=idx2.
+// Layout: left=idx0, right=idx1 (no notify pane).
 func NewPaneLayout(server *TmuxServer) *PaneLayout {
 	left_id := capture_pane_id(server, "wt:0.0")
-	notify_id := capture_pane_id(server, "wt:0.1")
 
 	return &PaneLayout{
-		server:         server,
-		left_pane_id:   left_id,
-		notify_pane_id: notify_id,
-		notify_width:   query_pane_width(server, notify_id),
+		server:       server,
+		left_pane_id: left_id,
 	}
 }
 
@@ -227,193 +198,8 @@ func (pl *PaneLayout) ConfigureBindings() {
 // ── Notification / Menu Panel ──────────────────────────────────────────
 
 const (
-	notifyPaneRows     = 3 // top border + content + bottom border
-	holdPaneCmd        = "while :; do sleep 86400; done"
-	rightViewportTarget = "wt:0.2" // Layout: left=0, notify=1, right=2
-
-	// ANSI color codes for notification box rendering
-	ansiDim    = "\033[38;5;240m" // grey for borders
-	ansiBold   = "\033[1;37m"     // bold white for title
-	ansiOrange = "\033[38;5;214m" // orange for active notifications
-	AnsiGreen  = "\033[1;32m"     // bold green for success
-	ansiReset  = "\033[0m"
+	rightViewportTarget = "wt:0.1" // Layout: left=0, right=1 (no notify pane)
 )
-
-// respawn_notify resizes the pane, clears all terminal state, and starts
-// a new process. This is the single method all panel operations use.
-func (pl *PaneLayout) respawn_notify(rows int, cmd string) {
-	id := pl.notify_pane_id
-	if id == "" {
-		return
-	}
-	pl.server.Run("resize-pane", "-t", id, "-y", fmt.Sprintf("%d", rows))
-	pl.server.Run("respawn-pane", "-k", "-t", id, cmd)
-}
-
-// ClearNotifyPane resets the notification panel to a compact 2-row empty state.
-func (pl *PaneLayout) ClearNotifyPane() {
-	w := pl.notify_width
-	box := render_notify_box_compact("No notifications", ansiDim, w)
-	escaped := strings.ReplaceAll(box, "'", "'\\''")
-	pl.respawn_notify(2, fmt.Sprintf("printf '\\033[?25l%%s' '%s'; %s", escaped, holdPaneCmd))
-}
-
-// SetNotifyContent renders the full bordered box (title + message) in the
-// notification pane. Expands to 3 rows for the content line.
-func (pl *PaneLayout) SetNotifyContent(title, message string) {
-	w := pl.notify_width
-	box := render_notify_box(title, message, ansiOrange, w)
-	escaped := strings.ReplaceAll(box, "'", "'\\''")
-	pl.respawn_notify(notifyPaneRows, fmt.Sprintf("printf '\\033[?25l%%s' '%s'; %s", escaped, holdPaneCmd))
-}
-
-// RunPicker expands the notification pane and runs `wt _pick` inside it.
-func (pl *PaneLayout) RunPicker(title string, options []string, sentinel_path string) {
-	if pl.notify_pane_id == "" || len(options) == 0 {
-		return
-	}
-
-	var args []string
-	args = append(args, "--title", fmt.Sprintf("'%s'", strings.ReplaceAll(title, "'", "'\\''")))
-	args = append(args, "--sentinel", fmt.Sprintf("'%s'", sentinel_path))
-	for _, opt := range options {
-		args = append(args, fmt.Sprintf("'%s'", strings.ReplaceAll(opt, "'", "'\\''")))
-	}
-
-	wt_bin := pick_binary_path()
-	cmd := fmt.Sprintf("%s _pick %s; %s", wt_bin, strings.Join(args, " "), holdPaneCmd)
-	pl.respawn_notify(len(options)+2, cmd)
-	pl.server.Run("select-pane", "-t", pl.notify_pane_id)
-}
-
-// RunConfirm shows a yes/no confirmation dialog in the notification pane.
-func (pl *PaneLayout) RunConfirm(title, prompt, sentinel_path string) {
-	if pl.notify_pane_id == "" {
-		return
-	}
-
-	wt_bin := pick_binary_path()
-	escaped_title := strings.ReplaceAll(title, "'", "'\\''")
-	escaped_prompt := strings.ReplaceAll(prompt, "'", "'\\''")
-
-	cmd := fmt.Sprintf("%s _confirm --title '%s' --prompt '%s' --sentinel '%s'; %s",
-		wt_bin, escaped_title, escaped_prompt, sentinel_path, holdPaneCmd)
-	pl.respawn_notify(4, cmd)
-	pl.server.Run("select-pane", "-t", pl.notify_pane_id)
-}
-
-// RunInput shows a text input dialog in the notification pane.
-// Result (typed value or empty on cancel) is written to a sentinel file.
-func (pl *PaneLayout) RunInput(title, prompt, sentinel_path string) {
-	if pl.notify_pane_id == "" {
-		return
-	}
-
-	wt_bin := pick_binary_path()
-	escaped_title := strings.ReplaceAll(title, "'", "'\\''")
-	escaped_prompt := strings.ReplaceAll(prompt, "'", "'\\''")
-
-	cmd := fmt.Sprintf("%s _input --title '%s' --prompt '%s' --sentinel '%s'; %s",
-		wt_bin, escaped_title, escaped_prompt, sentinel_path, holdPaneCmd)
-	pl.respawn_notify(notifyPaneRows, cmd)
-	pl.server.Run("select-pane", "-t", pl.notify_pane_id)
-}
-
-// cached_binary_path is resolved once at first use.
-var cached_binary_path string
-
-func pick_binary_path() string {
-	if cached_binary_path != "" {
-		return cached_binary_path
-	}
-	if exe, err := os.Executable(); err == nil {
-		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-			cached_binary_path = resolved
-			return resolved
-		}
-		cached_binary_path = exe
-		return exe
-	}
-	cached_binary_path = "wt"
-	return "wt"
-}
-
-// NotifyPaneExists returns true if the notification panel pane exists.
-func (pl *PaneLayout) NotifyPaneExists() bool {
-	pl.mu.Lock()
-	defer pl.mu.Unlock()
-	return pl.notify_pane_id != ""
-}
-
-// NotifyPaneID returns the stable tmux pane ID of the notification panel,
-// or empty string if not present.
-func (pl *PaneLayout) NotifyPaneID() string {
-	pl.mu.Lock()
-	defer pl.mu.Unlock()
-	return pl.notify_pane_id
-}
-
-// render_notify_box renders a 3-line bordered box with title and optional message.
-// border_color controls the color of borders and title.
-//
-//	╭─ Title ──────────────────────╮
-//	│ message text                 │
-//	╰──────────────────────────────╯
-func render_notify_box(title, message, border_color string, width int) string {
-	if width < 10 {
-		width = 10
-	}
-	inner := width - 2
-
-	top := render_top_border(title, border_color, inner)
-	mid := render_bordered_line(message, visual_len(message), border_color, inner)
-	bottom := fmt.Sprintf("%s╰%s╯%s", border_color, strings.Repeat("─", inner), ansiReset)
-
-	return top + "\n" + mid + "\n" + bottom
-}
-
-// render_notify_box_compact renders a 2-line bordered box (no content line).
-// border_color controls the color of borders and title.
-//
-//	╭─ Title ──────────────────────╮
-//	╰──────────────────────────────╯
-func render_notify_box_compact(title, border_color string, width int) string {
-	if width < 10 {
-		width = 10
-	}
-	inner := width - 2
-
-	top := render_top_border(title, border_color, inner)
-	bottom := fmt.Sprintf("%s╰%s╯%s", border_color, strings.Repeat("─", inner), ansiReset)
-
-	return top + "\n" + bottom
-}
-
-// render_top_border renders: ╭─ Title ─────╮
-func render_top_border(title, border_color string, inner int) string {
-	title_seg := fmt.Sprintf(" %s%s%s ", ansiBold, title, border_color)
-	fill_len := inner - 1 - (len(title) + 2)
-	if fill_len < 1 {
-		fill_len = 1
-	}
-	return fmt.Sprintf("%s╭─%s%s╮%s", border_color, title_seg, strings.Repeat("─", fill_len), ansiReset)
-}
-
-var ansiPattern = regexp.MustCompile(`\033\[[0-9;]*m`)
-
-// visual_len returns the display width of a string, stripping ANSI escape codes.
-func visual_len(s string) int {
-	return len(ansiPattern.ReplaceAllString(s, ""))
-}
-
-// render_bordered_line renders a single bordered content line: │ message │
-func render_bordered_line(message string, msg_vis_len int, border_color string, inner int) string {
-	pad := inner - msg_vis_len - 2 // -2 for leading/trailing space
-	if pad < 0 {
-		pad = 0
-	}
-	return fmt.Sprintf("%s│%s %s%s%s │%s", border_color, ansiReset, message, strings.Repeat(" ", pad), border_color, ansiReset)
-}
 
 // ── Session Management ─────────────────────────────────────────────────
 
@@ -612,7 +398,7 @@ func (pl *PaneLayout) IsRightPaneFocused() bool {
 	if err != nil {
 		return false
 	}
-	return strings.TrimSpace(out) == "2"
+	return strings.TrimSpace(out) == "1"
 }
 
 // IsClientFocused returns true if the tmux client (terminal window) has focus.

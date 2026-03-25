@@ -24,24 +24,20 @@ func test_model() Model {
 	return m
 }
 
-func TestEnterWithoutPaneLayout(t *testing.T) {
+func TestEnterOpensPicker(t *testing.T) {
 	m := test_model()
-	// No pane_layout — open_panel_picker returns early (no-op)
 
 	enter_msg := tea.KeyMsg{Type: tea.KeyEnter}
 	result, _ := m.Update(enter_msg)
 	updated := result.(Model)
 
-	// Without pane_layout, picker should NOT open
-	if updated.picker_open {
-		t.Errorf("Expected picker_open=false without pane_layout")
-	}
-	if updated.panel_picker_open {
-		t.Errorf("Expected panel_picker_open=false without pane_layout")
+	// Enter on a running docker worktree should open the picker
+	if !updated.picker_open {
+		t.Errorf("Expected picker_open=true after Enter on running worktree")
 	}
 }
 
-func TestEnterOnLocalWithoutPaneLayout(t *testing.T) {
+func TestEnterOnLocalOpensPicker(t *testing.T) {
 	m := test_model()
 	m.cursor = 1 // local worktree
 
@@ -49,8 +45,8 @@ func TestEnterOnLocalWithoutPaneLayout(t *testing.T) {
 	result, _ := m.Update(enter_msg)
 	updated := result.(Model)
 
-	if updated.picker_open || updated.panel_picker_open {
-		t.Errorf("Expected no picker without pane_layout")
+	if !updated.picker_open {
+		t.Errorf("Expected picker_open=true after Enter on local worktree")
 	}
 }
 

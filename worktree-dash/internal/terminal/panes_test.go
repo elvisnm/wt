@@ -209,64 +209,17 @@ func TestShowSessionReplacesActive(t *testing.T) {
 func TestPaneIDs(t *testing.T) {
 	_, pl := setupPaneLayout(t)
 
-	for name, id := range map[string]string{
-		"left": pl.left_pane_id, "notify": pl.notify_pane_id,
-	} {
-		if id == "" || id[0] != '%' {
-			t.Errorf("%s_pane_id = %q, want %%N format", name, id)
-		}
-	}
-	if pl.left_pane_id == pl.notify_pane_id {
-		t.Error("left and notify pane IDs should differ")
+	if pl.left_pane_id == "" || pl.left_pane_id[0] != '%' {
+		t.Errorf("left_pane_id = %q, want %%N format", pl.left_pane_id)
 	}
 }
 
-func TestNotifyPaneCreatedAtSetup(t *testing.T) {
+func TestRightPaneDimensions(t *testing.T) {
 	_, pl := setupPaneLayout(t)
 
-	// Notify pane should exist from setup
-	if !pl.NotifyPaneExists() {
-		t.Fatal("expected notify pane to exist after setup")
-	}
-	if pl.NotifyPaneID() == "" {
-		t.Fatal("NotifyPaneID should not be empty")
-	}
-
-	// Right pane should still have valid dimensions
 	w, h := pl.RightPaneDimensions()
 	if w <= 0 || h <= 0 {
 		t.Errorf("RightPaneDimensions = (%d, %d), want positive", w, h)
-	}
-}
-
-func TestNotifyPaneClearContent(t *testing.T) {
-	_, pl := setupPaneLayout(t)
-
-	// Write then clear — pane should still exist
-	pl.SetNotifyContent("Notifications", "hello")
-	pl.ClearNotifyPane()
-
-	if !pl.NotifyPaneExists() {
-		t.Fatal("notify pane should still exist after ClearNotifyPane")
-	}
-}
-
-func TestNotifyPaneWithSessions(t *testing.T) {
-	ts, pl := setupPaneLayout(t)
-
-	s, err := NewSession(1, "test", "bash", []string{"-c", "sleep 30"}, 80, 24, "", ts)
-	if err != nil {
-		t.Fatalf("NewSession failed: %v", err)
-	}
-	defer s.Close()
-
-	pl.ShowSession(s.Window())
-
-	// Write to notification pane while session is active
-	pl.SetNotifyContent("Notifications", "test notification")
-
-	if !pl.HasActiveSession() {
-		t.Fatal("expected session still active after writing to notify pane")
 	}
 }
 

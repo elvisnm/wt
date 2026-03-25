@@ -12,6 +12,7 @@ type Layout struct {
 	Width  int
 	Height int
 
+	NotifyHeight   int
 	TabsHeight     int
 	WorktreeHeight int
 	ServicesHeight int
@@ -23,6 +24,7 @@ type Layout struct {
 
 // ResizeOpts holds panel visibility and content sizing hints.
 type ResizeOpts struct {
+	NotifyHeight   int // rows needed by the notification area (0 = hidden)
 	DetailsVisible bool
 	UsageVisible   bool
 	TasksVisible   bool
@@ -33,8 +35,9 @@ func (l Layout) Resize(w, h int, opts ResizeOpts) Layout {
 	l.Width = w
 	l.Height = h
 	l.StatusHeight = 0
+	l.NotifyHeight = opts.NotifyHeight
 
-	panels_h := h - l.StatusHeight
+	panels_h := h - l.StatusHeight - l.NotifyHeight
 	if panels_h < 8 {
 		panels_h = 8
 	}
@@ -78,7 +81,7 @@ func (l Layout) Resize(w, h int, opts ResizeOpts) Layout {
 	}
 
 	if opts.DetailsVisible {
-		// 4 panels: tabs 20%, worktrees 30%, services 25%, details 25%
+		// 4 panels: tabs 20%, worktrees 30%, services 25%, details remainder
 		l.WorktreeHeight = panels_h * 30 / 100
 		l.ServicesHeight = panels_h * 25 / 100
 		l.DetailsHeight = panels_h - l.TabsHeight - l.WorktreeHeight - l.ServicesHeight
@@ -87,6 +90,23 @@ func (l Layout) Resize(w, h int, opts ResizeOpts) Layout {
 		l.WorktreeHeight = panels_h * 35 / 100
 		l.ServicesHeight = panels_h - l.TabsHeight - l.WorktreeHeight
 		l.DetailsHeight = 0
+	}
+
+	// Safety clamp: guarantee total never exceeds terminal height.
+	// Absorb any overflow from the largest flexible panel.
+	total := l.NotifyHeight + l.TabsHeight + l.WorktreeHeight + l.ServicesHeight +
+		l.DetailsHeight + l.UsageHeight + l.TasksHeight
+	if overflow := total - h; overflow > 0 {
+		switch {
+		case l.DetailsHeight > overflow+2:
+			l.DetailsHeight -= overflow
+		case l.ServicesHeight > overflow+2:
+			l.ServicesHeight -= overflow
+		case l.TasksHeight > overflow+2:
+			l.TasksHeight -= overflow
+		case l.WorktreeHeight > overflow+2:
+			l.WorktreeHeight -= overflow
+		}
 	}
 
 	return l

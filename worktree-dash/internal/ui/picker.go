@@ -189,6 +189,7 @@ func RenderPicker(actions []PickerAction, cursor int, width, height int, title s
 				Foreground(lipgloss.Color("255")).
 				Bold(true).
 				Width(inner_w).
+				MaxHeight(1).
 				Render(line)
 			lines = append(lines, line)
 			continue
@@ -206,6 +207,7 @@ func RenderPicker(actions []PickerAction, cursor int, width, height int, title s
 
 		desc_rendered := lipgloss.NewStyle().
 			Foreground(DimTextColor).
+			MaxWidth(inner_w - 20).
 			Render(a.Desc)
 
 		line := fmt.Sprintf(" %s %s %s", key_rendered, label_rendered, desc_rendered)

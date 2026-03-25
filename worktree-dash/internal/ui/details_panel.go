@@ -72,7 +72,21 @@ func RenderDetailsPanel(wt *worktree.Worktree, width, height, scroll, spin_frame
 	}
 	visible := lines[scroll:end]
 
-	content := strings.Join(visible, "\n")
+	// Flatten multi-line entries (from detail_line/detail_line_nowrap wrapping)
+	// into individual lines, truncate to inner width, then re-slice to inner_h.
+	// This prevents content overflow from both line wrapping and lipgloss width wrapping.
+	trunc := lipgloss.NewStyle().MaxWidth(inner_w)
+	var flat []string
+	for _, line := range visible {
+		for _, sub := range strings.Split(line, "\n") {
+			flat = append(flat, trunc.Render(sub))
+		}
+	}
+	if len(flat) > inner_h {
+		flat = flat[:inner_h]
+	}
+
+	content := strings.Join(flat, "\n")
 	styled := style.Render(content)
 	styled = OverlayScrollbar(styled, total, inner_h, scroll, focused)
 	return inject_title(styled, title)

@@ -322,9 +322,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.notify_open = false
-			if m.pane_layout != nil {
-				m.pane_layout.ClearNotifyPane()
-			}
+			m.notify_title = ""
+			m.notify_message = ""
+			m.recalc_layout()
 			return m, nil
 		case "render":
 			// Sentinel-driven post-action handlers
@@ -350,102 +350,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m, _ = m.handle_heihei_sentinel()
 				}
 			}
-			// Check if panel picker finished (via sentinel file)
-			if m.panel_picker_open {
-				if sr := sentinel.Read(sentinel.Picker); sr != nil {
-					m.panel_picker_open = false
-					choice := strings.TrimSpace(sr.Raw)
-	
-
-					if m.pane_layout != nil {
-						m.pane_layout.FocusLeft()
-					}
-
-					if choice != "" {
-						for _, a := range m.picker_actions {
-							if ui.FormatPickerLabel(a) == choice {
-	
-								m, cmd := m.dispatch_picker(a)
-	
-								// If the dispatched action didn't open a new panel
-								// UI (confirm/picker), clear the notification pane.
-								if !m.panel_confirm_open && !m.panel_picker_open {
-	
-									if m.pane_layout != nil {
-										m.pane_layout.ClearNotifyPane()
-									}
-								}
-								if m.focus == PanelTerminal && m.pane_layout != nil {
-									m.pane_layout.FocusRight()
-								}
-								return m, cmd
-							}
-						}
-					}
-					// Cancelled or no match — clear pane
-	
-					if m.pane_layout != nil {
-						m.pane_layout.ClearNotifyPane()
-					}
-					return m, tick_after(100*time.Millisecond, "render")
-				}
-			}
-			// Check if panel confirm finished (via sentinel file)
-			if m.panel_confirm_open {
-				if sr := sentinel.Read(sentinel.Confirm); sr != nil {
-					m.panel_confirm_open = false
-					confirmed := strings.TrimSpace(sr.Raw) == "yes"
-	
-
-					if m.pane_layout != nil {
-						m.pane_layout.ClearNotifyPane()
-						m.pane_layout.FocusLeft()
-					}
-
-					if confirmed && m.panel_confirm_action != nil {
-						cb := m.panel_confirm_action
-						m.panel_confirm_action = nil
-	
-						m, cmd := cb(&m)
-						if m.focus == PanelTerminal && m.pane_layout != nil {
-							m.pane_layout.FocusRight()
-						}
-						return m, cmd
-					}
-					m.panel_confirm_action = nil
-					return m, tick_after(100*time.Millisecond, "render")
-				}
-			}
-			// Check if panel input finished (via sentinel file)
-			if m.panel_input_open {
-				if sr := sentinel.Read(sentinel.Input); sr != nil {
-					m.panel_input_open = false
-					value := strings.TrimSpace(sr.Raw)
-
-					if m.pane_layout != nil {
-						m.pane_layout.ClearNotifyPane()
-						m.pane_layout.FocusLeft()
-					}
-
-					if value != "" && m.panel_input_callback != nil {
-						cb := m.panel_input_callback
-						m.panel_input_callback = nil
-						m, cmd := cb(&m, value)
-						if m.focus == PanelTerminal && m.pane_layout != nil {
-							m.pane_layout.FocusRight()
-						}
-						return m, cmd
-					}
-					m.panel_input_callback = nil
-					return m, tick_after(100*time.Millisecond, "render")
-				}
-			}
 			// Auto-close dead Logs tabs
 			if m.term_mgr != nil && m.term_mgr.CloseDeadLogs() {
 				m.focus_worktrees_if_empty()
 			}
-			// Re-render tick for PTY output updates and panel polling
-			if m.term_mgr.Count() > 0 || m.preview_session != nil || m.panel_picker_open || m.panel_confirm_open || m.panel_input_open {
+			// Re-render tick for PTY output updates
+			if m.term_mgr.Count() > 0 || m.preview_session != nil {
 				return m, tick_after(100*time.Millisecond, "render")
 			}
 			return m, nil
@@ -454,6 +364,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgResultClear:
 		m.result_text = ""
+		return m, nil
+
+	case msgPanelInputResult:
+		if msg.callback != nil && msg.value != "" {
+			m, cmd := msg.callback(&m, msg.value)
+			m.recalc_layout()
+			return m, cmd
+		}
+		m.recalc_layout()
 		return m, nil
 
 	case tea.MouseMsg:
@@ -1089,14 +1008,17 @@ func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, Keys.Quit), key.Matches(msg, Keys.CtrlC):
 		m.picker_open = false
+		m.recalc_layout()
 		return m.open_panel_confirm("Quit", "Quit worktree?", quit_action)
 
 	case key.Matches(msg, Keys.Escape):
 		m.picker_open = false
+		m.recalc_layout()
 		return m, nil
 
 	case key.Matches(msg, Keys.Tab):
 		m.picker_open = false
+		m.recalc_layout()
 		m.next_panel()
 		return m, nil
 
@@ -1116,6 +1038,7 @@ func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.picker_cursor >= 0 && m.picker_cursor < len(m.picker_actions) {
 			action := m.picker_actions[m.picker_cursor]
 			m.picker_open = false
+			m.recalc_layout()
 			return m.dispatch_picker(action)
 		}
 		return m, nil
@@ -1125,6 +1048,7 @@ func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	for _, a := range m.picker_actions {
 		if msg.String() == a.Key {
 			m.picker_open = false
+			m.recalc_layout()
 			return m.dispatch_picker(a)
 		}
 	}
@@ -1838,6 +1762,7 @@ func (m Model) handle_confirm_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirm_open = false
 		m.confirm_prompt = ""
 		m.confirm_action = nil
+		m.recalc_layout()
 		return m, nil
 
 	case key.Matches(msg, Keys.Enter):
@@ -1846,9 +1771,11 @@ func (m Model) handle_confirm_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirm_open = false
 			m.confirm_prompt = ""
 			m.confirm_action = nil
+			m.recalc_layout()
 			return cb(&m)
 		}
 		m.confirm_open = false
+		m.recalc_layout()
 		return m, nil
 	}
 
@@ -1862,6 +1789,7 @@ func (m Model) handle_input_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input_prompt = ""
 		m.input_value = ""
 		m.input_callback = nil
+		m.recalc_layout()
 		return m, nil
 
 	case key.Matches(msg, Keys.Enter):
@@ -1872,9 +1800,11 @@ func (m Model) handle_input_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input_prompt = ""
 			m.input_value = ""
 			m.input_callback = nil
+			m.recalc_layout()
 			return m, cb(val)
 		}
 		m.input_active = false
+		m.recalc_layout()
 		return m, nil
 
 	case msg.Type == tea.KeyBackspace:
@@ -1908,71 +1838,53 @@ func (m *Model) show_result(text string) tea.Cmd {
 
 const notifyDefaultDuration = 5 * time.Second
 
-// show_notification displays a timed message in the top-right notification pane.
+// show_notification displays a timed message in the notification area.
 // Auto-clears after 5s. Any keypress dismisses it immediately.
 func (m Model) show_notification(title, message string) (Model, tea.Cmd) {
-	if m.pane_layout == nil {
-		m.activity = message
-		return m, tick_after(notifyDefaultDuration, "clear-activity")
-	}
-
 	m.notify_open = true
-	m.pane_layout.SetNotifyContent(title, message)
+	m.notify_title = title
+	m.notify_message = message
+	m.recalc_layout()
 	return m, tick_after(notifyDefaultDuration, "notify")
 }
 
-// open_panel_picker runs an interactive picker in the notification pane.
-// The render tick polls for the sentinel file and dispatches the result.
+// open_panel_picker opens the inline picker in the notification area.
+// Keyboard input is handled by handle_picker_key.
 func (m Model) open_panel_picker(title string, actions []ui.PickerAction, context string) (Model, tea.Cmd) {
-	if m.pane_layout == nil || len(actions) == 0 {
+	if len(actions) == 0 {
 		return m, nil
 	}
-
+	m.picker_open = true
+	m.picker_cursor = 0
 	m.picker_actions = actions
 	m.picker_context = context
-	m.panel_picker_open = true
-
-	// Build option labels for the picker
-	options := make([]string, len(actions))
-	for i, a := range actions {
-		options[i] = ui.FormatPickerLabel(a)
-	}
-
-	sentinel.Clear(sentinel.Picker)
-	m.pane_layout.RunPicker(title, options, sentinel.Path(sentinel.Picker))
-	return m, tick_after(100*time.Millisecond, "render")
+	m.recalc_layout()
+	return m, nil
 }
 
-// open_panel_confirm runs a yes/no confirmation dialog in the notification pane.
-// On confirm, the callback is invoked. On cancel, nothing happens.
+// open_panel_confirm opens the inline confirm dialog in the notification area.
+// Keyboard input is handled by handle_confirm_key.
 func (m Model) open_panel_confirm(title, prompt string, action func(*Model) (Model, tea.Cmd)) (Model, tea.Cmd) {
-	if m.pane_layout == nil {
-		// Fallback: execute immediately (no confirm)
-		return action(&m)
-	}
-
-
-	m.panel_confirm_open = true
-	m.panel_confirm_action = action
-
-	sentinel.Clear(sentinel.Confirm)
-	m.pane_layout.RunConfirm(title, prompt, sentinel.Path(sentinel.Confirm))
-	return m, tick_after(100*time.Millisecond, "render")
+	m.confirm_open = true
+	m.confirm_prompt = prompt
+	m.confirm_action = action
+	m.recalc_layout()
+	return m, nil
 }
 
-// open_panel_input shows a text input dialog in the notification pane.
-// On submit, the callback receives the typed value. On cancel, nothing happens.
+// open_panel_input opens the inline text input in the notification area.
+// Keyboard input is handled by handle_input_key.
 func (m Model) open_panel_input(title, prompt string, callback func(*Model, string) (Model, tea.Cmd)) (Model, tea.Cmd) {
-	if m.pane_layout == nil {
-		return m, nil
+	m.input_active = true
+	m.input_prompt = prompt
+	m.input_value = ""
+	m.input_callback = func(val string) tea.Cmd {
+		return func() tea.Msg {
+			return msgPanelInputResult{value: val, callback: callback}
+		}
 	}
-
-	m.panel_input_open = true
-	m.panel_input_callback = callback
-
-	sentinel.Clear(sentinel.Input)
-	m.pane_layout.RunInput(title, prompt, sentinel.Path(sentinel.Input))
-	return m, tick_after(100*time.Millisecond, "render")
+	m.recalc_layout()
+	return m, nil
 }
 
 // send_macos_notification sends a native macOS notification via osascript.

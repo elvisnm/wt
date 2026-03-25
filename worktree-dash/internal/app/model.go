@@ -42,20 +42,17 @@ type Model struct {
 	discovered bool // initial worktree discovery complete
 
 	// Overlay state
-	help_open       bool
-	confirm_open    bool
-	confirm_prompt  string
-	confirm_action  func(*Model) (Model, tea.Cmd)
-	notify_open      bool
-	panel_picker_open  bool // picker running in notify pane
-	panel_confirm_open bool // confirm dialog running in notify pane
-	panel_confirm_action func(*Model) (Model, tea.Cmd)
-	panel_input_open bool // text input running in notify pane
-	panel_input_callback func(*Model, string) (Model, tea.Cmd)
-	picker_open     bool
-	picker_cursor   int
-	picker_actions  []ui.PickerAction
-	picker_context  string // pickerWorktree, pickerDB, pickerMaintenance, pickerRemove
+	help_open      bool
+	confirm_open   bool
+	confirm_prompt string
+	confirm_action func(*Model) (Model, tea.Cmd)
+	notify_open    bool
+	notify_title   string
+	notify_message string
+	picker_open    bool
+	picker_cursor  int
+	picker_actions []ui.PickerAction
+	picker_context string // pickerWorktree, pickerDB, pickerMaintenance, pickerRemove
 
 	// Details panel scroll
 	details_scroll int
@@ -136,11 +133,28 @@ type Model struct {
 // recalc_layout recomputes layout dimensions with current visibility state.
 func (m *Model) recalc_layout() {
 	m.layout = m.layout.Resize(m.width, m.height, ui.ResizeOpts{
+		NotifyHeight:   m.notify_height(),
 		DetailsVisible: m.details_visible,
 		UsageVisible:   m.usage_visible,
 		TasksVisible:   m.tasks_visible,
 		TasksContent:   ui.TasksContentHeight(m.tasks_list, m.tasks_detail),
 	})
+}
+
+// notify_height returns the number of rows needed by the notification area.
+func (m *Model) notify_height() int {
+	switch {
+	case m.picker_open:
+		return ui.NotifyHeight(ui.NotifyPicker, len(m.picker_actions))
+	case m.confirm_open:
+		return ui.NotifyHeight(ui.NotifyConfirm, 0)
+	case m.input_active:
+		return ui.NotifyHeight(ui.NotifyInput, 0)
+	case m.notify_open:
+		return ui.NotifyHeight(ui.NotifyMessage, 0)
+	default:
+		return ui.NotifyHeight(ui.NotifyIdle, 0)
+	}
 }
 
 // cleanup_temp_files removes any temporary files created during the session.
@@ -236,6 +250,13 @@ type MsgSessionOpened struct{ Err error }
 type MsgResultClear struct{}
 
 type MsgOpenBuildAfterStart struct{ WtName string }
+
+// msgPanelInputResult is sent when the inline input completes via open_panel_input.
+// It bridges the input_callback (func(string) tea.Cmd) to the panel callback signature.
+type msgPanelInputResult struct {
+	value    string
+	callback func(*Model, string) (Model, tea.Cmd)
+}
 
 // Commands
 

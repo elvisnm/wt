@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/elvisnm/wt/internal/app"
+	"github.com/elvisnm/wt/internal/notify"
 	"github.com/elvisnm/wt/internal/sentinel"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/ui"
@@ -95,6 +96,8 @@ func main() {
 		runConfirm(os.Args[2:])
 	case "_input":
 		runInput(os.Args[2:])
+	case "_notify-renderer":
+		runNotifyRenderer(os.Args[2:])
 	case "_heihei":
 		if len(os.Args) < 3 {
 			os.Exit(1)
@@ -911,6 +914,35 @@ func renderGuide() string {
 
 // runGuide renders the welcome guide and re-renders on terminal resize (SIGWINCH).
 // Exits when stdin is closed or the process is killed.
+// runNotifyRenderer starts the persistent notify renderer process.
+// Args: --fifo <path> --socket <name>
+func runNotifyRenderer(args []string) {
+	fifo_path := ""
+	socket := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--fifo":
+			if i+1 < len(args) {
+				fifo_path = args[i+1]
+				i++
+			}
+		case "--socket":
+			if i+1 < len(args) {
+				socket = args[i+1]
+				i++
+			}
+		}
+	}
+	if fifo_path == "" {
+		fmt.Fprintln(os.Stderr, "wt _notify-renderer: --fifo <path> is required")
+		os.Exit(1)
+	}
+	if err := notify.Run(fifo_path, socket); err != nil {
+		fmt.Fprintf(os.Stderr, "wt _notify-renderer: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 func runGuide() {
 	disableEcho()
 
