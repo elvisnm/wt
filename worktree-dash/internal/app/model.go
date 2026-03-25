@@ -235,17 +235,6 @@ type MsgTick struct{ Kind string }
 type MsgSessionOpened struct{ Err error }
 type MsgResultClear struct{}
 
-// Agent event types sent by Claude Code hooks.
-const (
-	AgentEventIdle       = "idle_prompt"
-	AgentEventPermission = "permission_prompt"
-)
-
-// MsgAgentNotify is sent when a Claude Code hook fires.
-type MsgAgentNotify struct {
-	Event string // AgentEventIdle or AgentEventPermission
-	Alias string // worktree alias
-}
 type MsgOpenBuildAfterStart struct{ WtName string }
 
 // Commands

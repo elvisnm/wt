@@ -95,8 +95,6 @@ func main() {
 		runConfirm(os.Args[2:])
 	case "_input":
 		runInput(os.Args[2:])
-	case "_agent-notify":
-		runAgentNotify(os.Args[2:])
 	case "_heihei":
 		if len(os.Args) < 3 {
 			os.Exit(1)

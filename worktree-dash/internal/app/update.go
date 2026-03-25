@@ -326,30 +326,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pane_layout.ClearNotifyPane()
 			}
 			return m, nil
-		case "agent-poll":
-			// Scan for agent notification sentinel files (wt-agent-notify-*)
-			matches, _ := filepath.Glob(sentinel.Path(sentinel.AgentNotify + "-*"))
-			var cmds []tea.Cmd
-			for _, path := range matches {
-				data, err := os.ReadFile(path)
-				os.Remove(path)
-				if err != nil {
-					continue
-				}
-				lines := strings.SplitN(strings.TrimSpace(string(data)), "\n", 3)
-				event := strings.TrimSpace(lines[0])
-				alias := ""
-				if len(lines) > 1 {
-					alias = strings.TrimSpace(lines[1])
-				}
-				if event != "" {
-					debug_log("[agent] hook: event=%s alias=%s", event, alias)
-					ev, al := event, alias
-					cmds = append(cmds, func() tea.Msg { return MsgAgentNotify{Event: ev, Alias: al} })
-				}
-			}
-			cmds = append(cmds, tick_after(1*time.Second, "agent-poll"))
-			return m, tea.Batch(cmds...)
 		case "render":
 			// Sentinel-driven post-action handlers
 			if sr := sentinel.Read(sentinel.Create); sr != nil {
@@ -475,24 +451,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil
-
-	case MsgAgentNotify:
-		debug_log("[agent] hook: event=%s alias=%s", msg.Event, msg.Alias)
-		title := "Claude Agent — " + msg.Alias
-		message := "Task complete"
-		if msg.Event == AgentEventPermission {
-			message = "Waiting for input"
-		}
-
-		// Always show in the notification panel
-		m, notify_cmd := m.show_notification(title, message)
-
-		// Only send macOS notification if wt is NOT the active window
-		if m.pane_layout == nil || !m.pane_layout.IsClientFocused() {
-			go send_macos_notification(title, message)
-		}
-
-		return m, tea.Batch(notify_cmd, tick_after(1*time.Second, "agent-poll"))
 
 	case MsgResultClear:
 		m.result_text = ""
