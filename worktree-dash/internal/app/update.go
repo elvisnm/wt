@@ -496,7 +496,7 @@ func (m *Model) update_worktrees(wts []worktree.Worktree) {
 				m.cursor = i
 				debug_log("[update_wt] stored %d worktrees, cursor=%d (%s)", len(wts), m.cursor, selected_name)
 				for j, w := range m.worktrees {
-					debug_log("[update_wt]   [%d] %s type=%v running=%v", j, w.Alias, w.Type, w.Running)
+					debug_log("[update_wt]   [%d] %s type=%v running=%v mode=%q", j, w.Alias, w.Type, w.Running, w.Mode)
 				}
 				return
 			}
@@ -506,7 +506,7 @@ func (m *Model) update_worktrees(wts []worktree.Worktree) {
 	m.clamp_cursor()
 	debug_log("[update_wt] stored %d worktrees, cursor=%d (clamped, prev=%q)", len(wts), m.cursor, selected_name)
 	for j, w := range m.worktrees {
-		debug_log("[update_wt]   [%d] %s type=%v running=%v", j, w.Alias, w.Type, w.Running)
+		debug_log("[update_wt]   [%d] %s type=%v running=%v mode=%q", j, w.Alias, w.Type, w.Running, w.Mode)
 	}
 }
 

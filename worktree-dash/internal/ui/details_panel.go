@@ -122,7 +122,12 @@ func build_detail_lines(wt *worktree.Worktree, inner_w, spin_frame int, cfg *con
 			lipgloss.NewStyle().Foreground(status_color).Render(status_text), inner_w))
 
 		if wt.Mode != "" {
-			lines = append(lines, detail_line("Mode", wt.Mode, inner_w))
+			mode_color := lipgloss.Color("214") // orange for minimal
+			if wt.Mode == "full" {
+				mode_color = lipgloss.Color("34") // green for full
+			}
+			mode_styled := lipgloss.NewStyle().Foreground(mode_color).Bold(true).Render(wt.Mode)
+			lines = append(lines, detail_line("Mode", mode_styled, inner_w))
 		}
 		if wt.HostBuild {
 			tag := lipgloss.NewStyle().
@@ -169,6 +174,15 @@ func build_detail_lines(wt *worktree.Worktree, inner_w, spin_frame int, cfg *con
 		} else {
 			lines = append(lines, detail_line("Status",
 				lipgloss.NewStyle().Foreground(StoppedColor).Render("stopped"), inner_w))
+		}
+
+		if wt.Mode != "" {
+			mode_color := lipgloss.Color("214") // orange for minimal
+			if wt.Mode == "full" {
+				mode_color = lipgloss.Color("34") // green for full
+			}
+			mode_styled := lipgloss.NewStyle().Foreground(mode_color).Bold(true).Render(wt.Mode)
+			lines = append(lines, detail_line("Mode", mode_styled, inner_w))
 		}
 
 		// App URL — show domain when available, always show localhost:port
