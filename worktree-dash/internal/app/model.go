@@ -54,7 +54,15 @@ type Model struct {
 	picker_open    bool
 	picker_cursor  int
 	picker_actions []ui.PickerAction
-	picker_context string // pickerWorktree, pickerDB, pickerMaintenance, pickerRemove
+	picker_context string // pickerWorktree, pickerDB, pickerMaintenance, pickerRemove, pickerSplitH, pickerSplitV
+
+	// Split state: stored when split picker opens, consumed when session type is selected
+	split_target_session_id int    // session ID to split from
+	split_target_alias      string // worktree alias (for label)
+	split_target_dir        string // worktree dir (for CWD)
+
+	// Merge state: stored when merge flow starts
+	merge_source_session_id int // session being moved
 
 	// Details panel scroll
 	details_scroll int
@@ -66,6 +74,7 @@ type Model struct {
 	// Terminal
 	term_mgr        *terminal.Manager
 	terminal_output string // static output (for non-PTY actions)
+	tab_cursor      int    // cursor in the flat TabLabels list (for intra-group navigation)
 	pane_layout     *terminal.PaneLayout
 
 	// Preview: standalone log session shown in right panel without a tab

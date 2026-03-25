@@ -194,12 +194,21 @@ func (g *TabGroup) LayoutMap() []string {
 	if !g.IsSplit() {
 		return nil
 	}
-	return render_layout_map(g.tree)
+	return render_layout_map(g.tree, -1)
+}
+
+// LayoutMapHighlighted renders the layout map with one session highlighted.
+// The highlighted session's cells are filled with orange blocks.
+func (g *TabGroup) LayoutMapHighlighted(highlight_id int) []string {
+	if !g.IsSplit() {
+		return nil
+	}
+	return render_layout_map(g.tree, highlight_id)
 }
 
 // render_layout_map generates a 2D grid from the split tree, then draws box chars.
-// Uses a 2-row × 4-col grid. Each cell holds a session ID.
-func render_layout_map(root *SplitNode) []string {
+// If highlight_id >= 0, that session's cells are filled with orange blocks.
+func render_layout_map(root *SplitNode, highlight_id int) []string {
 	type rect struct{ x, y, w, h int }
 	grid := [2][4]int{}
 
@@ -234,94 +243,112 @@ func render_layout_map(root *SplitNode) []string {
 	}
 	assign(root, rect{0, 0, 4, 2})
 
-	return grid_to_box(grid)
+	return grid_to_box(grid, highlight_id)
 }
+
+// ANSI color codes for layout map highlighting
+const (
+	mapOrange = "\033[38;5;214m"
+	mapDim    = "\033[38;5;240m"
+	mapReset  = "\033[0m"
+)
 
 // grid_to_box converts a 2×4 grid into 3 lines of box-drawing characters.
 // Borders appear where adjacent cells have different session IDs.
-func grid_to_box(grid [2][4]int) []string {
+// If highlight_id >= 0, borders touching that session's cells are drawn in orange.
+func grid_to_box(grid [2][4]int, highlight_id int) []string {
 	cols := 4
 
-	// Detect vertical dividers (between columns) for each row
-	v_div := [2][3]bool{} // v_div[row][col] = divider between col and col+1
+	v_div := [2][3]bool{}
 	for r := 0; r < 2; r++ {
 		for c := 0; c < cols-1; c++ {
 			v_div[r][c] = grid[r][c] != grid[r][c+1]
 		}
 	}
-	// Detect horizontal dividers (between rows) for each column
-	h_div := [4]bool{} // h_div[col] = divider between row 0 and row 1
+	h_div := [4]bool{}
 	for c := 0; c < cols; c++ {
 		h_div[c] = grid[0][c] != grid[1][c]
 	}
 
-	// Top line: ┌─?─?─?─┐
-	top := "┌"
+	hi := func(id int) bool { return highlight_id >= 0 && id == highlight_id }
+
+	// Color a border char: orange if it touches a highlighted cell, dim grey otherwise
+	bdr := func(ch string, touches_highlight bool) string {
+		if touches_highlight {
+			return mapOrange + ch + mapReset
+		}
+		return mapDim + ch + mapReset
+	}
+
+	// Top line
+	top := bdr("┌", hi(grid[0][0]))
 	for c := 0; c < cols-1; c++ {
-		top += "─"
+		top += bdr("─", hi(grid[0][c]))
 		if v_div[0][c] {
-			top += "┬"
+			top += bdr("┬", hi(grid[0][c]) || hi(grid[0][c+1]))
 		} else {
-			top += "─"
+			top += bdr("─", hi(grid[0][c]))
 		}
 	}
-	top += "─┐"
+	top += bdr("─", hi(grid[0][cols-1]))
+	top += bdr("┐", hi(grid[0][cols-1]))
 
-	// Middle line: varies based on h_div and v_div
+	// Middle line
 	mid := ""
 	any_h := h_div[0] || h_div[1] || h_div[2] || h_div[3]
 	if any_h {
-		// Left edge
 		if h_div[0] {
-			mid += "├"
+			mid += bdr("├", hi(grid[0][0]) || hi(grid[1][0]))
 		} else {
-			mid += "│"
+			mid += bdr("│", hi(grid[0][0]))
 		}
 		for c := 0; c < cols-1; c++ {
-			// Horizontal segment
 			if h_div[c] {
-				mid += "─"
+				mid += bdr("─", hi(grid[0][c]) || hi(grid[1][c]))
 			} else {
 				mid += " "
 			}
-			// Junction between col c and c+1
 			hl := h_div[c]
 			hr := h_div[c+1]
 			vt := v_div[0][c]
 			vb := v_div[1][c]
-			mid += box_junction(hl, hr, vt, vb)
+			jn := box_junction(hl, hr, vt, vb)
+			touches := hi(grid[0][c]) || hi(grid[0][c+1]) || hi(grid[1][c]) || hi(grid[1][c+1])
+			mid += bdr(jn, touches)
 		}
-		// Right edge
 		if h_div[cols-1] {
-			mid += "─┤"
+			mid += bdr("─", hi(grid[0][cols-1]) || hi(grid[1][cols-1]))
+			mid += bdr("┤", hi(grid[0][cols-1]) || hi(grid[1][cols-1]))
 		} else {
-			mid += " │"
+			mid += " "
+			mid += bdr("│", hi(grid[0][cols-1]))
 		}
 	} else {
-		// No horizontal divider — only vertical lines
-		mid += "│"
+		mid += bdr("│", hi(grid[0][0]))
 		for c := 0; c < cols-1; c++ {
 			mid += " "
 			if v_div[0][c] || v_div[1][c] {
-				mid += "│"
+				mid += bdr("│", hi(grid[0][c]) || hi(grid[0][c+1]))
 			} else {
 				mid += " "
 			}
 		}
-		mid += " │"
+		mid += " "
+		mid += bdr("│", hi(grid[0][cols-1]))
 	}
 
-	// Bottom line: └─?─?─?─┘
-	bot := "└"
+	// Bottom line
+	bot := bdr("└", hi(grid[1][0]))
 	for c := 0; c < cols-1; c++ {
-		bot += "─"
+		bot += bdr("─", hi(grid[1][c]))
 		if v_div[1][c] {
-			bot += "┴"
+			bot += bdr("┴", hi(grid[1][c]) || hi(grid[1][c+1]))
 		} else {
-			bot += "─"
+			bot += bdr("─", hi(grid[1][c]))
 		}
 	}
-	bot += "─┘"
+	bot += bdr("─", hi(grid[1][cols-1]))
+	bot += bdr("┘", hi(grid[1][cols-1]))
 
 	return []string{top, mid, bot}
 }

@@ -98,6 +98,18 @@ var HostBuildStoppedActions = []PickerAction{
 	actionRemove,
 }
 
+var SplitSessionActions = []PickerAction{
+	{Key: "b", Label: "Shell", Desc: "Container shell"},
+	{Key: "c", Label: "Claude", Desc: "Claude Code"},
+	{Key: "z", Label: "Zsh", Desc: "Host shell"},
+	{Key: "l", Label: "Logs", Desc: "Container logs"},
+}
+
+var MergeDirectionActions = []PickerAction{
+	{Key: "|", Label: "Side by side", Desc: "Vertical divider"},
+	{Key: "_", Label: "Below", Desc: "Horizontal divider"},
+}
+
 var RemoveActions = []PickerAction{
 	{Key: "n", Label: "Normal", Desc: "Fails if dirty"},
 	{Key: "f", Label: "Force", Desc: "Even if dirty"},

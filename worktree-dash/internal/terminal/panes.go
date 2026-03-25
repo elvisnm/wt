@@ -22,11 +22,13 @@ import (
 // All pane operations use stable pane IDs (%N) instead of positional
 // indices, because splitting/destroying panes shifts indices.
 type PaneLayout struct {
-	server     *TmuxServer
-	active_win string // which session window is currently displayed in the right pane
+	server        *TmuxServer
+	active_win    string      // primary session window displayed in the right pane
+	active_extras []GroupPane // extra panes joined into the viewport (for split groups)
 
 	// Stable tmux pane IDs (e.g. "%0", "%1", "%5") — survive splits and swaps
 	left_pane_id string // bubbletea control app
+	left_pct     int    // configured left pane width percentage
 
 	mu sync.Mutex
 }
@@ -67,6 +69,7 @@ func SetupPaneLayout(ts *TmuxServer, left_pct int, exe_path string) (*PaneLayout
 	pl := &PaneLayout{
 		server:       ts,
 		left_pane_id: left_id,
+		left_pct:     left_pct,
 	}
 
 	return pl, nil
@@ -78,9 +81,24 @@ func SetupPaneLayout(ts *TmuxServer, left_pct int, exe_path string) (*PaneLayout
 func NewPaneLayout(server *TmuxServer) *PaneLayout {
 	left_id := capture_pane_id(server, "wt:0.0")
 
+	// Read current left pane width percentage
+	left_pct := 20
+	if w_str, err := server.Run("display-message", "-t", left_id, "-p", "#{pane_width}"); err == nil {
+		var pw int
+		fmt.Sscanf(strings.TrimSpace(w_str), "%d", &pw)
+		if tw_str, err2 := server.Run("display-message", "-t", "wt:0", "-p", "#{window_width}"); err2 == nil {
+			var tw int
+			fmt.Sscanf(strings.TrimSpace(tw_str), "%d", &tw)
+			if tw > 0 {
+				left_pct = pw * 100 / tw
+			}
+		}
+	}
+
 	return &PaneLayout{
 		server:       server,
 		left_pane_id: left_id,
+		left_pct:     left_pct,
 	}
 }
 
@@ -203,54 +221,115 @@ const (
 
 // ── Session Management ─────────────────────────────────────────────────
 
-// ShowSession swaps a session's tmux window pane into the right viewport.
+// GroupPane describes a session pane for group show/return operations.
+type GroupPane struct {
+	PaneID   string   // stable tmux pane ID (e.g. "%5")
+	Window   string   // background tmux window (e.g. "w3")
+	Dir      SplitDir // split direction relative to the target
+	TargetID string   // pane ID to join onto (e.g. "%3") — empty = right viewport
+}
+
+// ShowSession swaps a single session's tmux window pane into the right viewport.
 // If another session is currently visible, it gets returned to its background window first.
 // Focus stays on the left pane.
-//
-// Note: swap-pane moves pane IDs between windows, so we always resolve the
-// right viewport position dynamically rather than using a stored pane ID.
 func (pl *PaneLayout) ShowSession(window string) {
+	pl.ShowGroup(window, nil)
+}
+
+// ShowGroup swaps the primary session into the right viewport, then joins
+// extra panes into splits. For single-session groups (extras=nil), this is
+// identical to the old ShowSession behavior.
+func (pl *PaneLayout) ShowGroup(primary_window string, extras []GroupPane) {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
 
-	// Return current session to its background window
-	if pl.active_win != "" {
-		right := pl.resolve_right_viewport()
-		pl.server.Run("swap-pane", "-s", right, "-t", fmt.Sprintf("wt:%s.0", pl.active_win))
-	}
+	// Return current group first
+	pl.return_active_locked()
 
-	if window == "" {
+	if primary_window == "" {
 		pl.active_win = ""
+		pl.active_extras = nil
 		return
 	}
 
-	// Re-resolve after swap-out — the right viewport pane changed
+	// Swap primary into viewport
 	right := pl.resolve_right_viewport()
-	pl.server.Run("swap-pane", "-s", fmt.Sprintf("wt:%s.0", window), "-t", right)
-	pl.active_win = window
+	pl.server.Run("swap-pane", "-s", fmt.Sprintf("wt:%s.0", primary_window), "-t", right)
+	pl.active_win = primary_window
 
+	// Join extra panes into the viewport as splits
+	for _, ep := range extras {
+		flag := "-v"
+		if ep.Dir == SplitH {
+			flag = "-h"
+		}
+		target := pl.resolve_right_viewport()
+		if ep.TargetID != "" {
+			target = ep.TargetID
+		}
+		pl.server.Run("join-pane", flag,
+			"-s", ep.PaneID,
+			"-t", target,
+		)
+	}
+
+	pl.active_extras = extras
+	if len(extras) > 0 {
+		pl.restore_left_width()
+	}
 	pl.server.Run("select-pane", "-t", pl.left_pane_id)
 }
 
 // ReturnSession returns the currently visible session to its background window.
-// The right pane reverts to showing the placeholder.
 func (pl *PaneLayout) ReturnSession() {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
+	pl.return_active_locked()
+}
 
+// return_active_locked returns the active group (primary + extras) to background.
+// Caller must hold pl.mu.
+func (pl *PaneLayout) return_active_locked() {
 	if pl.active_win == "" {
 		return
 	}
 
+	// Break extra panes back to their background windows (reverse order)
+	for i := len(pl.active_extras) - 1; i >= 0; i-- {
+		ep := pl.active_extras[i]
+		pl.server.Run("break-pane", "-s", ep.PaneID, "-t", ep.Window)
+	}
+
+	// Swap primary back to its background window
 	right := pl.resolve_right_viewport()
-	pl.server.Run("swap-pane", "-s", right, "-t", fmt.Sprintf("wt:%s.0", pl.active_win))
+	swap_target := fmt.Sprintf("wt:%s.0", pl.active_win)
+	out, swap_err := pl.server.Run("swap-pane", "-s", right, "-t", swap_target)
+	if swap_err != nil {
+		// swap failed — the background window may not have a pane to swap with.
+		// This happens when the session was a survivor of kill-pane in a split group.
+		// Respawn the right viewport pane with the guide placeholder instead.
+		pl.server.Run("respawn-pane", "-k", "-t", right, "exec cat")
+	}
+	_ = out
+
+	had_extras := len(pl.active_extras) > 0
 	pl.active_win = ""
+	pl.active_extras = nil
+	if had_extras {
+		pl.restore_left_width()
+	}
 	pl.server.Run("select-pane", "-t", pl.left_pane_id)
 }
 
-// SwitchTab swaps the visible session with a different one.
+// SwitchTab swaps the visible group with a different one.
 // Focus stays on the left pane so the user can keep browsing tabs.
 func (pl *PaneLayout) SwitchTab(from_window, to_window string) {
+	pl.SwitchGroup(from_window, nil, to_window, nil)
+}
+
+// SwitchGroup transitions from one group to another.
+// Handles single→single, single→group, group→single, group→group transitions.
+func (pl *PaneLayout) SwitchGroup(from_window string, from_extras []GroupPane, to_window string, to_extras []GroupPane) {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
 
@@ -258,21 +337,35 @@ func (pl *PaneLayout) SwitchTab(from_window, to_window string) {
 		return
 	}
 
-	// Return current session to its background window
-	if from_window != "" {
-		right := pl.resolve_right_viewport()
-		pl.server.Run("swap-pane", "-s", right, "-t", fmt.Sprintf("wt:%s.0", from_window))
-	}
+	// Return current group
+	pl.return_active_locked()
 
-	// Re-resolve after swap-out — the right viewport pane changed
+	// Show new group
 	if to_window != "" {
 		right := pl.resolve_right_viewport()
 		pl.server.Run("swap-pane", "-s", fmt.Sprintf("wt:%s.0", to_window), "-t", right)
+		pl.active_win = to_window
+
+		for _, ep := range to_extras {
+			flag := "-v"
+			if ep.Dir == SplitH {
+				flag = "-h"
+			}
+			target := pl.resolve_right_viewport()
+			if ep.TargetID != "" {
+				target = ep.TargetID
+			}
+			pl.server.Run("join-pane", flag,
+				"-s", ep.PaneID,
+				"-t", target,
+			)
+		}
+		pl.active_extras = to_extras
+		if len(to_extras) > 0 {
+			pl.restore_left_width()
+		}
 	}
 
-	pl.active_win = to_window
-
-	// Ensure focus stays on the left pane
 	pl.server.Run("select-pane", "-t", pl.left_pane_id)
 }
 
@@ -291,6 +384,29 @@ func (pl *PaneLayout) HasActiveSession() bool {
 }
 
 // ── Zoom & Focus ───────────────────────────────────────────────────────
+
+// is_pane_in_viewport checks if a pane ID is currently in window 0 (the viewport).
+func (pl *PaneLayout) is_pane_in_viewport(pane_id string) bool {
+	out, err := pl.server.Run("list-panes", "-t", "wt:0", "-F", "#{pane_id}")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.TrimSpace(line) == pane_id {
+			return true
+		}
+	}
+	return false
+}
+
+// restore_left_width resizes the left pane back to its configured percentage.
+// Called after kill-pane/join-pane operations that may redistribute pane widths.
+func (pl *PaneLayout) restore_left_width() {
+	if pl.left_pct > 0 {
+		pl.server.Run("resize-pane", "-t", pl.left_pane_id,
+			"-x", fmt.Sprintf("%d%%", pl.left_pct))
+	}
+}
 
 // resolve_right_viewport returns a positional tmux target for the right viewport.
 // Layout: left=idx0, notify=idx1, right=idx2. Right is always wt:0.2.

@@ -993,21 +993,59 @@ func (m Model) handle_services_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handle_terminal_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := m.term_mgr.Active()
+	tab_labels := m.term_mgr.TabLabels()
 
 	switch {
 	case key.Matches(msg, Keys.Up):
-		m.term_mgr.PrevTab()
+		if m.tab_cursor > 0 {
+			m.tab_cursor--
+			m.sync_tab_cursor_to_group(tab_labels)
+		}
 		return m, nil
 
 	case key.Matches(msg, Keys.Down):
-		m.term_mgr.NextTab()
+		if m.tab_cursor < len(tab_labels)-1 {
+			m.tab_cursor++
+			m.sync_tab_cursor_to_group(tab_labels)
+		}
 		return m, nil
 
 	case key.Matches(msg, Keys.Enter):
-		// Focus the right pane — user types natively in the terminal
-		if s != nil && s.IsAlive() && m.pane_layout != nil {
-			m.pane_layout.FocusRight()
+		// Focus the specific pane the cursor is on
+		if m.pane_layout != nil {
+			tab_labels = m.term_mgr.TabLabels()
+			if m.tab_cursor >= 0 && m.tab_cursor < len(tab_labels) {
+				tl := tab_labels[m.tab_cursor]
+				if tl.IsGroupHead {
+					// Focus the first pane in the group
+					m.pane_layout.FocusRight()
+				} else if tl.SessionID > 0 {
+					// Focus the specific session's pane
+					g := m.term_mgr.ActiveGroup()
+					if g != nil {
+						if sess := g.SessionByID(tl.SessionID); sess != nil && sess.PaneID() != "" {
+							m.pane_layout.Server().Run("select-pane", "-t", sess.PaneID())
+						} else {
+							m.pane_layout.FocusRight()
+						}
+					}
+				} else {
+					m.pane_layout.FocusRight()
+				}
+			} else {
+				m.pane_layout.FocusRight()
+			}
 		}
+		return m, nil
+
+	case msg.String() == "h":
+		m.term_mgr.PrevTab()
+		m.sync_tab_cursor_from_active()
+		return m, nil
+
+	case msg.String() == "l":
+		m.term_mgr.NextTab()
+		m.sync_tab_cursor_from_active()
 		return m, nil
 
 	case msg.String() == "f":
@@ -1019,15 +1057,215 @@ func (m Model) handle_terminal_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msg.String() == "x":
-		m.term_mgr.CloseActive()
+		tab_labels = m.term_mgr.TabLabels()
+		if m.tab_cursor >= 0 && m.tab_cursor < len(tab_labels) {
+			tl := tab_labels[m.tab_cursor]
+			if tl.IsGroupHead {
+				// Close entire group
+				m.term_mgr.CloseActive()
+			} else if tl.IsGroupChild {
+				// Close just this one pane
+				m.term_mgr.CloseBySessionID(tl.SessionID)
+			} else {
+				// Standalone tab
+				m.term_mgr.CloseActive()
+			}
+		} else {
+			m.term_mgr.CloseActive()
+		}
+		// Clamp tab_cursor after close
+		new_labels := m.term_mgr.TabLabels()
+		if m.tab_cursor >= len(new_labels) {
+			m.tab_cursor = len(new_labels) - 1
+		}
+		if m.tab_cursor < 0 {
+			m.tab_cursor = 0
+		}
 		if m.term_mgr.Count() == 0 {
 			m.focus = PanelWorktrees
 		}
 		return m, nil
+
+	case msg.String() == "|":
+		return m.open_split_picker(SplitH)
+
+	case msg.String() == "_":
+		return m.open_split_picker(SplitV)
+
+	case msg.String() == "m":
+		return m.open_merge_picker()
 	}
 
 	return m, nil
 }
+
+// sync_tab_cursor_from_active sets tab_cursor to the first entry of the active group.
+// Called after opening/closing tabs to keep the cursor in sync.
+func (m *Model) sync_tab_cursor_from_active() {
+	active_idx := m.term_mgr.ActiveIndex()
+	tab_labels := m.term_mgr.TabLabels()
+	groups := m.term_mgr.Groups()
+	if active_idx < 0 || active_idx >= len(groups) || len(tab_labels) == 0 {
+		m.tab_cursor = 0
+		return
+	}
+	target_gid := groups[active_idx].ID
+	for i, tl := range tab_labels {
+		if tl.GroupID == target_gid {
+			m.tab_cursor = i
+			return
+		}
+	}
+	m.tab_cursor = 0
+}
+
+// sync_tab_cursor_to_group switches the active group if the tab_cursor moved to a different group.
+func (m *Model) sync_tab_cursor_to_group(tab_labels []terminal.TabLabel) {
+	if m.tab_cursor < 0 || m.tab_cursor >= len(tab_labels) {
+		return
+	}
+	tl := tab_labels[m.tab_cursor]
+	// Find the group index for this tab label
+	groups := m.term_mgr.Groups()
+	for i, g := range groups {
+		if g.ID == tl.GroupID {
+			if i != m.term_mgr.ActiveIndex() {
+				m.term_mgr.FocusByIndex(i)
+			}
+			return
+		}
+	}
+}
+
+// open_split_picker opens the session type picker for creating a split.
+// The new session will split from the cursor-selected session in the given direction.
+func (m Model) open_split_picker(dir SplitDir) (tea.Model, tea.Cmd) {
+	g := m.term_mgr.ActiveGroup()
+	if g == nil {
+		return m, nil
+	}
+	if g.Count() >= MaxGroupPanes {
+		m.activity = "Max 4 panes per tab"
+		return m, nil
+	}
+
+	// Find the session under the tab cursor
+	tab_labels := m.term_mgr.TabLabels()
+	var target *terminal.Session
+	if m.tab_cursor >= 0 && m.tab_cursor < len(tab_labels) {
+		target = g.SessionByID(tab_labels[m.tab_cursor].SessionID)
+	}
+	if target == nil {
+		target = g.Primary()
+	}
+	if target == nil {
+		return m, nil
+	}
+
+	m.split_target_session_id = target.ID
+	m.split_target_alias = target.WorktreeAlias
+	m.split_target_dir = target.WorktreeDir
+
+	context := pickerSplitH
+	title := "Split Right"
+	if dir == SplitV {
+		context = pickerSplitV
+		title = "Split Below"
+	}
+	if m.split_target_alias != "" {
+		title += " — " + m.split_target_alias
+	}
+
+	return m.open_panel_picker(title, ui.SplitSessionActions, context)
+}
+
+// open_merge_picker starts the merge flow: first pick a target tab to merge into.
+func (m Model) open_merge_picker() (tea.Model, tea.Cmd) {
+	active := m.term_mgr.Active()
+	if active == nil {
+		return m, nil
+	}
+	active_group := m.term_mgr.ActiveGroup()
+	if active_group == nil || active_group.Count() != 1 {
+		m.activity = "Can only move standalone tabs"
+		return m, nil
+	}
+	if m.term_mgr.Count() < 2 {
+		m.activity = "No other tabs to merge into"
+		return m, nil
+	}
+
+	m.merge_source_session_id = active.ID
+
+	// Build target list: all other groups
+	var actions []ui.PickerAction
+	for i, g := range m.term_mgr.Groups() {
+		if g.Contains(active.ID) {
+			continue // skip self
+		}
+		if g.Count() >= MaxGroupPanes {
+			continue // skip full groups
+		}
+		key := fmt.Sprintf("%d", i+1)
+		actions = append(actions, ui.PickerAction{
+			Key:   key,
+			Label: g.Label(),
+			Desc:  fmt.Sprintf("%d pane(s)", g.Count()),
+		})
+	}
+
+	if len(actions) == 0 {
+		m.activity = "No available tabs to merge into"
+		return m, nil
+	}
+
+	title := fmt.Sprintf("Move %q into", active.Label)
+	return m.open_panel_picker(title, actions, pickerMergeTarget)
+}
+
+// execute_merge_target handles the target tab selection, then opens direction picker.
+func (m Model) execute_merge_target(action ui.PickerAction) (Model, tea.Cmd) {
+	// The action.Key is the 1-based tab index string
+	var idx int
+	fmt.Sscanf(action.Key, "%d", &idx)
+	idx-- // 0-based
+
+	groups := m.term_mgr.Groups()
+	if idx < 0 || idx >= len(groups) {
+		return m, nil
+	}
+
+	target := groups[idx]
+	m.split_target_session_id = target.Primary().ID
+
+	return m.open_panel_picker("Split Direction", ui.MergeDirectionActions, pickerMergeDir)
+}
+
+// execute_merge_direction completes the merge with the chosen direction.
+func (m Model) execute_merge_direction(action ui.PickerAction) (Model, tea.Cmd) {
+	dir := SplitH
+	if action.Key == "_" {
+		dir = SplitV
+	}
+
+	err := m.term_mgr.MoveInto(m.merge_source_session_id, m.split_target_session_id, dir)
+	if err != nil {
+		m.activity = fmt.Sprintf("Merge failed: %v", err)
+		return m, nil
+	}
+
+	m.focus = PanelTerminal
+	return m, tick_after(100*time.Millisecond, "render")
+}
+
+// SplitDir re-exports terminal.SplitDir for use in app package.
+type SplitDir = terminal.SplitDir
+
+const (
+	SplitH = terminal.SplitH
+	SplitV = terminal.SplitV
+	MaxGroupPanes = terminal.MaxGroupPanes
+)
 
 func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
@@ -1093,9 +1331,109 @@ func (m Model) dispatch_picker(action ui.PickerAction) (Model, tea.Cmd) {
 		return m.execute_start_service_action(action)
 	case pickerStopService:
 		return m.execute_stop_service_action(action)
+	case pickerSplitH:
+		return m.execute_split_action(action, SplitH)
+	case pickerSplitV:
+		return m.execute_split_action(action, SplitV)
+	case pickerMergeTarget:
+		return m.execute_merge_target(action)
+	case pickerMergeDir:
+		return m.execute_merge_direction(action)
 	default:
 		return m.execute_picker_action(action)
 	}
+}
+
+// execute_split_action creates a new split session based on the selected session type.
+func (m Model) execute_split_action(action ui.PickerAction, dir SplitDir) (Model, tea.Cmd) {
+	w, h := m.right_pane_dimensions()
+	alias := m.split_target_alias
+	wt_dir := m.split_target_dir
+	target_id := m.split_target_session_id
+
+	var cmd_name string
+	var args []string
+	var session_dir string
+	var label_prefix string
+
+	switch action.Key {
+	case "b":
+		// Shell — docker exec if running container, otherwise host shell
+		wt := m.find_worktree_by_alias(alias)
+		if wt != nil && wt.Type == worktree.TypeDocker && wt.Running {
+			cmd_name = "docker"
+			args = []string{"exec", "-it", wt.Container, "bash"}
+		} else {
+			shell := os.Getenv("SHELL")
+			if shell == "" {
+				shell = "bash"
+			}
+			cmd_name = shell
+			session_dir = wt_dir
+		}
+		label_prefix = labels.Shell
+	case "c":
+		cmd_name = "claude"
+		if m.cfg != nil {
+			if c, ok := m.cfg.Dash.Commands["claude"]; ok && c.Cmd != "" {
+				cmd_name = c.Cmd
+			}
+		}
+		session_dir = wt_dir
+		label_prefix = labels.Claude
+	case "z":
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "zsh"
+		}
+		cmd_name = shell
+		session_dir = wt_dir
+		label_prefix = labels.Zsh
+	case "l":
+		wt := m.find_worktree_by_alias(alias)
+		if wt != nil && wt.Type == worktree.TypeDocker && wt.Running {
+			cmd_name = "docker"
+			args = []string{"exec", "-it", wt.Container, "pm2", "logs", "--lines", "100"}
+		} else {
+			cmd_name = "pm2"
+			args = []string{"logs", "--lines", "100"}
+			session_dir = wt_dir
+		}
+		label_prefix = labels.Logs
+	default:
+		return m, nil
+	}
+
+	label := labels.Tab(label_prefix, alias)
+
+	s, err := m.term_mgr.SplitInto(target_id, label, cmd_name, args, w, h, session_dir, dir)
+	if err != nil {
+		m.activity = fmt.Sprintf("Split failed: %v", err)
+		return m, nil
+	}
+	s.SetWorktree(alias, wt_dir)
+
+	m.prev_focus = m.focus
+	m.focus = PanelTerminal
+	// Sync tab_cursor to point at the new session in the flat list
+	tab_labels := m.term_mgr.TabLabels()
+	for i, tl := range tab_labels {
+		if tl.SessionID == s.ID {
+			m.tab_cursor = i
+			break
+		}
+	}
+	return m, tick_after(100*time.Millisecond, "render")
+}
+
+// find_worktree_by_alias finds a worktree by its alias.
+func (m Model) find_worktree_by_alias(alias string) *worktree.Worktree {
+	for i := range m.worktrees {
+		if m.worktrees[i].Alias == alias {
+			return &m.worktrees[i]
+		}
+	}
+	return nil
 }
 
 func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {

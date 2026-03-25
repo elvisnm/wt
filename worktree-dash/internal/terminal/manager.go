@@ -56,6 +56,71 @@ func (mgr *Manager) Server() *TmuxServer {
 	return mgr.server
 }
 
+// group_extras builds the GroupPane slice for a group's non-primary sessions.
+// The join sequence reconstructs the layout by walking the split tree:
+// - The primary (leftmost leaf) is swap-paned into the viewport first
+// - Each split node produces a join-pane of the right child targeting the left child
+// Returns nil for single-session groups.
+func group_extras(g *TabGroup) []GroupPane {
+	if g == nil || g.Count() <= 1 {
+		return nil
+	}
+	tree := g.Tree()
+	if tree == nil {
+		return nil
+	}
+
+	var extras []GroupPane
+
+	// Walk tree in-order. For each internal node, the left subtree is shown first,
+	// then the right subtree is joined onto the left subtree's first leaf (target pane).
+	var walk func(n *SplitNode) int // returns the first session ID in this subtree
+	walk = func(n *SplitNode) int {
+		if n == nil {
+			return -1
+		}
+		if n.is_leaf() {
+			return n.SessionID
+		}
+
+		// Show left subtree first (its first leaf becomes the target)
+		left_first := walk(n.Left)
+
+		// The right subtree's first leaf needs to be joined onto left_first
+		right_first := first_leaf(n.Right)
+		if right_first >= 0 {
+			s := g.SessionByID(right_first)
+			target_s := g.SessionByID(left_first)
+			if s != nil && target_s != nil {
+				extras = append(extras, GroupPane{
+					PaneID:   s.PaneID(),
+					Window:   s.Window(),
+					Dir:      n.Dir,
+					TargetID: target_s.PaneID(),
+				})
+			}
+		}
+
+		// Continue walking the right subtree for nested splits
+		walk(n.Right)
+
+		return left_first
+	}
+	walk(tree)
+	return extras
+}
+
+// first_leaf returns the session ID of the leftmost leaf in a subtree.
+func first_leaf(n *SplitNode) int {
+	if n == nil {
+		return -1
+	}
+	if n.is_leaf() {
+		return n.SessionID
+	}
+	return first_leaf(n.Left)
+}
+
 // ── Open / Create ───────────────────────────────────────────────────────
 
 // Open creates a new session in its own tab group and makes it active.
@@ -148,11 +213,13 @@ func (mgr *Manager) FocusByLabel(label string) *Session {
 				mgr.active_tab = i
 
 				if mgr.panes != nil && old_idx != i {
-					var old_win string
+					var from_win string
+					var from_extras []GroupPane
 					if old_idx >= 0 && old_idx < len(mgr.groups) {
-						old_win = mgr.groups[old_idx].Primary().Window()
+						from_win = mgr.groups[old_idx].Primary().Window()
+						from_extras = group_extras(mgr.groups[old_idx])
 					}
-					mgr.panes.SwitchTab(old_win, g.Primary().Window())
+					mgr.panes.SwitchGroup(from_win, from_extras, g.Primary().Window(), group_extras(g))
 				}
 
 				return s
@@ -175,11 +242,13 @@ func (mgr *Manager) FocusByIndex(idx int) *Session {
 	mgr.active_tab = idx
 
 	if mgr.panes != nil && old_idx != idx {
-		var old_win string
+		var from_win string
+		var from_extras []GroupPane
 		if old_idx >= 0 && old_idx < len(mgr.groups) {
-			old_win = mgr.groups[old_idx].Primary().Window()
+			from_win = mgr.groups[old_idx].Primary().Window()
+			from_extras = group_extras(mgr.groups[old_idx])
 		}
-		mgr.panes.SwitchTab(old_win, mgr.groups[idx].Primary().Window())
+		mgr.panes.SwitchGroup(from_win, from_extras, mgr.groups[idx].Primary().Window(), group_extras(mgr.groups[idx]))
 	}
 
 	return mgr.groups[idx].Primary()
@@ -277,6 +346,169 @@ func (mgr *Manager) Count() int {
 	return len(mgr.groups)
 }
 
+// ── Split ───────────────────────────────────────────────────────────────
+
+// SplitInto creates a new session and adds it to the target session's group,
+// splitting the target pane in the given direction. If the group is currently
+// visible in the viewport, the new pane is joined immediately.
+// Returns the new session, or an error if the group is at max capacity or
+// the target session is not found.
+func (mgr *Manager) SplitInto(target_session_id int, label, cmd_name string, args []string, width, height int, dir string, split_dir SplitDir) (*Session, error) {
+	mgr.mu.Lock()
+
+	// Find the group containing the target session
+	var target_group *TabGroup
+	var target_group_idx int
+	for i, g := range mgr.groups {
+		if g.Contains(target_session_id) {
+			target_group = g
+			target_group_idx = i
+			break
+		}
+	}
+	if target_group == nil {
+		mgr.mu.Unlock()
+		return nil, fmt.Errorf("session %d not found in any group", target_session_id)
+	}
+	if target_group.Count() >= MaxGroupPanes {
+		mgr.mu.Unlock()
+		return nil, fmt.Errorf("group already has %d panes (max %d)", target_group.Count(), MaxGroupPanes)
+	}
+
+	id := mgr.next_id
+	mgr.next_id++
+	is_active := (target_group_idx == mgr.active_tab)
+	pl := mgr.panes
+
+	mgr.mu.Unlock()
+
+	s, err := NewSession(id, label, cmd_name, args, width, height, dir, mgr.server)
+	if err != nil {
+		return nil, err
+	}
+
+	mgr.mu.Lock()
+	target_group.Add(s, target_session_id, split_dir)
+	mgr.mu.Unlock()
+
+	// If this group is currently visible, join the new pane into the viewport.
+	// join-pane -s <new> -t <existing> places the new pane after (right/below) the existing one.
+	if is_active && pl != nil {
+		flag := "-v"
+		if split_dir == SplitH {
+			flag = "-h"
+		}
+		target_s := target_group.SessionByID(target_session_id)
+		target_pane := pl.resolve_right_viewport()
+		if target_s != nil && target_s.PaneID() != "" {
+			target_pane = target_s.PaneID()
+		}
+
+		pl.server.Run("join-pane", flag,
+			"-s", s.PaneID(),
+			"-t", target_pane,
+		)
+
+		// Update stored extras so ReturnSession can break them back correctly
+		pl.mu.Lock()
+		pl.active_extras = group_extras(target_group)
+		pl.mu.Unlock()
+
+		// Focus back to the left pane so bubbletea keeps getting input
+		pl.server.Run("select-pane", "-t", pl.left_pane_id)
+	}
+
+	return s, nil
+}
+
+// MoveInto moves an existing standalone session into a target group.
+// The source group (which must have exactly 1 session) is removed.
+// Returns an error if source isn't standalone or target is at max capacity.
+func (mgr *Manager) MoveInto(session_id, target_session_id int, split_dir SplitDir) error {
+	mgr.mu.Lock()
+
+	var source_group *TabGroup
+	var source_idx int
+	var target_group *TabGroup
+	var target_idx int
+	var session *Session
+
+	for i, g := range mgr.groups {
+		if g.Contains(session_id) {
+			source_group = g
+			source_idx = i
+			session = g.SessionByID(session_id)
+		}
+		if g.Contains(target_session_id) {
+			target_group = g
+			target_idx = i
+		}
+	}
+
+	if source_group == nil || target_group == nil || session == nil {
+		mgr.mu.Unlock()
+		return fmt.Errorf("session not found")
+	}
+	if source_group == target_group {
+		mgr.mu.Unlock()
+		return fmt.Errorf("session already in target group")
+	}
+	if source_group.Count() != 1 {
+		mgr.mu.Unlock()
+		return fmt.Errorf("can only move standalone sessions")
+	}
+	if target_group.Count() >= MaxGroupPanes {
+		mgr.mu.Unlock()
+		return fmt.Errorf("target group at max capacity")
+	}
+
+	pl := mgr.panes
+	was_source_active := (source_idx == mgr.active_tab)
+	is_target_active := (target_idx == mgr.active_tab)
+
+	// Return viewport if source is active
+	if was_source_active && pl != nil {
+		pl.ReturnSession()
+	}
+
+	// Remove source group
+	mgr.groups = append(mgr.groups[:source_idx], mgr.groups[source_idx+1:]...)
+
+	// Adjust active_tab and target_idx after removal
+	if source_idx < mgr.active_tab {
+		mgr.active_tab--
+	}
+	// Recalculate target_idx since we removed a group
+	target_idx = -1
+	for i, g := range mgr.groups {
+		if g == target_group {
+			target_idx = i
+			break
+		}
+	}
+
+	// Add session to target group
+	target_group.Add(session, target_session_id, split_dir)
+
+	// If target group is visible, rejoin with new pane
+	// Recalculate is_target_active after index shift
+	is_target_active = (target_idx == mgr.active_tab)
+	if is_target_active && pl != nil {
+		// Return current viewport and re-show with updated group
+		pl.ReturnSession()
+		pl.ShowGroup(target_group.Primary().Window(), group_extras(target_group))
+	}
+
+	// If source was active and target is not, show target
+	if was_source_active && !is_target_active && pl != nil {
+		mgr.active_tab = target_idx
+		pl.ShowGroup(target_group.Primary().Window(), group_extras(target_group))
+	}
+
+	mgr.mu.Unlock()
+	return nil
+}
+
 // ── Tab Switching ───────────────────────────────────────────────────────
 
 // NextTab switches to the next tab group.
@@ -290,9 +522,11 @@ func (mgr *Manager) NextTab() {
 	mgr.active_tab = (mgr.active_tab + 1) % len(mgr.groups)
 
 	if mgr.panes != nil {
-		mgr.panes.SwitchTab(
+		mgr.panes.SwitchGroup(
 			mgr.groups[old_tab].Primary().Window(),
+			group_extras(mgr.groups[old_tab]),
 			mgr.groups[mgr.active_tab].Primary().Window(),
+			group_extras(mgr.groups[mgr.active_tab]),
 		)
 	}
 }
@@ -308,9 +542,11 @@ func (mgr *Manager) PrevTab() {
 	mgr.active_tab = (mgr.active_tab - 1 + len(mgr.groups)) % len(mgr.groups)
 
 	if mgr.panes != nil {
-		mgr.panes.SwitchTab(
+		mgr.panes.SwitchGroup(
 			mgr.groups[old_tab].Primary().Window(),
+			group_extras(mgr.groups[old_tab]),
 			mgr.groups[mgr.active_tab].Primary().Window(),
+			group_extras(mgr.groups[mgr.active_tab]),
 		)
 	}
 }
@@ -333,7 +569,6 @@ func (mgr *Manager) CloseActive() bool {
 		pl.ReturnSession()
 	}
 
-	// Close all sessions in the group
 	for _, s := range g.sessions {
 		go s.Close()
 	}
@@ -347,7 +582,8 @@ func (mgr *Manager) CloseActive() bool {
 	has_tabs := len(mgr.groups) > 0
 
 	if has_tabs && pl != nil {
-		pl.ShowSession(mgr.groups[mgr.active_tab].Primary().Window())
+		next := mgr.groups[mgr.active_tab]
+		pl.ShowGroup(next.Primary().Window(), group_extras(next))
 	}
 
 	mgr.mu.Unlock()
@@ -382,18 +618,97 @@ func (mgr *Manager) CloseByLabel(label string) {
 				}
 
 				if len(mgr.groups) > 0 && pl != nil && was_active {
-					pl.ShowSession(mgr.groups[mgr.active_tab].Primary().Window())
+					next := mgr.groups[mgr.active_tab]
+					pl.ShowGroup(next.Primary().Window(), group_extras(next))
 				}
 
 				go s.Close()
 			} else {
-				// Multi-session group — remove just this session
+				// Multi-session group — kill just this pane in place
+				if was_active && pl != nil && s.PaneID() != "" {
+					pl.server.Run("kill-pane", "-t", s.PaneID())
+				}
+
 				g.Remove(s.ID)
-				go s.Close()
+
+				if was_active && pl != nil {
+					pl.mu.Lock()
+					pl.active_win = g.Primary().Window()
+					pl.active_extras = group_extras(g)
+					pl.mu.Unlock()
+					pl.restore_left_width()
+					pl.server.Run("select-pane", "-t", pl.left_pane_id)
+				}
+
+				if !was_active {
+					go s.Close()
+				}
 			}
 
 			return
 		}
+	}
+}
+
+// CloseBySessionID closes a specific session by its ID.
+// If it's the only session in its group, the group is removed.
+// If it's part of a multi-session group, only that pane is killed in place.
+func (mgr *Manager) CloseBySessionID(session_id int) {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+
+	for i, g := range mgr.groups {
+		s := g.SessionByID(session_id)
+		if s == nil {
+			continue
+		}
+
+		pl := mgr.panes
+		was_active := (i == mgr.active_tab)
+
+		if g.Count() == 1 {
+			// Last pane in group — remove the whole group.
+			// Use ReturnSession to swap the pane back (preserves the right viewport placeholder).
+			if pl != nil && was_active {
+				pl.ReturnSession()
+			}
+
+			mgr.groups = append(mgr.groups[:i], mgr.groups[i+1:]...)
+			if mgr.active_tab >= len(mgr.groups) && mgr.active_tab > 0 {
+				mgr.active_tab--
+			}
+
+			if len(mgr.groups) > 0 && pl != nil && was_active {
+				next := mgr.groups[mgr.active_tab]
+				pl.ShowGroup(next.Primary().Window(), group_extras(next))
+			}
+
+			go s.Close()
+		} else {
+			// Multi-pane group — kill just this pane directly in the viewport.
+			// Tmux automatically resizes remaining panes to fill the space.
+			if was_active && pl != nil && s.PaneID() != "" {
+				pl.server.Run("kill-pane", "-t", s.PaneID())
+			}
+
+			g.Remove(s.ID)
+
+			// Update PaneLayout state to reflect the new group composition
+			if was_active && pl != nil {
+				pl.mu.Lock()
+				pl.active_win = g.Primary().Window()
+				pl.active_extras = group_extras(g)
+				pl.mu.Unlock()
+				pl.restore_left_width()
+				pl.server.Run("select-pane", "-t", pl.left_pane_id)
+			}
+
+			if !was_active {
+				go s.Close()
+			}
+		}
+
+		return
 	}
 }
 
@@ -522,34 +837,105 @@ func (mgr *Manager) HasLiveSessions() bool {
 }
 
 // TabLabels returns the labels for the tab bar, including group hierarchy.
+// TabLabelsWithCursor returns tab labels with the layout map highlighting the
+// session at flat_cursor position.
+func (mgr *Manager) TabLabelsWithCursor(flat_cursor int) []TabLabel {
+	return mgr.tab_labels_internal(flat_cursor)
+}
+
 func (mgr *Manager) TabLabels() []TabLabel {
+	return mgr.tab_labels_internal(-1)
+}
+
+func (mgr *Manager) tab_labels_internal(flat_cursor int) []TabLabel {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 
+	// First pass: build flat list and find cursor's session ID + group
 	var result []TabLabel
+	var cursor_session_id int
+	var cursor_group_id int
+
+	flat_idx := 0
 	for i, g := range mgr.groups {
 		is_active := i == mgr.active_tab
 		sessions := g.Sessions()
-		layout_map := g.LayoutMap()
 
-		for j, s := range sessions {
-			tl := TabLabel{
-				Index:        i + 1,
-				Label:        s.Label,
-				Active:       is_active,
-				Alive:        s.IsAlive(),
-				SessionID:    s.ID,
-				GroupID:      g.ID,
-				IsGroupChild: j > 0,
-				GroupSize:    len(sessions),
+		if len(sessions) == 1 {
+			s := sessions[0]
+			if flat_idx == flat_cursor {
+				cursor_session_id = s.ID
+				cursor_group_id = g.ID
 			}
-			// Attach layout map to the last session in the group
-			if layout_map != nil && j == len(sessions)-1 {
-				tl.LayoutMap = layout_map
+			result = append(result, TabLabel{
+				Index:     i + 1,
+				Label:     s.Label,
+				Active:    is_active,
+				Alive:     s.IsAlive(),
+				SessionID: s.ID,
+				GroupID:   g.ID,
+				GroupSize: 1,
+			})
+			flat_idx++
+		} else {
+			// Group header
+			if flat_idx == flat_cursor {
+				cursor_group_id = g.ID
 			}
-			result = append(result, tl)
+			result = append(result, TabLabel{
+				Index:       i + 1,
+				Label:       fmt.Sprintf("Group (%d panes)", len(sessions)),
+				Active:      is_active,
+				Alive:       true,
+				GroupID:     g.ID,
+				IsGroupHead: true,
+				GroupSize:   len(sessions),
+			})
+			flat_idx++
+
+			for _, s := range sessions {
+				if flat_idx == flat_cursor {
+					cursor_session_id = s.ID
+					cursor_group_id = g.ID
+				}
+				result = append(result, TabLabel{
+					Index:        i + 1,
+					Label:        s.Label,
+					Active:       is_active,
+					Alive:        s.IsAlive(),
+					SessionID:    s.ID,
+					GroupID:      g.ID,
+					IsGroupChild: true,
+					GroupSize:    len(sessions),
+				})
+				flat_idx++
+			}
 		}
 	}
+
+	// Second pass: attach highlighted layout maps to the last child of each group
+	for i, g := range mgr.groups {
+		if !g.IsSplit() {
+			continue
+		}
+		// Generate layout map — highlighted if cursor is in this group
+		var layout_map []string
+		if cursor_group_id == g.ID && flat_cursor >= 0 {
+			layout_map = g.LayoutMapHighlighted(cursor_session_id)
+		} else {
+			layout_map = g.LayoutMap()
+		}
+
+		// Find the last entry for this group and attach the map
+		_ = i
+		for j := len(result) - 1; j >= 0; j-- {
+			if result[j].GroupID == g.ID && result[j].IsGroupChild {
+				result[j].LayoutMap = layout_map
+				break
+			}
+		}
+	}
+
 	return result
 }
 
@@ -561,7 +947,8 @@ type TabLabel struct {
 	Alive        bool
 	SessionID    int
 	GroupID      int
-	IsGroupChild bool     // true for 2nd+ session in a group
+	IsGroupHead  bool     // true for the group header line (multi-session groups)
+	IsGroupChild bool     // true for session entries within a group
 	GroupSize    int      // total sessions in the group
 	LayoutMap    []string // 3-line mini layout map (only on last child)
 }
