@@ -236,6 +236,48 @@ func (mgr *Manager) OpenNew(label string, cmd_name string, args []string, width,
 	return s, nil
 }
 
+// OpenNewSendKeys is like OpenNew but uses send-keys to type the command
+// into an interactive shell instead of passing it via tmux new-window.
+func (mgr *Manager) OpenNewSendKeys(label string, cmd_name string, args []string, width, height int, dir string) (*Session, error) {
+	mgr.mu.Lock()
+	count := 0
+	for _, g := range mgr.groups {
+		for _, s := range g.sessions {
+			if s.Label == label || (len(s.Label) > len(label) && s.Label[:len(label)] == label && s.Label[len(label):len(label)+2] == " #") {
+				count++
+			}
+		}
+	}
+	final_label := label
+	if count > 0 {
+		final_label = fmt.Sprintf("%s #%d", label, count+1)
+	}
+	id := mgr.next_id
+	mgr.next_id++
+	gid := mgr.next_group_id
+	mgr.next_group_id++
+	mgr.mu.Unlock()
+
+	s, err := NewSessionSendKeys(id, final_label, cmd_name, args, width, height, dir, mgr.server)
+	if err != nil {
+		return nil, err
+	}
+
+	g := NewTabGroup(gid, s)
+
+	mgr.mu.Lock()
+	mgr.groups = append(mgr.groups, g)
+	mgr.active_tab = len(mgr.groups) - 1
+	pl := mgr.panes
+	mgr.mu.Unlock()
+
+	if pl != nil {
+		pl.ShowSession(s.Window())
+	}
+
+	return s, nil
+}
+
 // equalize_active_locked equalizes the right-side panes if the active group
 // is a split group. Caller must hold mgr.mu.
 func (mgr *Manager) equalize_active_locked() {

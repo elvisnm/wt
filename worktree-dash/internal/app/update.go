@@ -1217,7 +1217,11 @@ func (m Model) open_split_picker(dir SplitDir) (tea.Model, tea.Cmd) {
 		title += " — " + m.split_target_alias
 	}
 
-	return m.open_panel_picker(title, ui.SplitSessionActions, context)
+	actions := ui.SplitSessionActions
+	if !m.claude_auto_mode {
+		actions = insert_claude_auto(actions)
+	}
+	return m.open_panel_picker(title, actions, context)
 }
 
 // open_merge_picker starts the merge flow: first pick a target tab to merge into.
@@ -1360,6 +1364,7 @@ func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) dispatch_picker(action ui.PickerAction) (Model, tea.Cmd) {
+	debug_log("[picker] dispatch: key=%q label=%q context=%s", action.Key, action.Label, m.picker_context)
 	switch m.picker_context {
 	case pickerDB:
 		return m.execute_db_action(action)
@@ -1412,13 +1417,38 @@ func (m Model) execute_split_action(action ui.PickerAction, dir SplitDir) (Model
 			session_dir = wt_dir
 		}
 		label_prefix = labels.Shell
-	case "c":
-		cmd_name = "claude"
+	case "c", "C":
+		claude_cmd := "claude"
 		if m.cfg != nil {
 			if c, ok := m.cfg.Dash.Commands["claude"]; ok && c.Cmd != "" {
-				cmd_name = c.Cmd
+				claude_cmd = c.Cmd
 			}
 		}
+		if action.Key == "C" || m.claude_auto_mode {
+			// Auto-mode: open a shell, then send-keys "claude --enable-auto-mode".
+			// Passing --enable-auto-mode via exec doesn't activate auto mode.
+			shell := os.Getenv("SHELL")
+			if shell == "" {
+				shell = "zsh"
+			}
+			cmd_name = shell
+			session_dir = wt_dir
+			label_prefix = labels.Claude
+			label := labels.Tab(label_prefix, alias)
+			s, err := m.term_mgr.SplitInto(target_id, label, cmd_name, args, w, h, session_dir, dir)
+			if err != nil {
+				m.activity = fmt.Sprintf("Split failed: %v", err)
+				return m, nil
+			}
+			s.SetWorktree(alias, wt_dir)
+			if s.PaneID() != "" {
+				m.term_mgr.Server().Run("send-keys", "-t", s.PaneID(), "claude --enable-auto-mode", "Enter")
+			}
+			m.prev_focus = m.focus
+			m.focus = PanelTerminal
+			return m, tick_after(100*time.Millisecond, "render")
+		}
+		cmd_name = claude_cmd
 		session_dir = wt_dir
 		label_prefix = labels.Claude
 	case "z":
@@ -1487,6 +1517,8 @@ func (m Model) execute_picker_action(action ui.PickerAction) (Model, tea.Cmd) {
 		return m.open_bash(*wt)
 	case "c":
 		return m.open_claude(*wt)
+	case "C":
+		return m.open_claude_auto(*wt)
 	case "z":
 		return m.open_local_shell(*wt)
 	case "l":
@@ -1612,8 +1644,18 @@ func (m Model) run_pull(wt worktree.Worktree) (Model, tea.Cmd) {
 	return m, tick_after(100*time.Millisecond, "render")
 }
 
-// open_claude opens Claude Code in the worktree
+// open_claude opens Claude Code in the worktree.
+// When claude_auto_mode is enabled in settings, passes --enable-auto-mode.
 func (m Model) open_claude(wt worktree.Worktree) (Model, tea.Cmd) {
+	return m.open_claude_with_flags(wt, m.claude_auto_mode)
+}
+
+// open_claude_auto opens Claude Code with --enable-auto-mode regardless of settings.
+func (m Model) open_claude_auto(wt worktree.Worktree) (Model, tea.Cmd) {
+	return m.open_claude_with_flags(wt, true)
+}
+
+func (m Model) open_claude_with_flags(wt worktree.Worktree, auto_mode bool) (Model, tea.Cmd) {
 	w, h := m.right_pane_dimensions()
 
 	var cmd_name string
@@ -1630,7 +1672,18 @@ func (m Model) open_claude(wt worktree.Worktree) (Model, tea.Cmd) {
 	dir = wt.Path
 
 	label := labels.Tab(labels.Claude, wt.Alias)
-	s, err := m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
+	var s *terminal.Session
+	var err error
+	if auto_mode {
+		// Use send-keys so claude receives the flag in an interactive shell context.
+		// "exec claude --enable-auto-mode" via tmux new-window doesn't activate auto mode.
+		// Use just "claude" (not full path) since the interactive shell has PATH.
+		debug_log("[claude] open: send-keys 'claude --enable-auto-mode' dir=%s", dir)
+		s, err = m.term_mgr.OpenNewSendKeys(label, "claude", []string{"--enable-auto-mode"}, w, h, dir)
+	} else {
+		debug_log("[claude] open: exec cmd=%s dir=%s", cmd_name, dir)
+		s, err = m.term_mgr.OpenNew(label, cmd_name, args, w, h, dir)
+	}
 	if err != nil {
 		m.terminal_output = fmt.Sprintf("Failed to open Claude: %v", err)
 		m.prev_focus = m.focus; m.focus = PanelTerminal
@@ -2178,6 +2231,7 @@ func (m *Model) reload_settings() tea.Cmd {
 	s := settings.Load()
 	m.details_visible = s.DefaultPanels.Details
 	m.term_mgr.SetSplitLimits(s.MaxPanesPerGroup)
+	m.claude_auto_mode = s.ClaudeAutoMode
 
 	var cmds []tea.Cmd
 

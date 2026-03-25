@@ -31,7 +31,8 @@ type Session struct {
 }
 
 // build_shell_cmd builds a shell command string with proper quoting.
-// Uses exec so the shell replaces itself with the target process.
+// Uses exec so the shell replaces itself with the target process,
+// which allows remain-on-exit to detect when the command exits.
 func build_shell_cmd(cmd_name string, args []string) string {
 	shell_cmd := "exec " + cmd_name
 	if len(args) > 0 {
@@ -93,6 +94,79 @@ func NewSession(id int, label string, cmd_name string, args []string, width, hei
 		"-x", fmt.Sprintf("%d", width),
 		"-y", fmt.Sprintf("%d", height),
 	)
+
+	s := &Session{
+		ID:       id,
+		Label:    label,
+		Alive:    true,
+		server:   server,
+		window:   window,
+		target:   target,
+		pane_id:  pane_id,
+		ExitCode: -1,
+		done:     make(chan struct{}),
+	}
+
+	go s.monitor_loop()
+
+	return s, nil
+}
+
+// NewSessionSendKeys creates a tmux window with an interactive shell, then
+// types the command via send-keys. This is needed for commands like
+// "claude --enable-auto-mode" where the flag only works when typed into
+// an interactive shell (not when passed via exec in tmux new-window).
+func NewSessionSendKeys(id int, label string, cmd_name string, args []string, width, height int, dir string, server *TmuxServer) (*Session, error) {
+	if err := server.EnsureStarted(0, 0); err != nil {
+		return nil, err
+	}
+
+	window := fmt.Sprintf("w%d", id)
+	target := fmt.Sprintf("%s.0", window)
+
+	// Create window with a plain shell
+	tmux_args := []string{
+		"new-window", "-d",
+		"-n", window,
+	}
+	if dir != "" {
+		tmux_args = append(tmux_args, "-c", dir)
+	}
+
+	out, err := server.Run(tmux_args...)
+	if err != nil {
+		return nil, fmt.Errorf("tmux new-window failed: %w\n%s", err, out)
+	}
+
+	server.Run("set-option", "-t", window, "remain-on-exit", "on")
+
+	pane_id := ""
+	if pid_out, err := server.Run("display-message", "-t", target, "-p", "#{pane_id}"); err == nil {
+		pane_id = strings.TrimSpace(pid_out)
+	}
+
+	server.Run("resize-pane", "-t", target,
+		"-x", fmt.Sprintf("%d", width),
+		"-y", fmt.Sprintf("%d", height),
+	)
+
+	// Build the command string
+	shell_cmd := cmd_name
+	if len(args) > 0 {
+		quoted := make([]string, len(args))
+		for i, a := range args {
+			if strings.ContainsAny(a, " \t\"'\\$") {
+				quoted[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
+			} else {
+				quoted[i] = a
+			}
+		}
+		shell_cmd += " " + strings.Join(quoted, " ")
+	}
+
+	// Send clear first to avoid visual noise from prompt initialization,
+	// then send the actual command.
+	server.Run("send-keys", "-t", target, "clear && "+shell_cmd, "Enter")
 
 	s := &Session{
 		ID:       id,

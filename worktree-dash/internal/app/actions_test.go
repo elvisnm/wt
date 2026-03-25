@@ -14,7 +14,7 @@ import (
 // ── actions_for_worktree ─────────────────────────────────────────────────
 
 func TestActionsForWorktree_DockerRunning(t *testing.T) {
-	m := &Model{}
+	m := &Model{claude_auto_mode: true} // auto-mode ON skips insert_claude_auto
 	wt := worktree.Worktree{Type: worktree.TypeDocker, Running: true, ContainerExists: true}
 	got := m.actions_for_worktree(wt)
 	if &got[0] != &ui.WorktreeActions[0] {
@@ -23,7 +23,7 @@ func TestActionsForWorktree_DockerRunning(t *testing.T) {
 }
 
 func TestActionsForWorktree_DockerStopped(t *testing.T) {
-	m := &Model{}
+	m := &Model{claude_auto_mode: true}
 	wt := worktree.Worktree{Type: worktree.TypeDocker, Running: false, ContainerExists: true}
 	got := m.actions_for_worktree(wt)
 	if &got[0] != &ui.StoppedActions[0] {
@@ -140,7 +140,7 @@ func TestActionsForWorktree_NoContainer(t *testing.T) {
 }
 
 func TestActionsForWorktree_HostBuildRunning(t *testing.T) {
-	m := &Model{}
+	m := &Model{claude_auto_mode: true}
 	wt := worktree.Worktree{Type: worktree.TypeDocker, Running: true, ContainerExists: true, HostBuild: true}
 	got := m.actions_for_worktree(wt)
 	if &got[0] != &ui.HostBuildRunningActions[0] {
@@ -149,7 +149,7 @@ func TestActionsForWorktree_HostBuildRunning(t *testing.T) {
 }
 
 func TestActionsForWorktree_HostBuildStopped(t *testing.T) {
-	m := &Model{}
+	m := &Model{claude_auto_mode: true}
 	wt := worktree.Worktree{Type: worktree.TypeDocker, Running: false, ContainerExists: true, HostBuild: true}
 	got := m.actions_for_worktree(wt)
 	if &got[0] != &ui.HostBuildStoppedActions[0] {

@@ -19,6 +19,7 @@ const (
 	itemTasks
 	itemLeftPane
 	itemMaxPanes
+	itemClaudeAutoMode
 	itemSave
 	itemExit
 	itemCount // sentinel
@@ -122,6 +123,8 @@ func runSettings() {
 				s.DefaultPanels.Tasks = !s.DefaultPanels.Tasks
 			case itemLeftPane:
 				// no-op, use arrows
+			case itemClaudeAutoMode:
+				s.ClaudeAutoMode = !s.ClaudeAutoMode
 			case itemSave:
 				settings.Save(s)
 				settings.ClearDraft()
@@ -151,7 +154,8 @@ func runSettings() {
 func settings_changed(original, current settings.Settings) bool {
 	return original.DefaultPanels != current.DefaultPanels ||
 		original.LeftPanePct != current.LeftPanePct ||
-		original.MaxPanesPerGroup != current.MaxPanesPerGroup
+		original.MaxPanesPerGroup != current.MaxPanesPerGroup ||
+		original.ClaudeAutoMode != current.ClaudeAutoMode
 }
 
 func draw_settings(s settings.Settings, cursor settingsItem, saved bool) {
@@ -195,6 +199,13 @@ func draw_settings(s settings.Settings, cursor settingsItem, saved bool) {
 	split_lines = append(split_lines, settings_range_label(cursor == itemMaxPanes, "Max   ", s.MaxPanesPerGroup, settings.MinMaxPanesPerGroup, settings.MaxMaxPanesPerGroup, col_w-6))
 	split_lines = append(split_lines, ansiDim+"Sessions per group"+ansiReset)
 	lines = append(lines, guideBox("Split Panes", split_lines, col_w)...)
+
+	lines = append(lines, "")
+
+	// Claude box
+	var claude_lines []string
+	claude_lines = append(claude_lines, settings_toggle(cursor == itemClaudeAutoMode, "Auto mode", "--enable-auto-mode", s.ClaudeAutoMode))
+	lines = append(lines, guideBox("Claude Code", claude_lines, col_w)...)
 
 	lines = append(lines, "")
 

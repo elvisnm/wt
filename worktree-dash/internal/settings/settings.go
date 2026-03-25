@@ -27,6 +27,9 @@ type Settings struct {
 
 	// Split pane limit: max sessions per group (2-6)
 	MaxPanesPerGroup int `json:"max_panes_per_group"`
+
+	// ClaudeAutoMode: when true, claude always opens with --enable-auto-mode
+	ClaudeAutoMode bool `json:"claude_auto_mode"`
 }
 
 // PanelDefaults controls which optional panels open by default.

@@ -115,6 +115,9 @@ type Model struct {
 	// Details panel toggle
 	details_visible bool
 
+	// Claude auto-mode: when true, claude opens with --enable-auto-mode
+	claude_auto_mode bool
+
 	// Claude usage panel
 	usage_visible bool
 	usage_data    *claude.Usage
@@ -218,9 +221,10 @@ func NewModelWithLayout(server *terminal.TmuxServer, pl *terminal.PaneLayout) Mo
 		cfg:             cfg,
 		term_mgr:        mgr,
 		pane_layout:     pl,
-		details_visible: s.DefaultPanels.Details,
+		details_visible:  s.DefaultPanels.Details,
 		usage_visible:   s.DefaultPanels.Usage,
 		tasks_visible:   s.DefaultPanels.Tasks,
+		claude_auto_mode: s.ClaudeAutoMode,
 	}
 }
 
