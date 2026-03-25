@@ -17,6 +17,7 @@ import (
 	"github.com/elvisnm/wt/internal/app"
 	"github.com/elvisnm/wt/internal/notify"
 	"github.com/elvisnm/wt/internal/sentinel"
+	"github.com/elvisnm/wt/internal/settings"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/ui"
 
@@ -96,6 +97,8 @@ func main() {
 		runConfirm(os.Args[2:])
 	case "_input":
 		runInput(os.Args[2:])
+	case "_settings":
+		runSettings()
 	case "_notify-renderer":
 		runNotifyRenderer(os.Args[2:])
 	case "_heihei":
@@ -160,8 +163,9 @@ func launchDashboardOuter() {
 		os.Exit(1)
 	}
 
-	// Create 2-pane layout (left 20%, right 80%) — right pane shows welcome guide
-	pl, err := terminal.SetupPaneLayout(ts, 20, exe_path)
+	// Create 2-pane layout — right pane shows welcome guide
+	user_settings := settings.Load()
+	pl, err := terminal.SetupPaneLayout(ts, user_settings.LeftPanePct, exe_path)
 	if err != nil {
 		ts.Kill()
 		stopSplash()

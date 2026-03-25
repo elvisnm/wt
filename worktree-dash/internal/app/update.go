@@ -14,6 +14,7 @@ import (
 	"github.com/elvisnm/wt/internal/esbuild"
 	"github.com/elvisnm/wt/internal/labels"
 	"github.com/elvisnm/wt/internal/pm2"
+	"github.com/elvisnm/wt/internal/settings"
 	"github.com/elvisnm/wt/internal/sentinel"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/ui"
@@ -354,6 +355,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.term_mgr != nil && m.term_mgr.CloseDeadLogs() {
 				m.focus_worktrees_if_empty()
 			}
+			// Auto-close dead Settings tab
+			if m.term_mgr != nil && m.term_mgr.CloseDeadByLabel(labels.Settings) {
+				reload_cmd := m.reload_settings()
+				m.focus_worktrees_if_empty()
+
+				// Check if user exited with unsaved changes (TUI writes draft to temp file)
+				draft_path := settings.DraftPath()
+				if data, err := os.ReadFile(draft_path); err == nil {
+					os.Remove(draft_path)
+					draft_data := data // capture for closure
+					m2, confirm_cmd := m.open_panel_confirm("Settings", "Save unsaved changes?",
+						func(mdl *Model) (Model, tea.Cmd) {
+							settings.SaveRaw(draft_data)
+							cmd := mdl.reload_settings()
+							return *mdl, cmd
+						})
+					return m2, tea.Batch(reload_cmd, confirm_cmd)
+				}
+				if reload_cmd != nil {
+					return m, reload_cmd
+				}
+			}
 			// Re-render tick for PTY output updates
 			if m.term_mgr.Count() > 0 || m.preview_session != nil {
 				return m, tick_after(100*time.Millisecond, "render")
@@ -654,6 +677,8 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggle_usage()
 	case "T":
 		return m.toggle_tasks()
+	case "S":
+		return m.open_settings()
 	}
 
 	switch m.focus {
@@ -1727,6 +1752,66 @@ func (m Model) handle_help_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.term_mgr.CloseByLabel(labels.Help)
 	}
 	return m, nil
+}
+
+func (m Model) open_settings() (Model, tea.Cmd) {
+	// Toggle — if already open, close and reload settings
+	if m.term_mgr.HasLabel(labels.Settings) {
+		m.term_mgr.CloseByLabel(labels.Settings)
+		cmd := m.reload_settings()
+		return m, cmd
+	}
+
+	w, h := m.right_pane_dimensions()
+
+	exe, err := os.Executable()
+	if err != nil {
+		return m, nil
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+
+	_, err = m.term_mgr.Open(labels.Settings, exe, []string{"_settings"}, w, h, "")
+	if err != nil {
+		return m, nil
+	}
+
+	m.prev_focus = m.focus
+	m.focus = PanelTerminal
+	if m.pane_layout != nil {
+		m.pane_layout.FocusRight()
+	}
+	return m, tick_after(100*time.Millisecond, "render")
+}
+
+// reload_settings re-reads ~/.wt/settings.json and applies panel visibility.
+// Called after the settings tab closes. Returns commands to fetch data for
+// newly enabled panels.
+func (m *Model) reload_settings() tea.Cmd {
+	s := settings.Load()
+	m.details_visible = s.DefaultPanels.Details
+
+	var cmds []tea.Cmd
+
+	// Usage: trigger fetch if newly visible and no data loaded
+	if s.DefaultPanels.Usage && !m.usage_visible {
+		cmds = append(cmds, cmd_fetch_usage(m.usage_token), tick_after(80*time.Millisecond, "spin"))
+	}
+	m.usage_visible = s.DefaultPanels.Usage
+
+	// Tasks: trigger fetch if newly visible and no data loaded
+	if s.DefaultPanels.Tasks && !m.tasks_visible {
+		m.tasks_cursor = 0
+		m.tasks_detail = nil
+		cmds = append(cmds, cmd_fetch_tasks())
+	}
+	m.tasks_visible = s.DefaultPanels.Tasks
+
+	m.recalc_layout()
+
+	if len(cmds) > 0 {
+		return tea.Batch(cmds...)
+	}
+	return nil
 }
 
 func (m Model) open_help() (Model, tea.Cmd) {

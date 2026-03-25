@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/elvisnm/wt/internal/beads"
 	"github.com/elvisnm/wt/internal/claude"
 	"github.com/elvisnm/wt/internal/config"
 	"github.com/elvisnm/wt/internal/docker"
+	"github.com/elvisnm/wt/internal/settings"
 	"github.com/elvisnm/wt/internal/terminal"
 	"github.com/elvisnm/wt/internal/ui"
 	"github.com/elvisnm/wt/internal/worktree"
@@ -195,14 +197,20 @@ func NewModelWithLayout(server *terminal.TmuxServer, pl *terminal.PaneLayout) Mo
 	mgr := terminal.NewManagerWithServer(server)
 	mgr.SetPaneLayout(pl)
 
+	// Load user settings and apply default panel visibility
+	s := settings.Load()
+
 	return Model{
-		focus:         PanelWorktrees,
-		cursor:        0,
-		repo_root:     repo_root,
-		worktrees_dir: wt_dir,
-		cfg:           cfg,
-		term_mgr:      mgr,
-		pane_layout:   pl,
+		focus:           PanelWorktrees,
+		cursor:          0,
+		repo_root:       repo_root,
+		worktrees_dir:   wt_dir,
+		cfg:             cfg,
+		term_mgr:        mgr,
+		pane_layout:     pl,
+		details_visible: s.DefaultPanels.Details,
+		usage_visible:   s.DefaultPanels.Usage,
+		tasks_visible:   s.DefaultPanels.Tasks,
 	}
 }
 
@@ -221,9 +229,18 @@ func (m Model) Init() tea.Cmd {
 	debug_log("[init] repo_root=%s", m.repo_root)
 	debug_log("[init] worktrees_dir=%s", m.worktrees_dir)
 	debug_log("[init] config name=%q strategy=%q", cfg_name, cfg_strategy)
-	return tea.Batch(
-		m.cmd_discover(),
-	)
+
+	cmds := []tea.Cmd{m.cmd_discover()}
+
+	// Fetch data for panels enabled by default via settings
+	if m.usage_visible {
+		cmds = append(cmds, cmd_fetch_usage(m.usage_token), tick_after(80*time.Millisecond, "spin"))
+	}
+	if m.tasks_visible {
+		cmds = append(cmds, cmd_fetch_tasks())
+	}
+
+	return tea.Batch(cmds...)
 }
 
 // Messages

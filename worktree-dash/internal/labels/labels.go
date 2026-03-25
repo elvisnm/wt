@@ -24,6 +24,7 @@ const (
 	FixImages   = "Fix Images"
 	Database    = "Database"
 	Help        = "Help"
+	Settings    = "Settings"
 	Maintenance = "Maintenance"
 	Prune       = "Prune Volumes"
 	Autostop    = "Autostop Idle"

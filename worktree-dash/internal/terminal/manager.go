@@ -422,6 +422,25 @@ func (mgr *Manager) CloseDeadLogs() bool {
 	return mgr.CloseDeadByPrefix(labels.Logs)
 }
 
+// CloseDeadByLabel closes a dead session with the exact label.
+// Returns true if a session was closed.
+func (mgr *Manager) CloseDeadByLabel(label string) bool {
+	mgr.mu.Lock()
+	found := false
+	for _, s := range mgr.sessions {
+		if s.Label == label && !s.IsAlive() {
+			found = true
+			break
+		}
+	}
+	mgr.mu.Unlock()
+
+	if found {
+		mgr.CloseByLabel(label)
+	}
+	return found
+}
+
 // CloseAll closes all sessions and kills the tmux server.
 func (mgr *Manager) CloseAll() {
 	mgr.mu.Lock()
