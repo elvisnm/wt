@@ -369,14 +369,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						func(mdl *Model) (Model, tea.Cmd) {
 							settings.SaveRaw(draft_data)
 							cmd := mdl.reload_settings()
-							return *mdl, cmd
+							mdl.notify_open = true
+							mdl.notify_title = "Notifications"
+							mdl.notify_message = "Settings saved"
+							mdl.recalc_layout()
+							return *mdl, tea.Batch(cmd, tick_after(notifyDefaultDuration, "notify"))
 						})
 					return m2, tea.Batch(reload_cmd, confirm_cmd)
 				}
+
+				// No draft = saved via Save & Close — show success notification
+				m2, notify_cmd := m.show_notification("Notifications", "Settings saved")
+				m = m2
 				if reload_cmd != nil {
-					return m, reload_cmd
+					return m, tea.Batch(reload_cmd, notify_cmd)
 				}
+				return m, notify_cmd
 			}
+			// Keep tab_cursor in sync with the active group.
+			// Open/FocusByLabel/etc. change active_tab but don't update tab_cursor.
+			m.sync_tab_cursor_if_stale()
+
 			// Re-render tick for PTY output updates
 			if m.term_mgr.Count() > 0 || m.preview_session != nil {
 				return m, tick_after(100*time.Millisecond, "render")
@@ -402,6 +415,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handle_mouse(msg)
 
 	case tea.KeyMsg:
+		// Shift+S opens settings from anywhere (even over overlays)
+		if msg.String() == "S" {
+			return m.open_settings()
+		}
 		// In pane layout mode, the right pane gets native input via tmux focus.
 		// Bubbletea only receives keys when the left pane (pane 0) has focus.
 		if m.help_open {
@@ -677,8 +694,6 @@ func (m Model) handle_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggle_usage()
 	case "T":
 		return m.toggle_tasks()
-	case "S":
-		return m.open_settings()
 	}
 
 	switch m.focus {
@@ -1119,6 +1134,31 @@ func (m *Model) sync_tab_cursor_from_active() {
 	m.tab_cursor = 0
 }
 
+// sync_tab_cursor_if_stale checks if the tab_cursor points to a different group
+// than the active one, and if so, syncs it. This catches cases where Open/Focus
+// changed the active group without updating the cursor (many call sites).
+func (m *Model) sync_tab_cursor_if_stale() {
+	tab_labels := m.term_mgr.TabLabels()
+	if len(tab_labels) == 0 {
+		return
+	}
+	if m.tab_cursor < 0 || m.tab_cursor >= len(tab_labels) {
+		m.sync_tab_cursor_from_active()
+		return
+	}
+	// Check if cursor's group matches the active group
+	active_idx := m.term_mgr.ActiveIndex()
+	groups := m.term_mgr.Groups()
+	if active_idx < 0 || active_idx >= len(groups) {
+		return
+	}
+	cursor_gid := tab_labels[m.tab_cursor].GroupID
+	active_gid := groups[active_idx].ID
+	if cursor_gid != active_gid {
+		m.sync_tab_cursor_from_active()
+	}
+}
+
 // sync_tab_cursor_to_group switches the active group if the tab_cursor moved to a different group.
 func (m *Model) sync_tab_cursor_to_group(tab_labels []terminal.TabLabel) {
 	if m.tab_cursor < 0 || m.tab_cursor >= len(tab_labels) {
@@ -1144,9 +1184,10 @@ func (m Model) open_split_picker(dir SplitDir) (tea.Model, tea.Cmd) {
 	if g == nil {
 		return m, nil
 	}
-	if g.Count() >= MaxGroupPanes {
-		m.activity = "Max 4 panes per tab"
-		return m, nil
+	max_panes := m.term_mgr.MaxPanes()
+	if g.Count() >= max_panes {
+		m2, cmd := m.show_notification("Split", fmt.Sprintf("Max %d sessions per group reached", max_panes))
+		return m2, cmd
 	}
 
 	// Find the session under the tab cursor
@@ -1203,7 +1244,7 @@ func (m Model) open_merge_picker() (tea.Model, tea.Cmd) {
 		if g.Contains(active.ID) {
 			continue // skip self
 		}
-		if g.Count() >= MaxGroupPanes {
+		if g.Count() >= m.term_mgr.MaxPanes() {
 			continue // skip full groups
 		}
 		key := fmt.Sprintf("%d", i+1)
@@ -1264,7 +1305,6 @@ type SplitDir = terminal.SplitDir
 const (
 	SplitH = terminal.SplitH
 	SplitV = terminal.SplitV
-	MaxGroupPanes = terminal.MaxGroupPanes
 )
 
 func (m Model) handle_picker_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2102,6 +2142,14 @@ func (m Model) open_settings() (Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Return the current split group first so settings gets the full right viewport.
+	// Without this, break-pane for extras may fail if their background windows
+	// were destroyed, leaving split panes in the viewport.
+	if m.pane_layout != nil {
+		m.pane_layout.ReturnSession()
+	}
+
+	// Measure after returning — now we get the full right pane dimensions
 	w, h := m.right_pane_dimensions()
 
 	exe, err := os.Executable()
@@ -2129,6 +2177,7 @@ func (m Model) open_settings() (Model, tea.Cmd) {
 func (m *Model) reload_settings() tea.Cmd {
 	s := settings.Load()
 	m.details_visible = s.DefaultPanels.Details
+	m.term_mgr.SetSplitLimits(s.MaxPanesPerGroup)
 
 	var cmds []tea.Cmd
 

@@ -294,10 +294,17 @@ func (pl *PaneLayout) return_active_locked() {
 		return
 	}
 
-	// Break extra panes back to their background windows (reverse order)
+	// Break extra panes back to their background windows (reverse order).
+	// When join-pane moved a pane into the viewport, tmux may have destroyed
+	// the source window (it had zero panes left). If break-pane fails because
+	// the target window is gone, create a new window with -n to preserve the name.
 	for i := len(pl.active_extras) - 1; i >= 0; i-- {
 		ep := pl.active_extras[i]
-		pl.server.Run("break-pane", "-s", ep.PaneID, "-t", ep.Window)
+		_, err := pl.server.Run("break-pane", "-d", "-s", ep.PaneID, "-t", ep.Window)
+		if err != nil {
+			// Background window was destroyed — break into a new window with the same name
+			pl.server.Run("break-pane", "-d", "-s", ep.PaneID, "-n", ep.Window)
+		}
 	}
 
 	// Swap primary back to its background window
@@ -397,6 +404,111 @@ func (pl *PaneLayout) is_pane_in_viewport(pane_id string) bool {
 		}
 	}
 	return false
+}
+
+// equalize_right_panes distributes space evenly among the right-side panes.
+// Walks the split tree recursively, allocating width proportional to column
+// count (count_h_leaves) and height proportional to row count (count_v_leaves).
+// At each split node, resizes the left/top child's first leaf pane to set
+// the split point, then recurses into both children.
+func (pl *PaneLayout) equalize_right_panes(g *TabGroup) {
+	if g == nil || g.Count() <= 1 {
+		return
+	}
+	tree := g.Tree()
+	if tree == nil || tree.is_leaf() {
+		return
+	}
+
+	// Lock left pane first, then measure the right area
+	pl.restore_left_width()
+
+	right_w, right_h := pl.right_area_dimensions()
+	if right_w <= 0 || right_h <= 0 {
+		return
+	}
+
+	pl.equalize_node(g, tree, right_w, right_h)
+
+	// Re-lock left pane (resizing right panes may have shifted it)
+	pl.restore_left_width()
+}
+
+// equalize_node recursively resizes panes at each split node.
+// For H-splits: allocates width proportional to count_h_leaves.
+// For V-splits: allocates height proportional to count_v_leaves.
+func (pl *PaneLayout) equalize_node(g *TabGroup, n *SplitNode, avail_w, avail_h int) {
+	if n == nil || n.is_leaf() {
+		return
+	}
+
+	// Find the first leaf pane in the left subtree — resizing it sets the split point
+	left_leaf_id := first_leaf(n.Left)
+	if left_leaf_id < 0 {
+		return
+	}
+	left_s := g.SessionByID(left_leaf_id)
+	if left_s == nil || left_s.PaneID() == "" {
+		return
+	}
+
+	if n.Dir == SplitH {
+		left_cols := count_h_leaves(n.Left)
+		total_cols := left_cols + count_h_leaves(n.Right)
+		left_w := avail_w * left_cols / total_cols
+		if left_w < 1 {
+			left_w = 1
+		}
+		pl.server.Run("resize-pane", "-t", left_s.PaneID(),
+			"-x", fmt.Sprintf("%d", left_w))
+		right_w := avail_w - left_w - 1 // -1 for tmux divider
+		if right_w < 1 {
+			right_w = 1
+		}
+		pl.equalize_node(g, n.Left, left_w, avail_h)
+		pl.equalize_node(g, n.Right, right_w, avail_h)
+	} else {
+		top_rows := count_v_leaves(n.Left)
+		total_rows := top_rows + count_v_leaves(n.Right)
+		top_h := avail_h * top_rows / total_rows
+		if top_h < 1 {
+			top_h = 1
+		}
+		pl.server.Run("resize-pane", "-t", left_s.PaneID(),
+			"-y", fmt.Sprintf("%d", top_h))
+		bot_h := avail_h - top_h - 1 // -1 for tmux divider
+		if bot_h < 1 {
+			bot_h = 1
+		}
+		pl.equalize_node(g, n.Left, avail_w, top_h)
+		pl.equalize_node(g, n.Right, avail_w, bot_h)
+	}
+}
+
+// right_area_dimensions returns the width and height available to the right-side panes.
+// Queries the window dimensions and subtracts the left pane width + divider.
+func (pl *PaneLayout) right_area_dimensions() (int, int) {
+	// Get window dimensions
+	out, err := pl.server.Run("display-message", "-t", "wt:0", "-p", "#{window_width} #{window_height}")
+	if err != nil {
+		return 0, 0
+	}
+	var win_w, win_h int
+	fmt.Sscanf(strings.TrimSpace(out), "%d %d", &win_w, &win_h)
+
+	// Get left pane width
+	out2, err := pl.server.Run("display-message", "-t", pl.left_pane_id, "-p", "#{pane_width}")
+	if err != nil {
+		return 0, 0
+	}
+	var left_w int
+	fmt.Sscanf(strings.TrimSpace(out2), "%d", &left_w)
+
+	right_w := win_w - left_w - 1 // -1 for divider between left and right
+	if right_w < 1 {
+		right_w = 1
+	}
+	return right_w, win_h
 }
 
 // restore_left_width resizes the left pane back to its configured percentage.

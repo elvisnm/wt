@@ -18,7 +18,7 @@ type TabInfo struct {
 	IsGroupHead  bool     // group header line (multi-session groups)
 	IsGroupChild bool     // session entry within a group
 	GroupSize    int      // total sessions in this group
-	LayoutMap    []string // 3-line mini layout map (only on last child)
+	LayoutMap    []string // mini layout map lines (only on last child)
 }
 
 // RenderTabsPanel renders the active tabs as a bordered panel matching
@@ -38,21 +38,49 @@ func RenderTabsPanel(tabs []TabInfo, cursor int, width, height int, focused bool
 		return inject_title(styled, title)
 	}
 
-	// Build lines with layout map overlay
+	// Build tab lines
 	var lines []string
 	for i, tab := range tabs {
 		line := format_tab_line(tab, inner_w, i, i == cursor, focused)
 		lines = append(lines, line)
 	}
 
-	// Overlay layout maps on the right side of group lines
-	lines = overlay_layout_maps(tabs, lines, inner_w)
-
-	start, end := visible_window(len(lines), cursor, inner_h)
+	total := len(lines)
+	start, end := visible_window(total, cursor, inner_h)
 	lines = lines[start:end]
+
+	// Find the active group's dot map
+	var dot_map []string
+	for _, tab := range tabs {
+		if tab.Active && len(tab.LayoutMap) > 0 {
+			dot_map = tab.LayoutMap
+			break
+		}
+	}
+
+	// Pad lines to fill inner_h, then place dot map at absolute bottom-right
+	blank := strings.Repeat(" ", inner_w)
+	for len(lines) < inner_h {
+		lines = append(lines, blank)
+	}
+	if len(dot_map) > 0 {
+		for j, map_line := range dot_map {
+			line_idx := inner_h - len(dot_map) + j
+			if line_idx < 0 || line_idx >= len(lines) {
+				continue
+			}
+			map_w := lipgloss.Width(map_line)
+			insert_pos := inner_w - map_w - 1
+			if insert_pos < 0 {
+				continue
+			}
+			lines[line_idx] = splice_visual_line(lines[line_idx], map_line, insert_pos, map_w)
+		}
+	}
 
 	content := strings.Join(lines, "\n")
 	styled := style.Render(content)
+	styled = OverlayScrollbar(styled, total, inner_h, start, focused)
 	return inject_title(styled, title)
 }
 
@@ -142,41 +170,6 @@ func format_tab_line(tab TabInfo, width int, pos int, selected bool, panel_focus
 	}
 
 	return lipgloss.NewStyle().Width(width).MaxHeight(1).Render(line)
-}
-
-// overlay_layout_maps renders mini layout maps on the right side of group lines.
-// The map is aligned right, starting at the group header line.
-func overlay_layout_maps(tabs []TabInfo, lines []string, width int) []string {
-	dim := lipgloss.NewStyle().Foreground(BorderColor)
-
-	for i, tab := range tabs {
-		if tab.LayoutMap == nil || len(tab.LayoutMap) != 3 {
-			continue
-		}
-		// Find the first line of this group (the header)
-		// The LayoutMap is attached to the last child — walk back to find header
-		header_idx := i
-		for header_idx > 0 && tabs[header_idx].IsGroupChild {
-			header_idx--
-		}
-
-		// Overlay the 3 map lines starting at header_idx
-		for j, map_line := range tab.LayoutMap {
-			line_idx := header_idx + j
-			if line_idx >= len(lines) {
-				break
-			}
-			styled_map := dim.Render(map_line)
-			map_w := lipgloss.Width(map_line)
-			// Place it at the right edge with 1 char margin
-			insert_pos := width - map_w - 1
-			if insert_pos < 0 {
-				continue
-			}
-			lines[line_idx] = splice_visual_line(lines[line_idx], styled_map, insert_pos, map_w)
-		}
-	}
-	return lines
 }
 
 // splice_visual_line replaces a visual range in a line with new content.

@@ -1,7 +1,8 @@
 package terminal
 
-// MaxGroupPanes is the maximum number of panes allowed in a single tab group.
-const MaxGroupPanes = 4
+// MaxGroupPanes is the absolute ceiling for panes per group.
+// The runtime limit comes from settings (2-6).
+const MaxGroupPanes = 6
 
 // SplitDir represents the direction of a split.
 type SplitDir int
@@ -135,6 +136,59 @@ func (g *TabGroup) SessionByID(id int) *Session {
 	return nil
 }
 
+// CountColumns returns the number of top-level columns in the layout.
+// A single pane = 1 column. Each H split at the root level adds a column.
+func (g *TabGroup) CountColumns() int {
+	return count_h_leaves(g.tree)
+}
+
+// MaxRowsInAnyColumn returns the max V-depth (rows) in any column.
+func (g *TabGroup) MaxRowsInAnyColumn() int {
+	return max_v_depth(g.tree)
+}
+
+// count_h_leaves counts leaf columns: at H splits, sum left+right; at V splits or leaves, count as 1.
+func count_h_leaves(n *SplitNode) int {
+	if n == nil || n.is_leaf() {
+		return 1
+	}
+	if n.Dir == SplitH {
+		return count_h_leaves(n.Left) + count_h_leaves(n.Right)
+	}
+	// V split: still one column
+	return 1
+}
+
+// max_v_depth returns the max number of rows in any column.
+func max_v_depth(n *SplitNode) int {
+	if n == nil || n.is_leaf() {
+		return 1
+	}
+	if n.Dir == SplitV {
+		return max_v_depth(n.Left) + max_v_depth(n.Right)
+	}
+	// H split: max of both sides
+	l := max_v_depth(n.Left)
+	r := max_v_depth(n.Right)
+	if l > r {
+		return l
+	}
+	return r
+}
+
+// count_v_leaves counts leaf rows: at V splits, sum left+right; at H splits or leaves, count as 1.
+// This is the vertical analogue of count_h_leaves.
+func count_v_leaves(n *SplitNode) int {
+	if n == nil || n.is_leaf() {
+		return 1
+	}
+	if n.Dir == SplitV {
+		return count_v_leaves(n.Left) + count_v_leaves(n.Right)
+	}
+	// H split: still one row
+	return 1
+}
+
 // Add adds a session to the group, splitting the target pane.
 // Returns false if the group is at max capacity or the target is not found.
 func (g *TabGroup) Add(s *Session, target_session_id int, dir SplitDir) bool {
@@ -187,204 +241,145 @@ func (g *TabGroup) Label() string {
 }
 
 // ── Mini Layout Map ─────────────────────────────────────────────────────
+//
+// Compact dot grid showing the pane layout topology.
+// Each pane = one dot. Gray ● for inactive, orange ● for the highlighted pane.
+// Positioned at the bottom-right corner of the group's child list.
+//
+// Examples:
+//   2 columns:        ● ●
+//   3 rows:           ●  (3 lines)
+//                     ●
+//                     ●
+//   3×2 grid:         ● ● ●
+//                     ● ● ●
+//   Mixed H(1,V(2,3)):  ● ●
+//                       ● ●  (pane 1 spans both rows)
 
-// LayoutMap renders a compact box-drawing representation of the split layout.
-// Returns 3 lines. Only meaningful for groups with 2+ sessions.
+// LayoutMap renders a compact dot representation of the split layout.
 func (g *TabGroup) LayoutMap() []string {
 	if !g.IsSplit() {
 		return nil
 	}
-	return render_layout_map(g.tree, -1)
+	return render_dot_map(g.tree, -1)
 }
 
-// LayoutMapHighlighted renders the layout map with one session highlighted.
-// The highlighted session's cells are filled with orange blocks.
+// LayoutMapHighlighted renders the dot map with one session highlighted in orange.
 func (g *TabGroup) LayoutMapHighlighted(highlight_id int) []string {
 	if !g.IsSplit() {
 		return nil
 	}
-	return render_layout_map(g.tree, highlight_id)
+	return render_dot_map(g.tree, highlight_id)
 }
 
-// render_layout_map generates a 2D grid from the split tree, then draws box chars.
-// If highlight_id >= 0, that session's cells are filled with orange blocks.
-func render_layout_map(root *SplitNode, highlight_id int) []string {
-	type rect struct{ x, y, w, h int }
-	grid := [2][4]int{}
+// ANSI color codes for dot map
+const (
+	dotOrange = "\033[38;5;214m"
+	dotDim    = "\033[38;5;240m"
+	dotReset  = "\033[0m"
+)
 
-	var assign func(n *SplitNode, r rect)
-	assign = func(n *SplitNode, r rect) {
-		if n == nil || r.w <= 0 || r.h <= 0 {
+// render_dot_map produces a compact dot grid from the split tree.
+// Uses position-based layout: walks the tree recursively, assigning each leaf
+// a (col, row) position based on count_h_leaves and count_v_leaves offsets.
+// This correctly handles nested splits (e.g., V(H(1,2), 3) → 2 cols × 2 rows).
+func render_dot_map(root *SplitNode, highlight_id int) []string {
+	if root == nil || root.is_leaf() {
+		return nil
+	}
+
+	// Assign (col, row) positions to each leaf session
+	type dot_pos struct {
+		session_id int
+		col, row   int
+	}
+	var positions []dot_pos
+	var assign func(n *SplitNode, col, row int)
+	assign = func(n *SplitNode, col, row int) {
+		if n == nil {
 			return
 		}
 		if n.is_leaf() {
-			for row := r.y; row < r.y+r.h && row < 2; row++ {
-				for col := r.x; col < r.x+r.w && col < 4; col++ {
-					grid[row][col] = n.SessionID
-				}
-			}
+			positions = append(positions, dot_pos{n.SessionID, col, row})
 			return
 		}
 		if n.Dir == SplitH {
-			mid := r.w / 2
-			if mid < 1 {
-				mid = 1
-			}
-			assign(n.Left, rect{r.x, r.y, mid, r.h})
-			assign(n.Right, rect{r.x + mid, r.y, r.w - mid, r.h})
+			left_cols := count_h_leaves(n.Left)
+			assign(n.Left, col, row)
+			assign(n.Right, col+left_cols, row)
 		} else {
-			mid := r.h / 2
-			if mid < 1 {
-				mid = 1
-			}
-			assign(n.Left, rect{r.x, r.y, r.w, mid})
-			assign(n.Right, rect{r.x, r.y + mid, r.w, r.h - mid})
+			left_rows := count_v_leaves(n.Left)
+			assign(n.Left, col, row)
+			assign(n.Right, col, row+left_rows)
 		}
 	}
-	assign(root, rect{0, 0, 4, 2})
+	assign(root, 0, 0)
 
-	return grid_to_box(grid, highlight_id)
+	if len(positions) == 0 {
+		return nil
+	}
+
+	// Find grid bounds
+	max_col, max_row := 0, 0
+	for _, p := range positions {
+		if p.col > max_col {
+			max_col = p.col
+		}
+		if p.row > max_row {
+			max_row = p.row
+		}
+	}
+	num_cols := max_col + 1
+	num_rows := max_row + 1
+
+	// Build sparse grid: grid[row][col] = session_id (0 = empty)
+	grid := make([][]int, num_rows)
+	for r := range grid {
+		grid[r] = make([]int, num_cols)
+	}
+	for _, p := range positions {
+		grid[p.row][p.col] = p.session_id
+	}
+
+	// Render dot grid
+	dot := func(sid int) string {
+		if highlight_id >= 0 && sid == highlight_id {
+			return dotOrange + "\u25cf" + dotReset
+		}
+		return dotDim + "\u25cf" + dotReset
+	}
+
+	var lines []string
+	for r := 0; r < num_rows; r++ {
+		line := ""
+		for c := 0; c < num_cols; c++ {
+			if c > 0 {
+				line += " "
+			}
+			if grid[r][c] > 0 {
+				line += dot(grid[r][c])
+			} else {
+				line += " "
+			}
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
-// ANSI color codes for layout map highlighting
-const (
-	mapOrange = "\033[38;5;214m"
-	mapDim    = "\033[38;5;240m"
-	mapReset  = "\033[0m"
-)
-
-// grid_to_box converts a 2×4 grid into 3 lines of box-drawing characters.
-// Borders appear where adjacent cells have different session IDs.
-// If highlight_id >= 0, borders touching that session's cells are drawn in orange.
-func grid_to_box(grid [2][4]int, highlight_id int) []string {
-	cols := 4
-
-	v_div := [2][3]bool{}
-	for r := 0; r < 2; r++ {
-		for c := 0; c < cols-1; c++ {
-			v_div[r][c] = grid[r][c] != grid[r][c+1]
-		}
+// flatten_h_children collects all children of consecutive H-splits into a flat list.
+// H(A, H(B, H(C, D))) → [A, B, C, D]
+func flatten_h_children(n *SplitNode) []*SplitNode {
+	if n == nil || n.is_leaf() || n.Dir != SplitH {
+		return []*SplitNode{n}
 	}
-	h_div := [4]bool{}
-	for c := 0; c < cols; c++ {
-		h_div[c] = grid[0][c] != grid[1][c]
-	}
-
-	hi := func(id int) bool { return highlight_id >= 0 && id == highlight_id }
-
-	// Color a border char: orange if it touches a highlighted cell, dim grey otherwise
-	bdr := func(ch string, touches_highlight bool) string {
-		if touches_highlight {
-			return mapOrange + ch + mapReset
-		}
-		return mapDim + ch + mapReset
-	}
-
-	// Top line
-	top := bdr("┌", hi(grid[0][0]))
-	for c := 0; c < cols-1; c++ {
-		top += bdr("─", hi(grid[0][c]))
-		if v_div[0][c] {
-			top += bdr("┬", hi(grid[0][c]) || hi(grid[0][c+1]))
-		} else {
-			top += bdr("─", hi(grid[0][c]))
-		}
-	}
-	top += bdr("─", hi(grid[0][cols-1]))
-	top += bdr("┐", hi(grid[0][cols-1]))
-
-	// Middle line
-	mid := ""
-	any_h := h_div[0] || h_div[1] || h_div[2] || h_div[3]
-	if any_h {
-		if h_div[0] {
-			mid += bdr("├", hi(grid[0][0]) || hi(grid[1][0]))
-		} else {
-			mid += bdr("│", hi(grid[0][0]))
-		}
-		for c := 0; c < cols-1; c++ {
-			if h_div[c] {
-				mid += bdr("─", hi(grid[0][c]) || hi(grid[1][c]))
-			} else {
-				mid += " "
-			}
-			hl := h_div[c]
-			hr := h_div[c+1]
-			vt := v_div[0][c]
-			vb := v_div[1][c]
-			jn := box_junction(hl, hr, vt, vb)
-			touches := hi(grid[0][c]) || hi(grid[0][c+1]) || hi(grid[1][c]) || hi(grid[1][c+1])
-			mid += bdr(jn, touches)
-		}
-		if h_div[cols-1] {
-			mid += bdr("─", hi(grid[0][cols-1]) || hi(grid[1][cols-1]))
-			mid += bdr("┤", hi(grid[0][cols-1]) || hi(grid[1][cols-1]))
-		} else {
-			mid += " "
-			mid += bdr("│", hi(grid[0][cols-1]))
-		}
-	} else {
-		mid += bdr("│", hi(grid[0][0]))
-		for c := 0; c < cols-1; c++ {
-			mid += " "
-			if v_div[0][c] || v_div[1][c] {
-				mid += bdr("│", hi(grid[0][c]) || hi(grid[0][c+1]))
-			} else {
-				mid += " "
-			}
-		}
-		mid += " "
-		mid += bdr("│", hi(grid[0][cols-1]))
-	}
-
-	// Bottom line
-	bot := bdr("└", hi(grid[1][0]))
-	for c := 0; c < cols-1; c++ {
-		bot += bdr("─", hi(grid[1][c]))
-		if v_div[1][c] {
-			bot += bdr("┴", hi(grid[1][c]) || hi(grid[1][c+1]))
-		} else {
-			bot += bdr("─", hi(grid[1][c]))
-		}
-	}
-	bot += bdr("─", hi(grid[1][cols-1]))
-	bot += bdr("┘", hi(grid[1][cols-1]))
-
-	return []string{top, mid, bot}
+	return append(flatten_h_children(n.Left), flatten_h_children(n.Right)...)
 }
 
-// box_junction returns the correct box-drawing character for a junction point.
-// h_left/h_right: horizontal line extends left/right.
-// v_top/v_bot: vertical line extends up/down.
-func box_junction(h_left, h_right, v_top, v_bot bool) string {
-	switch {
-	case h_left && h_right && v_top && v_bot:
-		return "┼"
-	case h_left && h_right && v_top:
-		return "┴"
-	case h_left && h_right && v_bot:
-		return "┬"
-	case h_left && h_right:
-		return "─"
-	case v_top && v_bot && h_right:
-		return "├"
-	case v_top && v_bot && h_left:
-		return "┤"
-	case v_top && v_bot:
-		return "│"
-	case h_right && v_bot:
-		return "┌"
-	case h_left && v_bot:
-		return "┐"
-	case h_right && v_top:
-		return "└"
-	case h_left && v_top:
-		return "┘"
-	case h_left || h_right:
-		return "─"
-	case v_top || v_bot:
-		return "│"
-	default:
-		return " "
+// flatten_v_children collects all children of consecutive V-splits into a flat list.
+func flatten_v_children(n *SplitNode) []*SplitNode {
+	if n == nil || n.is_leaf() || n.Dir != SplitV {
+		return []*SplitNode{n}
 	}
+	return append(flatten_v_children(n.Left), flatten_v_children(n.Right)...)
 }

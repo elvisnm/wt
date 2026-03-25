@@ -60,18 +60,21 @@ func TestAddSplitV(t *testing.T) {
 }
 
 func TestAddMaxCapacity(t *testing.T) {
+	// MaxGroupPanes is now 6 (absolute ceiling)
 	g := NewTabGroup(1, mock_session(1, "S1"))
 	g.Add(mock_session(2, "S2"), 1, SplitH)
 	g.Add(mock_session(3, "S3"), 2, SplitV)
 	g.Add(mock_session(4, "S4"), 1, SplitV)
+	g.Add(mock_session(5, "S5"), 3, SplitH)
+	g.Add(mock_session(6, "S6"), 5, SplitV)
 
-	if g.Count() != 4 {
-		t.Errorf("Count = %d, want 4", g.Count())
+	if g.Count() != 6 {
+		t.Errorf("Count = %d, want 6", g.Count())
 	}
 
-	// 5th should fail
-	if g.Add(mock_session(5, "S5"), 3, SplitH) {
-		t.Error("Add should fail at max capacity")
+	// 7th should fail (absolute ceiling)
+	if g.Add(mock_session(7, "S7"), 4, SplitH) {
+		t.Error("Add should fail at absolute ceiling (6)")
 	}
 }
 
@@ -118,69 +121,224 @@ func TestSessionIDs(t *testing.T) {
 	}
 }
 
-// ── Layout Map Tests ────────────────────────────────────────────────────
+// ── Dot Map Tests ────────────────────────────────────────────────────────
 
-func TestLayoutMap2H(t *testing.T) {
+// strip_ansi removes ANSI escape codes for test assertions.
+func strip_ansi(s string) string {
+	result := ""
+	in_escape := false
+	for _, r := range s {
+		if r == '\033' {
+			in_escape = true
+			continue
+		}
+		if in_escape {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				in_escape = false
+			}
+			continue
+		}
+		result += string(r)
+	}
+	return result
+}
+
+// count_dots counts the ● characters in a string (ignoring ANSI codes).
+func count_dots(s string) int {
+	return strings.Count(strip_ansi(s), "\u25cf")
+}
+
+func TestDotMap2H(t *testing.T) {
 	g := NewTabGroup(1, mock_session(1, "S1"))
 	g.Add(mock_session(2, "S2"), 1, SplitH)
 
 	lines := g.LayoutMap()
-	if len(lines) != 3 {
-		t.Fatalf("LayoutMap should return 3 lines, got %d", len(lines))
+	if len(lines) != 1 {
+		t.Fatalf("2H: want 1 line, got %d", len(lines))
 	}
-	// Should have vertical divider
-	if !strings.Contains(lines[0], "┬") {
-		t.Errorf("top line should have ┬: %q", lines[0])
+	if count_dots(lines[0]) != 2 {
+		t.Errorf("2H: want 2 dots, got %d in %q", count_dots(lines[0]), strip_ansi(lines[0]))
 	}
-	if !strings.Contains(lines[2], "┴") {
-		t.Errorf("bottom line should have ┴: %q", lines[2])
-	}
-	t.Logf("2H:\n%s", strings.Join(lines, "\n"))
+	t.Logf("2H: %s", strip_ansi(lines[0]))
 }
 
-func TestLayoutMap2V(t *testing.T) {
+func TestDotMap2V(t *testing.T) {
 	g := NewTabGroup(1, mock_session(1, "S1"))
 	g.Add(mock_session(2, "S2"), 1, SplitV)
 
 	lines := g.LayoutMap()
-	if len(lines) != 3 {
-		t.Fatalf("LayoutMap should return 3 lines, got %d", len(lines))
+	if len(lines) != 2 {
+		t.Fatalf("2V: want 2 lines, got %d", len(lines))
 	}
-	// Should have horizontal divider
-	if !strings.Contains(lines[1], "├") || !strings.Contains(lines[1], "┤") {
-		t.Errorf("middle line should have ├ and ┤: %q", lines[1])
+	for i, l := range lines {
+		if count_dots(l) != 1 {
+			t.Errorf("2V line %d: want 1 dot, got %d", i, count_dots(l))
+		}
 	}
-	t.Logf("2V:\n%s", strings.Join(lines, "\n"))
+	t.Logf("2V:\n%s", strip_ansi(strings.Join(lines, "\n")))
 }
 
-func TestLayoutMapMixed3(t *testing.T) {
-	// S1 | S2 with S2 split into S2/S3 vertically
-	// Result: S1 full left, S2 top-right, S3 bottom-right
+func TestDotMap3H(t *testing.T) {
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+	g.Add(mock_session(3, "S3"), 2, SplitH)
+
+	lines := g.LayoutMap()
+	if len(lines) != 1 {
+		t.Fatalf("3H: want 1 line, got %d", len(lines))
+	}
+	if count_dots(lines[0]) != 3 {
+		t.Errorf("3H: want 3 dots, got %d", count_dots(lines[0]))
+	}
+	t.Logf("3H: %s", strip_ansi(lines[0]))
+}
+
+func TestDotMap3V(t *testing.T) {
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitV)
+	g.Add(mock_session(3, "S3"), 2, SplitV)
+
+	lines := g.LayoutMap()
+	if len(lines) != 3 {
+		t.Fatalf("3V: want 3 lines, got %d", len(lines))
+	}
+	t.Logf("3V:\n%s", strip_ansi(strings.Join(lines, "\n")))
+}
+
+func TestDotMap6H(t *testing.T) {
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+	g.Add(mock_session(3, "S3"), 2, SplitH)
+	g.Add(mock_session(4, "S4"), 3, SplitH)
+	g.Add(mock_session(5, "S5"), 4, SplitH)
+	g.Add(mock_session(6, "S6"), 5, SplitH)
+
+	lines := g.LayoutMap()
+	if len(lines) != 1 {
+		t.Fatalf("6H: want 1 line, got %d", len(lines))
+	}
+	if count_dots(lines[0]) != 6 {
+		t.Errorf("6H: want 6 dots, got %d", count_dots(lines[0]))
+	}
+	t.Logf("6H: %s", strip_ansi(lines[0]))
+}
+
+func TestDotMapMixed_HV(t *testing.T) {
+	// H(1, V(2, 3)): 2 columns, right has 2 rows → 2 lines
 	g := NewTabGroup(1, mock_session(1, "S1"))
 	g.Add(mock_session(2, "S2"), 1, SplitH)
 	g.Add(mock_session(3, "S3"), 2, SplitV)
 
 	lines := g.LayoutMap()
-	if len(lines) != 3 {
-		t.Fatalf("LayoutMap should return 3 lines, got %d", len(lines))
+	if len(lines) != 2 {
+		t.Fatalf("H(1,V(2,3)): want 2 lines, got %d", len(lines))
 	}
-	t.Logf("Mixed 3 (1 left + 2 right stacked):\n%s", strings.Join(lines, "\n"))
+	if count_dots(lines[0]) != 2 {
+		t.Errorf("line 0: want 2 dots, got %d", count_dots(lines[0]))
+	}
+	if count_dots(lines[1]) != 1 {
+		t.Errorf("line 1: want 1 dot, got %d", count_dots(lines[1]))
+	}
+	t.Logf("H(1,V(2,3)):\n%s", strip_ansi(strings.Join(lines, "\n")))
 }
 
-func TestLayoutMap4Grid(t *testing.T) {
-	// S1 | S2, then S1 splits to S1/S3, S2 splits to S2/S4
+func TestDotMapMixed_VH(t *testing.T) {
+	// V(H(1, 3), 2): top row has 2 columns, bottom has 1 → 2 lines
+	// This is the nested H-within-V case that used to lose session 3.
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitV)
+	g.Add(mock_session(3, "S3"), 1, SplitH)
+
+	lines := g.LayoutMap()
+	if len(lines) != 2 {
+		t.Fatalf("V(H(1,3),2): want 2 lines, got %d", len(lines))
+	}
+	// Row 0: 2 dots (pane 1, pane 3). Row 1: 1 dot (pane 2)
+	if count_dots(lines[0]) != 2 {
+		t.Errorf("line 0: want 2 dots, got %d", count_dots(lines[0]))
+	}
+	if count_dots(lines[1]) != 1 {
+		t.Errorf("line 1: want 1 dot, got %d", count_dots(lines[1]))
+	}
+	t.Logf("V(H(1,3),2):\n%s", strip_ansi(strings.Join(lines, "\n")))
+}
+
+func TestDotMap3x2Grid(t *testing.T) {
+	// 3 columns × 2 rows
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+	g.Add(mock_session(3, "S3"), 2, SplitH)
+	g.Add(mock_session(4, "S4"), 1, SplitV)
+	g.Add(mock_session(5, "S5"), 2, SplitV)
+	g.Add(mock_session(6, "S6"), 3, SplitV)
+
+	lines := g.LayoutMap()
+	if len(lines) != 2 {
+		t.Fatalf("3x2: want 2 lines, got %d", len(lines))
+	}
+	for i, l := range lines {
+		if count_dots(l) != 3 {
+			t.Errorf("3x2 line %d: want 3 dots, got %d", i, count_dots(l))
+		}
+	}
+	t.Logf("3x2:\n%s", strip_ansi(strings.Join(lines, "\n")))
+}
+
+func TestDotMapHighlight(t *testing.T) {
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+	g.Add(mock_session(3, "S3"), 2, SplitV)
+
+	// Highlight session 1 — appears only in row 0 (spans full height, dot in first row)
+	lines := g.LayoutMapHighlighted(1)
+	if len(lines) != 2 {
+		t.Fatalf("want 2 lines, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0], dotOrange) {
+		t.Error("line 0 should have orange highlight for session 1")
+	}
+	t.Logf("Highlighted(1):\n%s", strings.Join(lines, "\n"))
+
+	// Highlight session 3 — appears only in row 1
+	lines = g.LayoutMapHighlighted(3)
+	if !strings.Contains(lines[1], dotOrange) {
+		t.Error("line 1 should have orange highlight for session 3")
+	}
+	t.Logf("Highlighted(3):\n%s", strings.Join(lines, "\n"))
+}
+
+func TestDotMap2x2Grid(t *testing.T) {
 	g := NewTabGroup(1, mock_session(1, "S1"))
 	g.Add(mock_session(2, "S2"), 1, SplitH)
 	g.Add(mock_session(3, "S3"), 1, SplitV)
 	g.Add(mock_session(4, "S4"), 2, SplitV)
 
 	lines := g.LayoutMap()
-	if len(lines) != 3 {
-		t.Fatalf("LayoutMap should return 3 lines, got %d", len(lines))
+	if len(lines) != 2 {
+		t.Fatalf("2x2: want 2 lines, got %d", len(lines))
 	}
-	// Should have cross junction
-	if !strings.Contains(lines[1], "┼") {
-		t.Errorf("middle line should have ┼ for 2x2 grid: %q", lines[1])
+	for i, l := range lines {
+		if count_dots(l) != 2 {
+			t.Errorf("2x2 line %d: want 2 dots, got %d", i, count_dots(l))
+		}
 	}
-	t.Logf("4-pane 2x2 grid:\n%s", strings.Join(lines, "\n"))
+	t.Logf("2x2:\n%s", strip_ansi(strings.Join(lines, "\n")))
+}
+
+func TestCountVLeaves(t *testing.T) {
+	// Single leaf
+	if v := count_v_leaves(&SplitNode{SessionID: 1}); v != 1 {
+		t.Errorf("single leaf: got %d, want 1", v)
+	}
+	// V(1, 2) = 2 rows
+	tree := &SplitNode{SessionID: -1, Dir: SplitV,
+		Left: &SplitNode{SessionID: 1}, Right: &SplitNode{SessionID: 2}}
+	if v := count_v_leaves(tree); v != 2 {
+		t.Errorf("V(1,2): got %d, want 2", v)
+	}
+	// H(V(1,2), 3) = still 1 (H doesn't add rows)
+	htree := &SplitNode{SessionID: -1, Dir: SplitH, Left: tree, Right: &SplitNode{SessionID: 3}}
+	if v := count_v_leaves(htree); v != 1 {
+		t.Errorf("H(V(1,2), 3): got %d, want 1", v)
+	}
 }

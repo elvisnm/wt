@@ -11,6 +11,10 @@ const (
 	DefaultLeftPanePct = 20
 	MinLeftPanePct     = 15
 	MaxLeftPanePct     = 40
+
+	DefaultMaxPanesPerGroup = 4
+	MinMaxPanesPerGroup     = 2
+	MaxMaxPanesPerGroup     = 6
 )
 
 // Settings holds user preferences that persist across dashboard sessions.
@@ -20,6 +24,9 @@ type Settings struct {
 
 	// LeftPanePct is the width of the left bubbletea pane as a percentage (15-40).
 	LeftPanePct int `json:"left_pane_pct"`
+
+	// Split pane limit: max sessions per group (2-6)
+	MaxPanesPerGroup int `json:"max_panes_per_group"`
 }
 
 // PanelDefaults controls which optional panels open by default.
@@ -32,14 +39,18 @@ type PanelDefaults struct {
 // Defaults returns a Settings with default values.
 func Defaults() Settings {
 	return Settings{
-		LeftPanePct: DefaultLeftPanePct,
+		LeftPanePct:      DefaultLeftPanePct,
+		MaxPanesPerGroup: DefaultMaxPanesPerGroup,
 	}
 }
 
-// clamp ensures LeftPanePct is within the valid range.
+// clamp ensures all fields are within valid ranges.
 func (s *Settings) clamp() {
 	if s.LeftPanePct < MinLeftPanePct || s.LeftPanePct > MaxLeftPanePct {
 		s.LeftPanePct = DefaultLeftPanePct
+	}
+	if s.MaxPanesPerGroup < MinMaxPanesPerGroup || s.MaxPanesPerGroup > MaxMaxPanesPerGroup {
+		s.MaxPanesPerGroup = DefaultMaxPanesPerGroup
 	}
 }
 

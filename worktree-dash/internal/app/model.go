@@ -206,8 +206,9 @@ func NewModelWithLayout(server *terminal.TmuxServer, pl *terminal.PaneLayout) Mo
 	mgr := terminal.NewManagerWithServer(server)
 	mgr.SetPaneLayout(pl)
 
-	// Load user settings and apply default panel visibility
+	// Load user settings and apply default panel visibility + split limits
 	s := settings.Load()
+	mgr.SetSplitLimits(s.MaxPanesPerGroup)
 
 	return Model{
 		focus:           PanelWorktrees,

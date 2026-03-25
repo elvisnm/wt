@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -12,13 +13,14 @@ import (
 // Each tab group contains 1+ sessions arranged in a split layout.
 // Integrates with PaneLayout to swap the active group into the right viewport.
 type Manager struct {
-	groups       []*TabGroup
-	active_tab   int
-	next_id      int // session IDs
+	groups        []*TabGroup
+	active_tab    int
+	next_id       int // session IDs
 	next_group_id int
-	server       *TmuxServer
-	panes        *PaneLayout
-	mu           sync.Mutex
+	server        *TmuxServer
+	panes         *PaneLayout
+	max_panes     int // max panes per group (from settings, default 4)
+	mu            sync.Mutex
 }
 
 // NewManager creates a Manager that owns its own TmuxServer.
@@ -35,6 +37,23 @@ func NewManagerWithServer(server *TmuxServer) *Manager {
 		server:  server,
 		next_id: 1,
 	}
+}
+
+// SetSplitLimits sets the max panes per group.
+func (mgr *Manager) SetSplitLimits(max_panes int) {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	mgr.max_panes = max_panes
+}
+
+// MaxPanes returns the configured max panes per group.
+func (mgr *Manager) MaxPanes() int {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	if mgr.max_panes <= 0 {
+		return 4 // default
+	}
+	return mgr.max_panes
 }
 
 // SetPaneLayout attaches a PaneLayout for swap-pane integration.
@@ -57,10 +76,11 @@ func (mgr *Manager) Server() *TmuxServer {
 }
 
 // group_extras builds the GroupPane slice for a group's non-primary sessions.
-// The join sequence reconstructs the layout by walking the split tree:
+// The join sequence reconstructs the layout by walking the split tree breadth-first:
 // - The primary (leftmost leaf) is swap-paned into the viewport first
-// - Each split node produces a join-pane of the right child targeting the left child
-// Returns nil for single-session groups.
+// - Joins are sorted by depth, with H-splits before V-splits at each level
+// This ensures H-splits establish the column skeleton before V-splits fill in rows.
+// Without this ordering, V-splits nested under H-splits produce wrong tmux layouts.
 func group_extras(g *TabGroup) []GroupPane {
 	if g == nil || g.Count() <= 1 {
 		return nil
@@ -70,43 +90,60 @@ func group_extras(g *TabGroup) []GroupPane {
 		return nil
 	}
 
-	var extras []GroupPane
+	type joinOp struct {
+		pane_id   string
+		window    string
+		dir       SplitDir
+		target_id string
+		depth     int
+	}
 
-	// Walk tree in-order. For each internal node, the left subtree is shown first,
-	// then the right subtree is joined onto the left subtree's first leaf (target pane).
-	var walk func(n *SplitNode) int // returns the first session ID in this subtree
-	walk = func(n *SplitNode) int {
-		if n == nil {
-			return -1
+	var ops []joinOp
+
+	// Walk tree to collect all join operations with their depth
+	var walk func(n *SplitNode, depth int)
+	walk = func(n *SplitNode, depth int) {
+		if n == nil || n.is_leaf() {
+			return
 		}
-		if n.is_leaf() {
-			return n.SessionID
-		}
-
-		// Show left subtree first (its first leaf becomes the target)
-		left_first := walk(n.Left)
-
-		// The right subtree's first leaf needs to be joined onto left_first
+		left_first := first_leaf(n.Left)
 		right_first := first_leaf(n.Right)
-		if right_first >= 0 {
+		if left_first >= 0 && right_first >= 0 {
 			s := g.SessionByID(right_first)
 			target_s := g.SessionByID(left_first)
 			if s != nil && target_s != nil {
-				extras = append(extras, GroupPane{
-					PaneID:   s.PaneID(),
-					Window:   s.Window(),
-					Dir:      n.Dir,
-					TargetID: target_s.PaneID(),
+				ops = append(ops, joinOp{
+					pane_id:   s.PaneID(),
+					window:    s.Window(),
+					dir:       n.Dir,
+					target_id: target_s.PaneID(),
+					depth:     depth,
 				})
 			}
 		}
-
-		// Continue walking the right subtree for nested splits
-		walk(n.Right)
-
-		return left_first
+		walk(n.Left, depth+1)
+		walk(n.Right, depth+1)
 	}
-	walk(tree)
+	walk(tree, 0)
+
+	// Sort: depth ascending, then H-splits before V-splits at same depth.
+	// This ensures columns are established before rows are filled in.
+	sort.SliceStable(ops, func(i, j int) bool {
+		if ops[i].depth != ops[j].depth {
+			return ops[i].depth < ops[j].depth
+		}
+		return ops[i].dir == SplitH && ops[j].dir == SplitV
+	})
+
+	extras := make([]GroupPane, len(ops))
+	for i, op := range ops {
+		extras[i] = GroupPane{
+			PaneID:   op.pane_id,
+			Window:   op.window,
+			Dir:      op.dir,
+			TargetID: op.target_id,
+		}
+	}
 	return extras
 }
 
@@ -199,6 +236,20 @@ func (mgr *Manager) OpenNew(label string, cmd_name string, args []string, width,
 	return s, nil
 }
 
+// equalize_active_locked equalizes the right-side panes if the active group
+// is a split group. Caller must hold mgr.mu.
+func (mgr *Manager) equalize_active_locked() {
+	if mgr.panes == nil {
+		return
+	}
+	if mgr.active_tab >= 0 && mgr.active_tab < len(mgr.groups) {
+		g := mgr.groups[mgr.active_tab]
+		if g.IsSplit() {
+			mgr.panes.equalize_right_panes(g)
+		}
+	}
+}
+
 // ── Focus / Navigation ──────────────────────────────────────────────────
 
 // FocusByLabel finds a live session by label across all groups and focuses its group.
@@ -220,6 +271,7 @@ func (mgr *Manager) FocusByLabel(label string) *Session {
 						from_extras = group_extras(mgr.groups[old_idx])
 					}
 					mgr.panes.SwitchGroup(from_win, from_extras, g.Primary().Window(), group_extras(g))
+					mgr.equalize_active_locked()
 				}
 
 				return s
@@ -249,6 +301,7 @@ func (mgr *Manager) FocusByIndex(idx int) *Session {
 			from_extras = group_extras(mgr.groups[old_idx])
 		}
 		mgr.panes.SwitchGroup(from_win, from_extras, mgr.groups[idx].Primary().Window(), group_extras(mgr.groups[idx]))
+		mgr.equalize_active_locked()
 	}
 
 	return mgr.groups[idx].Primary()
@@ -370,9 +423,13 @@ func (mgr *Manager) SplitInto(target_session_id int, label, cmd_name string, arg
 		mgr.mu.Unlock()
 		return nil, fmt.Errorf("session %d not found in any group", target_session_id)
 	}
-	if target_group.Count() >= MaxGroupPanes {
+	max := mgr.max_panes
+	if max <= 0 {
+		max = 4
+	}
+	if target_group.Count() >= max {
 		mgr.mu.Unlock()
-		return nil, fmt.Errorf("group already has %d panes (max %d)", target_group.Count(), MaxGroupPanes)
+		return nil, fmt.Errorf("max %d panes per group", max)
 	}
 
 	id := mgr.next_id
@@ -414,7 +471,9 @@ func (mgr *Manager) SplitInto(target_session_id int, label, cmd_name string, arg
 		pl.active_extras = group_extras(target_group)
 		pl.mu.Unlock()
 
-		// Focus back to the left pane so bubbletea keeps getting input
+		// Equalize right-side panes by resizing each to equal share
+		pl.equalize_right_panes(target_group)
+		pl.restore_left_width()
 		pl.server.Run("select-pane", "-t", pl.left_pane_id)
 	}
 
@@ -457,9 +516,13 @@ func (mgr *Manager) MoveInto(session_id, target_session_id int, split_dir SplitD
 		mgr.mu.Unlock()
 		return fmt.Errorf("can only move standalone sessions")
 	}
-	if target_group.Count() >= MaxGroupPanes {
+	max := mgr.max_panes
+	if max <= 0 {
+		max = 4
+	}
+	if target_group.Count() >= max {
 		mgr.mu.Unlock()
-		return fmt.Errorf("target group at max capacity")
+		return fmt.Errorf("max %d panes per group", max)
 	}
 
 	pl := mgr.panes
@@ -497,12 +560,14 @@ func (mgr *Manager) MoveInto(session_id, target_session_id int, split_dir SplitD
 		// Return current viewport and re-show with updated group
 		pl.ReturnSession()
 		pl.ShowGroup(target_group.Primary().Window(), group_extras(target_group))
+		mgr.equalize_active_locked()
 	}
 
 	// If source was active and target is not, show target
 	if was_source_active && !is_target_active && pl != nil {
 		mgr.active_tab = target_idx
 		pl.ShowGroup(target_group.Primary().Window(), group_extras(target_group))
+		mgr.equalize_active_locked()
 	}
 
 	mgr.mu.Unlock()
@@ -528,6 +593,7 @@ func (mgr *Manager) NextTab() {
 			mgr.groups[mgr.active_tab].Primary().Window(),
 			group_extras(mgr.groups[mgr.active_tab]),
 		)
+		mgr.equalize_active_locked()
 	}
 }
 
@@ -548,6 +614,7 @@ func (mgr *Manager) PrevTab() {
 			mgr.groups[mgr.active_tab].Primary().Window(),
 			group_extras(mgr.groups[mgr.active_tab]),
 		)
+		mgr.equalize_active_locked()
 	}
 }
 
@@ -584,6 +651,7 @@ func (mgr *Manager) CloseActive() bool {
 	if has_tabs && pl != nil {
 		next := mgr.groups[mgr.active_tab]
 		pl.ShowGroup(next.Primary().Window(), group_extras(next))
+		mgr.equalize_active_locked()
 	}
 
 	mgr.mu.Unlock()
@@ -620,6 +688,7 @@ func (mgr *Manager) CloseByLabel(label string) {
 				if len(mgr.groups) > 0 && pl != nil && was_active {
 					next := mgr.groups[mgr.active_tab]
 					pl.ShowGroup(next.Primary().Window(), group_extras(next))
+					mgr.equalize_active_locked()
 				}
 
 				go s.Close()
@@ -636,7 +705,7 @@ func (mgr *Manager) CloseByLabel(label string) {
 					pl.active_win = g.Primary().Window()
 					pl.active_extras = group_extras(g)
 					pl.mu.Unlock()
-					pl.restore_left_width()
+					pl.equalize_right_panes(g)
 					pl.server.Run("select-pane", "-t", pl.left_pane_id)
 				}
 
@@ -681,6 +750,7 @@ func (mgr *Manager) CloseBySessionID(session_id int) {
 			if len(mgr.groups) > 0 && pl != nil && was_active {
 				next := mgr.groups[mgr.active_tab]
 				pl.ShowGroup(next.Primary().Window(), group_extras(next))
+				mgr.equalize_active_locked()
 			}
 
 			go s.Close()
@@ -699,7 +769,7 @@ func (mgr *Manager) CloseBySessionID(session_id int) {
 				pl.active_win = g.Primary().Window()
 				pl.active_extras = group_extras(g)
 				pl.mu.Unlock()
-				pl.restore_left_width()
+				pl.equalize_right_panes(g)
 				pl.server.Run("select-pane", "-t", pl.left_pane_id)
 			}
 

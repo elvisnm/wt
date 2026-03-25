@@ -18,6 +18,7 @@ const (
 	itemUsage
 	itemTasks
 	itemLeftPane
+	itemMaxPanes
 	itemSave
 	itemExit
 	itemCount // sentinel
@@ -84,16 +85,30 @@ func runSettings() {
 				cursor++
 			}
 
-		// Arrow left — decrease left pane pct
+		// Arrow left — decrease range value
 		case n == 3 && buf[0] == 0x1b && buf[1] == '[' && buf[2] == 'D':
-			if cursor == itemLeftPane && s.LeftPanePct > settings.MinLeftPanePct {
-				s.LeftPanePct--
+			switch cursor {
+			case itemLeftPane:
+				if s.LeftPanePct > settings.MinLeftPanePct {
+					s.LeftPanePct--
+				}
+			case itemMaxPanes:
+				if s.MaxPanesPerGroup > settings.MinMaxPanesPerGroup {
+					s.MaxPanesPerGroup--
+				}
 			}
 
-		// Arrow right — increase left pane pct
+		// Arrow right — increase range value
 		case n == 3 && buf[0] == 0x1b && buf[1] == '[' && buf[2] == 'C':
-			if cursor == itemLeftPane && s.LeftPanePct < settings.MaxLeftPanePct {
-				s.LeftPanePct++
+			switch cursor {
+			case itemLeftPane:
+				if s.LeftPanePct < settings.MaxLeftPanePct {
+					s.LeftPanePct++
+				}
+			case itemMaxPanes:
+				if s.MaxPanesPerGroup < settings.MaxMaxPanesPerGroup {
+					s.MaxPanesPerGroup++
+				}
 			}
 
 		// Space / Enter — toggle or action
@@ -135,7 +150,8 @@ func runSettings() {
 
 func settings_changed(original, current settings.Settings) bool {
 	return original.DefaultPanels != current.DefaultPanels ||
-		original.LeftPanePct != current.LeftPanePct
+		original.LeftPanePct != current.LeftPanePct ||
+		original.MaxPanesPerGroup != current.MaxPanesPerGroup
 }
 
 func draw_settings(s settings.Settings, cursor settingsItem, saved bool) {
@@ -171,6 +187,14 @@ func draw_settings(s settings.Settings, cursor settingsItem, saved bool) {
 	width_lines = append(width_lines, settings_range(cursor == itemLeftPane, s.LeftPanePct, settings.MinLeftPanePct, settings.MaxLeftPanePct, col_w-6))
 	width_lines = append(width_lines, ansiDim+"Use "+ansiReset+guideKey("←")+ansiDim+" / "+ansiReset+guideKey("→")+ansiDim+" to adjust"+ansiReset)
 	lines = append(lines, guideBox("Left Pane Width", width_lines, col_w)...)
+
+	lines = append(lines, "")
+
+	// Split Panes box
+	var split_lines []string
+	split_lines = append(split_lines, settings_range_label(cursor == itemMaxPanes, "Max   ", s.MaxPanesPerGroup, settings.MinMaxPanesPerGroup, settings.MaxMaxPanesPerGroup, col_w-6))
+	split_lines = append(split_lines, ansiDim+"Sessions per group"+ansiReset)
+	lines = append(lines, guideBox("Split Panes", split_lines, col_w)...)
 
 	lines = append(lines, "")
 
@@ -261,4 +285,39 @@ func settings_range(focused bool, value, min_val, max_val, max_w int) string {
 	label := fmt.Sprintf("%s%d%%%s", ansiBold, value, ansiReset)
 
 	return fmt.Sprintf("%s%s  %s", prefix, bar, label)
+}
+
+func settings_range_label(focused bool, name string, value, min_val, max_val, max_w int) string {
+	prefix := "  "
+	if focused {
+		prefix = ansiCyan + "▸ " + ansiReset
+	}
+
+	track_w := max_w - 18
+	if track_w < 6 {
+		track_w = 6
+	}
+	if track_w > 30 {
+		track_w = 30
+	}
+
+	filled := 0
+	if max_val > min_val {
+		filled = (value - min_val) * track_w / (max_val - min_val)
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > track_w {
+		filled = track_w
+	}
+	empty := track_w - filled
+
+	bar := ansiCyan + strings.Repeat("█", filled) +
+		ansiDim + strings.Repeat("░", empty) + ansiReset
+
+	label := fmt.Sprintf("%s%d%s", ansiBold, value, ansiReset)
+	name_styled := ansiDim + name + ": " + ansiReset
+
+	return fmt.Sprintf("%s%s%s  %s", prefix, name_styled, bar, label)
 }
