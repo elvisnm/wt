@@ -1109,6 +1109,26 @@ func (m Model) handle_terminal_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case msg.String() == "m":
 		return m.open_merge_picker()
+
+	case msg.String() == "r":
+		// Rename the session under the cursor
+		tab_labels = m.term_mgr.TabLabels()
+		if m.tab_cursor >= 0 && m.tab_cursor < len(tab_labels) {
+			tl := tab_labels[m.tab_cursor]
+			if tl.SessionID > 0 {
+				session_id := tl.SessionID
+				return m.open_panel_input("Rename", "New name:", func(mdl *Model, val string) (Model, tea.Cmd) {
+					for _, s := range mdl.term_mgr.Sessions() {
+						if s.ID == session_id {
+							s.Label = val
+							break
+						}
+					}
+					return *mdl, nil
+				})
+			}
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -2339,6 +2359,10 @@ func (m Model) handle_input_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.input_value) > 0 {
 			m.input_value = m.input_value[:len(m.input_value)-1]
 		}
+		return m, nil
+
+	case msg.Type == tea.KeySpace:
+		m.input_value += " "
 		return m, nil
 
 	case msg.Type == tea.KeyRunes:
