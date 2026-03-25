@@ -182,9 +182,27 @@ func merge_pm2_into_static(static_svcs []worktree.Service, pm2_svcs []worktree.S
 		}
 	}
 
-	// Update matching static entries with PM2 status
+	// Update matching static entries with PM2 status.
+	// PM2 names are namespaced (e.g. "app-feat-my-branch"), so try the full
+	// name first, then strip known worktree suffixes to find the base name.
 	for pm2_name, pm2_svc := range pm2_map {
 		idx, ok := pm2_to_static[pm2_name]
+		if !ok {
+			// Strip worktree suffix: "app-feat-my-branch" -> "app"
+			base := pm2_name
+			for _, entry := range cfg.Dash.Services.List {
+				for _, proc := range entry.BaseProcesses() {
+					if strings.HasPrefix(pm2_name, proc+"-") {
+						base = proc
+						break
+					}
+				}
+				if base != pm2_name {
+					break
+				}
+			}
+			idx, ok = pm2_to_static[base]
+		}
 		if !ok {
 			debug_log("[services] merge_pm2: no config match for PM2 process %q", pm2_name)
 			continue

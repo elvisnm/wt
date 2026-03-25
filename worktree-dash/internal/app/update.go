@@ -1438,7 +1438,7 @@ func (m Model) open_service_logs(wt worktree.Worktree, svc worktree.Service) (Mo
 				label = labels.Tab(labels.Logs, wt.Alias)
 			} else {
 				target := m.pm2_log_target(svc, wt)
-				args = []string{"-c", fmt.Sprintf("PM2_HOME=%s exec pm2 logs %s --lines 80", pm2_home, target)}
+				args = []string{"-c", fmt.Sprintf("PM2_HOME=%s exec pm2 logs '%s' --lines 80", pm2_home, target)}
 				label = labels.Tab(labels.Logs, svc_label)
 			}
 		} else {
@@ -1675,7 +1675,7 @@ func (m *Model) open_preview_logs(wt worktree.Worktree, svc worktree.Service) te
 				args = []string{"-c", fmt.Sprintf("PM2_HOME=%s exec pm2 logs --lines 80", pm2_home)}
 			} else {
 				target := m.pm2_log_target(svc, wt)
-				args = []string{"-c", fmt.Sprintf("PM2_HOME=%s exec pm2 logs %s --lines 80", pm2_home, target)}
+				args = []string{"-c", fmt.Sprintf("PM2_HOME=%s exec pm2 logs '%s' --lines 80", pm2_home, target)}
 			}
 		} else {
 			cmd_name = "pm2"
@@ -1843,6 +1843,8 @@ func (m Model) open_worktree_info() (Model, tea.Cmd) {
 }
 
 // build_esbuild_env returns env vars needed to run the esbuild watcher.
+// Loads .env.worktree so the build script picks up SKULABS_LOCAL_APP_URL,
+// WORKTREE_PORT_OFFSET, and other worktree-specific vars.
 func build_esbuild_env(wt worktree.Worktree, cfg *config.Config) []string {
 	env := []string{"NODE_ENV=development"}
 	if cfg != nil {
@@ -1855,6 +1857,23 @@ func build_esbuild_env(wt worktree.Worktree, cfg *config.Config) []string {
 	}
 	env = append(env, fmt.Sprintf("WORKTREE_PORT_OFFSET=%d", wt.Offset))
 	env = append(env, fmt.Sprintf("WORKTREE_NAME=%s", wt.Name))
+
+	// Load .env.worktree so build script gets APP_URL, domain, etc.
+	env_filename := ".env.worktree"
+	if cfg != nil && cfg.Env.Filename != "" {
+		env_filename = cfg.Env.Filename
+	}
+	env_path := filepath.Join(wt.Path, env_filename)
+	if data, err := os.ReadFile(env_path); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			env = append(env, line)
+		}
+	}
+
 	return env
 }
 

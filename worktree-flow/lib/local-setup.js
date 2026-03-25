@@ -83,6 +83,39 @@ function generate_ecosystem(worktree_path, branch, port_offset, mode) {
 }
 
 /**
+ * Ensure default env vars (appUrl, localIp, devHeap) are in the env file.
+ * These are needed by the app to know its own URL and domain.
+ */
+function ensure_env_defaults(worktree_path, alias) {
+  if (!config) return;
+  const env_file = path.join(worktree_path, env_filename());
+  if (!fs.existsSync(env_file)) return;
+
+  const content = fs.readFileSync(env_file, 'utf8');
+  const domain = config_mod.domain_for(config, alias);
+  let updated = content;
+
+  const ip_var = config_mod.env_var(config, 'localIp');
+  const app_url_var = config_mod.env_var(config, 'appUrl');
+  const dev_heap_var = config_mod.worktree_var(config, 'devHeap');
+  const dev_heap_val = config.features.devHeap;
+
+  if (ip_var && domain && !content.includes(`${ip_var}=`)) {
+    updated = updated.trimEnd() + `\n${ip_var}=${domain}\n`;
+  }
+  if (app_url_var && domain && !content.includes(`${app_url_var}=`)) {
+    updated = updated.trimEnd() + `\n${app_url_var}=http://${domain}/\n`;
+  }
+  if (dev_heap_var && dev_heap_val && !content.includes(`${dev_heap_var}=`)) {
+    updated = updated.trimEnd() + `\n${dev_heap_var}=${dev_heap_val}\n`;
+  }
+
+  if (updated !== content) {
+    fs.writeFileSync(env_file, updated, 'utf8');
+  }
+}
+
+/**
  * Write traefik config for the worktree (unless --no-traefik).
  */
 function setup_traefik(alias, port_offset, options) {
@@ -159,6 +192,7 @@ module.exports = {
   resolve_offset,
   build_env_overrides,
   generate_ecosystem,
+  ensure_env_defaults,
   setup_traefik,
   start_services,
   stop_services,

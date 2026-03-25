@@ -623,6 +623,7 @@ function main() {
 
         const port_offset = local_setup.resolve_offset(worktree_path);
         const mode = options.mode || config.services.defaultMode || 'full';
+        local_setup.ensure_env_defaults(worktree_path, alias);
         local_setup.generate_ecosystem(worktree_path, target_branch, port_offset, mode);
         local_setup.setup_traefik(alias, port_offset, options);
 
@@ -720,6 +721,7 @@ function main() {
 
       const port_offset = local_setup.resolve_offset(worktree_path);
       const mode = options.mode || config.services.defaultMode || 'full';
+      local_setup.ensure_env_defaults(worktree_path, alias);
       const { active_services, env_overrides } = local_setup.generate_ecosystem(worktree_path, target_branch, port_offset, mode);
       console.log(`Generated ${OUTPUT_FILENAME}`);
 

@@ -180,11 +180,11 @@ func build_detail_lines(wt *worktree.Worktree, inner_w, spin_frame int, cfg *con
 		}
 		if wt.Domain != "" {
 			domain_url := fmt.Sprintf("http://%s/", wt.Domain)
-			lines = append(lines, detail_line("URL",
+			lines = append(lines, detail_line_nowrap("URL",
 				lipgloss.NewStyle().Foreground(HintColor).Render(domain_url), inner_w))
 		}
 		local_url := fmt.Sprintf("http://localhost:%d/", app_port)
-		lines = append(lines, detail_line("Local",
+		lines = append(lines, detail_line_nowrap("Local",
 			lipgloss.NewStyle().Foreground(HintColor).Render(local_url), inner_w))
 
 		if wt.Running {
@@ -295,6 +295,21 @@ func build_port_lines(wt *worktree.Worktree, cfg *config.Config) []string {
 		lines = append(lines, line)
 	}
 	return lines
+}
+
+// detail_line_nowrap renders a label:value pair, placing the value on its own
+// line when it doesn't fit beside the label. This keeps URLs on a single
+// unbroken line so terminal click-to-open works correctly.
+func detail_line_nowrap(label, value string, max_w int) string {
+	rendered_label := label_style.Render(label + ":")
+	label_w := lipgloss.Width(rendered_label) + 1
+	avail := max_w - label_w
+
+	if lipgloss.Width(value) <= avail {
+		return fmt.Sprintf("%s %s", rendered_label, value)
+	}
+	// Value on its own line — full URL stays intact for terminal linking
+	return fmt.Sprintf("%s\n  %s", rendered_label, value)
 }
 
 // detail_line returns one or more lines for a label:value pair.
