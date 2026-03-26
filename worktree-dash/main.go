@@ -860,11 +860,21 @@ func renderGuide() string {
 		guideKey("a") + " active tabs",
 	}, colW))
 
+	rightSecs = append(rightSecs, guideBox("Split Panels", []string{
+		"Split panel into multiple sessions.",
+		"",
+		guideKey("Shift+\\") + " " + ansiDim + "(|)" + ansiReset + "  split side by side",
+		guideKey("Shift+-") + " " + ansiDim + "(_)" + ansiReset + "  split below",
+		guideKey("m") + "           move tab into group",
+		guideKey("x") + "           close pane / group",
+	}, colW))
+
 	rightSecs = append(rightSecs, guideBox("More", []string{
 		guideKey("Shift+A") + " AWS keys    " + guideKey("Shift+X") + " admin",
 		guideKey("Shift+B") + " database    " + guideKey("Shift+D") + " details",
 		guideKey("Shift+L") + " LAN mode    " + guideKey("Shift+U") + " Claude usage",
 		guideKey("Shift+T") + " tasks       " + guideKey("Shift+M") + " maintenance",
+		guideKey("Shift+S") + " settings",
 		ansiDim + strings.Repeat("─", 42) + ansiReset,
 		guideKey("i") + " info  " + guideKey("r") + " restart  " + guideKey("u") + " start  " + guideKey("t") + " stop",
 		guideKey("g") + " pull latest",
@@ -1046,16 +1056,16 @@ func renderHelp() string {
 		guideKey("t") + "           stop container",
 	}, colW))
 
-	leftLines := flattenSections(leftSecs)
-
-	// --- Right column: Services, Tasks, Operations, Tmux ---
-	var rightSecs [][]string
-
-	rightSecs = append(rightSecs, helpBox("Services", []string{
+	leftSecs = append(leftSecs, helpBox("Services", []string{
 		guideKey("Enter") + "       preview logs",
 		guideKey("l") + "           pin logs (tab)",
 		guideKey("r") + "           restart service",
 	}, colW))
+
+	leftLines := flattenSections(leftSecs)
+
+	// --- Right column: Tasks, Operations, Tmux, Split Panes ---
+	var rightSecs [][]string
 
 	rightSecs = append(rightSecs, helpBox("Tasks (Shift+T)", []string{
 		guideKey("j") + " / " + guideKey("k") + "       navigate tasks",
@@ -1072,6 +1082,7 @@ func renderHelp() string {
 		guideKey("Shift+L") + "     LAN toggle",
 		guideKey("Shift+M") + "     maintenance",
 		guideKey("Shift+T") + "     tasks",
+		guideKey("Shift+S") + "     settings",
 		guideKey("Shift+U") + "     Claude usage",
 		guideKey("Shift+X") + "     admin toggle",
 	}, colW))
@@ -1080,6 +1091,14 @@ func renderHelp() string {
 		guideKey("prefix+q") + "    return to dashboard",
 		guideKey("prefix+f") + "    toggle fullscreen",
 		guideKey("prefix+1-9") + "  jump to tab N",
+	}, colW))
+
+	rightSecs = append(rightSecs, helpBox("Split Panels  (Active Tabs)", []string{
+		guideKey("Shift+\\") + " " + ansiDim + "(|)" + ansiReset + "  split side by side",
+		guideKey("Shift+-") + " " + ansiDim + "(_)" + ansiReset + "  split below",
+		guideKey("m") + "           move tab into group",
+		guideKey("x") + "           close pane / group",
+		guideKey("Enter") + "       focus selected pane",
 	}, colW))
 
 	rightLines := flattenSections(rightSecs)

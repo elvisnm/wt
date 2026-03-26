@@ -69,25 +69,46 @@ type MsgActionOutput struct {
 }
 
 func (m *Model) actions_for_worktree(wt worktree.Worktree) []ui.PickerAction {
+	var actions []ui.PickerAction
 	if wt.Type == worktree.TypeLocal {
 		if wt.Running {
-			return m.filter_local_running_actions()
+			actions = m.filter_local_running_actions()
+		} else {
+			actions = m.filter_switch_mode(ui.LocalActions)
 		}
-		return m.filter_switch_mode(ui.LocalActions)
-	}
-	if !wt.ContainerExists {
-		return m.filter_switch_mode(ui.LocalActions)
-	}
-	if wt.HostBuild {
+	} else if !wt.ContainerExists {
+		actions = m.filter_switch_mode(ui.LocalActions)
+	} else if wt.HostBuild {
 		if wt.Running {
-			return ui.HostBuildRunningActions
+			actions = ui.HostBuildRunningActions
+		} else {
+			actions = ui.HostBuildStoppedActions
 		}
-		return ui.HostBuildStoppedActions
+	} else if wt.Running {
+		actions = ui.WorktreeActions
+	} else {
+		actions = ui.StoppedActions
 	}
-	if wt.Running {
-		return ui.WorktreeActions
+
+	// When claude auto-mode is OFF, add "Claude (Auto)" option after "Claude"
+	if !m.claude_auto_mode {
+		actions = insert_claude_auto(actions)
 	}
-	return ui.StoppedActions
+	return actions
+}
+
+// insert_claude_auto inserts ActionClaudeAuto right after the "c" (Claude) entry.
+func insert_claude_auto(actions []ui.PickerAction) []ui.PickerAction {
+	for i, a := range actions {
+		if a.Key == "c" {
+			result := make([]ui.PickerAction, 0, len(actions)+1)
+			result = append(result, actions[:i+1]...)
+			result = append(result, ui.ActionClaudeAuto)
+			result = append(result, actions[i+1:]...)
+			return result
+		}
+	}
+	return actions
 }
 
 // filter_local_running_actions returns LocalRunningActions, excluding

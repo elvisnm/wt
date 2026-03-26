@@ -54,7 +54,15 @@ type Model struct {
 	picker_open    bool
 	picker_cursor  int
 	picker_actions []ui.PickerAction
-	picker_context string // pickerWorktree, pickerDB, pickerMaintenance, pickerRemove
+	picker_context string // pickerWorktree, pickerDB, pickerMaintenance, pickerRemove, pickerSplitH, pickerSplitV
+
+	// Split state: stored when split picker opens, consumed when session type is selected
+	split_target_session_id int    // session ID to split from
+	split_target_alias      string // worktree alias (for label)
+	split_target_dir        string // worktree dir (for CWD)
+
+	// Merge state: stored when merge flow starts
+	merge_source_session_id int // session being moved
 
 	// Details panel scroll
 	details_scroll int
@@ -66,6 +74,7 @@ type Model struct {
 	// Terminal
 	term_mgr        *terminal.Manager
 	terminal_output string // static output (for non-PTY actions)
+	tab_cursor      int    // cursor in the flat TabLabels list (for intra-group navigation)
 	pane_layout     *terminal.PaneLayout
 
 	// Preview: standalone log session shown in right panel without a tab
@@ -105,6 +114,9 @@ type Model struct {
 
 	// Details panel toggle
 	details_visible bool
+
+	// Claude auto-mode: when true, claude opens with --enable-auto-mode
+	claude_auto_mode bool
 
 	// Claude usage panel
 	usage_visible bool
@@ -197,8 +209,9 @@ func NewModelWithLayout(server *terminal.TmuxServer, pl *terminal.PaneLayout) Mo
 	mgr := terminal.NewManagerWithServer(server)
 	mgr.SetPaneLayout(pl)
 
-	// Load user settings and apply default panel visibility
+	// Load user settings and apply default panel visibility + split limits
 	s := settings.Load()
+	mgr.SetSplitLimits(s.MaxPanesPerGroup)
 
 	return Model{
 		focus:           PanelWorktrees,
@@ -208,9 +221,10 @@ func NewModelWithLayout(server *terminal.TmuxServer, pl *terminal.PaneLayout) Mo
 		cfg:             cfg,
 		term_mgr:        mgr,
 		pane_layout:     pl,
-		details_visible: s.DefaultPanels.Details,
+		details_visible:  s.DefaultPanels.Details,
 		usage_visible:   s.DefaultPanels.Usage,
 		tasks_visible:   s.DefaultPanels.Tasks,
+		claude_auto_mode: s.ClaudeAutoMode,
 	}
 }
 

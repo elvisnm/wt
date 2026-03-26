@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,9 @@ func TestDefaults(t *testing.T) {
 	s := Defaults()
 	if s.LeftPanePct != DefaultLeftPanePct {
 		t.Errorf("LeftPanePct = %d, want %d", s.LeftPanePct, DefaultLeftPanePct)
+	}
+	if s.MaxPanesPerGroup != 4 {
+		t.Errorf("MaxPanesPerGroup = %d, want 4", s.MaxPanesPerGroup)
 	}
 	if s.DefaultPanels.Details || s.DefaultPanels.Usage || s.DefaultPanels.Tasks {
 		t.Error("default panels should all be false")
@@ -106,5 +110,56 @@ func TestLoadOutOfRangeClampsToDefault(t *testing.T) {
 	s := Load()
 	if s.LeftPanePct != DefaultLeftPanePct {
 		t.Errorf("LeftPanePct = %d, want default %d after clamp", s.LeftPanePct, DefaultLeftPanePct)
+	}
+}
+
+func TestClampSplitPaneLimits(t *testing.T) {
+	tests := []struct {
+		name  string
+		input int
+		want  int
+	}{
+		{"default", 4, 4},
+		{"min", 2, 2},
+		{"max", 6, 6},
+		{"below min", 1, DefaultMaxPanesPerGroup},
+		{"above max", 10, DefaultMaxPanesPerGroup},
+		{"zero", 0, DefaultMaxPanesPerGroup},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := Settings{LeftPanePct: 20, MaxPanesPerGroup: tt.input}
+			s.clamp()
+			if s.MaxPanesPerGroup != tt.want {
+				t.Errorf("MaxPanesPerGroup = %d, want %d", s.MaxPanesPerGroup, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeAutoMode_Default(t *testing.T) {
+	s := Defaults()
+	if s.ClaudeAutoMode {
+		t.Error("ClaudeAutoMode should default to false")
+	}
+}
+
+func TestClaudeAutoMode_Persistence(t *testing.T) {
+	s := Defaults()
+	s.ClaudeAutoMode = true
+	s.clamp()
+	if !s.ClaudeAutoMode {
+		t.Error("ClaudeAutoMode should survive clamp")
+	}
+}
+
+func TestClaudeAutoMode_JSON(t *testing.T) {
+	data := []byte(`{"claude_auto_mode": true, "left_pane_pct": 20, "max_panes_per_group": 4}`)
+	var s Settings
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	if !s.ClaudeAutoMode {
+		t.Error("ClaudeAutoMode should be true from JSON")
 	}
 }

@@ -501,6 +501,7 @@ func (m Model) open_service_picker(wt worktree.Worktree, mode string) (Model, te
 	m.picker_cursor = 0
 	m.picker_open = true
 	m.picker_context = mode
+	m.recalc_layout()
 	return m, nil
 }
 

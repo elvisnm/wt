@@ -14,6 +14,11 @@ type Session struct {
 	Label string
 	Alive bool
 
+	// Worktree context — which worktree this session belongs to.
+	// Used by the split picker to scope session types to the same worktree.
+	WorktreeAlias string
+	WorktreeDir   string
+
 	server  *TmuxServer
 	window  string // tmux window name "w{id}"
 	target  string // "{window}.0" — the pane target
@@ -25,22 +30,24 @@ type Session struct {
 	mu   sync.Mutex
 }
 
-// build_shell_cmd builds a shell command string with proper quoting.
-// Uses exec so the shell replaces itself with the target process.
-func build_shell_cmd(cmd_name string, args []string) string {
-	shell_cmd := "exec " + cmd_name
-	if len(args) > 0 {
-		quoted := make([]string, len(args))
-		for i, a := range args {
-			if strings.ContainsAny(a, " \t\"'\\$") {
-				quoted[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
-			} else {
-				quoted[i] = a
-			}
+// quote_args joins arguments with shell-safe quoting.
+func quote_args(cmd_name string, args []string) string {
+	result := cmd_name
+	for _, a := range args {
+		if strings.ContainsAny(a, " \t\"'\\$") {
+			result += " '" + strings.ReplaceAll(a, "'", "'\\''") + "'"
+		} else {
+			result += " " + a
 		}
-		shell_cmd += " " + strings.Join(quoted, " ")
 	}
-	return shell_cmd
+	return result
+}
+
+// build_shell_cmd builds a shell command string with exec prefix.
+// Uses exec so the shell replaces itself with the target process,
+// which allows remain-on-exit to detect when the command exits.
+func build_shell_cmd(cmd_name string, args []string) string {
+	return "exec " + quote_args(cmd_name, args)
 }
 
 // NewSession creates a tmux window running the given command.
@@ -88,6 +95,65 @@ func NewSession(id int, label string, cmd_name string, args []string, width, hei
 		"-x", fmt.Sprintf("%d", width),
 		"-y", fmt.Sprintf("%d", height),
 	)
+
+	s := &Session{
+		ID:       id,
+		Label:    label,
+		Alive:    true,
+		server:   server,
+		window:   window,
+		target:   target,
+		pane_id:  pane_id,
+		ExitCode: -1,
+		done:     make(chan struct{}),
+	}
+
+	go s.monitor_loop()
+
+	return s, nil
+}
+
+// NewSessionSendKeys creates a tmux window with an interactive shell, then
+// types the command via send-keys. This is needed for commands like
+// "claude --enable-auto-mode" where the flag only works when typed into
+// an interactive shell (not when passed via exec in tmux new-window).
+func NewSessionSendKeys(id int, label string, cmd_name string, args []string, width, height int, dir string, server *TmuxServer) (*Session, error) {
+	if err := server.EnsureStarted(0, 0); err != nil {
+		return nil, err
+	}
+
+	window := fmt.Sprintf("w%d", id)
+	target := fmt.Sprintf("%s.0", window)
+
+	// Create window with a plain shell
+	tmux_args := []string{
+		"new-window", "-d",
+		"-n", window,
+	}
+	if dir != "" {
+		tmux_args = append(tmux_args, "-c", dir)
+	}
+
+	out, err := server.Run(tmux_args...)
+	if err != nil {
+		return nil, fmt.Errorf("tmux new-window failed: %w\n%s", err, out)
+	}
+
+	server.Run("set-option", "-t", window, "remain-on-exit", "on")
+
+	pane_id := ""
+	if pid_out, err := server.Run("display-message", "-t", target, "-p", "#{pane_id}"); err == nil {
+		pane_id = strings.TrimSpace(pid_out)
+	}
+
+	server.Run("resize-pane", "-t", target,
+		"-x", fmt.Sprintf("%d", width),
+		"-y", fmt.Sprintf("%d", height),
+	)
+
+	// Send clear + command as keystrokes into the interactive shell.
+	shell_cmd := quote_args(cmd_name, args)
+	server.Run("send-keys", "-t", target, "clear && "+shell_cmd, "Enter")
 
 	s := &Session{
 		ID:       id,
@@ -156,6 +222,15 @@ func (s *Session) monitor_loop() {
 			return
 		}
 	}
+}
+
+// SetWorktree sets the worktree context for this session.
+// Used by the split picker to scope session types to the same worktree.
+func (s *Session) SetWorktree(alias, dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.WorktreeAlias = alias
+	s.WorktreeDir = dir
 }
 
 // Resize changes the tmux pane dimensions.

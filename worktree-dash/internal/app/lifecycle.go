@@ -345,6 +345,7 @@ func (m Model) remove_worktree(wt worktree.Worktree) (Model, tea.Cmd) {
 	m.picker_cursor = 0
 	m.picker_actions = ui.RemoveActions
 	m.picker_context = pickerRemove
+	m.recalc_layout()
 	return m, nil
 }
 

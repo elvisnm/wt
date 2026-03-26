@@ -25,6 +25,7 @@ func FormatPickerLabel(a PickerAction) string {
 // Shared actions reused across multiple picker slices.
 var (
 	actionClaude           = PickerAction{Key: "c", Label: labels.Claude, Desc: "Claude Code"}
+	ActionClaudeAuto       = PickerAction{Key: "C", Label: labels.Claude + " (Auto)", Desc: "Claude Code — auto mode"}
 	actionRemove           = PickerAction{Key: "x", Label: labels.Remove, Desc: "Remove worktree"}
 	actionZsh              = PickerAction{Key: "z", Label: labels.Zsh, Desc: "Host shell"}
 	actionContainerShell   = PickerAction{Key: "b", Label: labels.Shell, Desc: "Container shell"}
@@ -96,6 +97,18 @@ var HostBuildStoppedActions = []PickerAction{
 	actionClaude,
 	actionPull,
 	actionRemove,
+}
+
+var SplitSessionActions = []PickerAction{
+	{Key: "b", Label: "Shell", Desc: "Container shell"},
+	{Key: "c", Label: "Claude", Desc: "Claude Code"},
+	{Key: "z", Label: "Zsh", Desc: "Host shell"},
+	{Key: "l", Label: "Logs", Desc: "Container logs"},
+}
+
+var MergeDirectionActions = []PickerAction{
+	{Key: "|", Label: "Side by side", Desc: "Vertical divider"},
+	{Key: "_", Label: "Below", Desc: "Horizontal divider"},
 }
 
 var RemoveActions = []PickerAction{
