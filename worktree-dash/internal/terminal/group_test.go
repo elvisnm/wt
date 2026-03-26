@@ -325,6 +325,185 @@ func TestDotMap2x2Grid(t *testing.T) {
 	t.Logf("2x2:\n%s", strip_ansi(strings.Join(lines, "\n")))
 }
 
+// ── Deep Removal Tests ──────────────────────────────────────────────────
+
+func TestRemoveDeep(t *testing.T) {
+	// H(V(1,3), 2): remove session 3 → should collapse to H(1, 2)
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+	g.Add(mock_session(3, "S3"), 1, SplitV)
+
+	g.Remove(3)
+	if g.Count() != 2 {
+		t.Fatalf("Count = %d, want 2", g.Count())
+	}
+	// Tree should be H(1, 2) — no degenerate internal nodes
+	tree := g.Tree()
+	if tree.is_leaf() {
+		t.Fatal("tree should not be a leaf after removing to 2 sessions")
+	}
+	if tree.Left == nil || tree.Right == nil {
+		t.Fatal("tree should have both children")
+	}
+	if !tree.Left.is_leaf() || !tree.Right.is_leaf() {
+		t.Error("both children should be leaves after collapse")
+	}
+}
+
+func TestRemoveToOne(t *testing.T) {
+	// Start with 3 sessions, remove 2 one by one
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+	g.Add(mock_session(3, "S3"), 2, SplitV)
+
+	g.Remove(3)
+	g.Remove(2)
+	if g.Count() != 1 {
+		t.Fatalf("Count = %d, want 1", g.Count())
+	}
+	if !g.Tree().is_leaf() {
+		t.Error("tree should be a single leaf")
+	}
+	if g.Tree().SessionID != 1 {
+		t.Errorf("remaining session should be 1, got %d", g.Tree().SessionID)
+	}
+}
+
+func TestRemovePrimary(t *testing.T) {
+	// Remove the primary (first) session
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+
+	g.Remove(1)
+	if g.Count() != 1 {
+		t.Fatalf("Count = %d, want 1", g.Count())
+	}
+	if g.Primary().ID != 2 {
+		t.Errorf("Primary should be session 2 after removing 1, got %d", g.Primary().ID)
+	}
+}
+
+// ── group_extras BFS Join Ordering Tests ────────────────────────────────
+
+func TestGroupExtras_2H(t *testing.T) {
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+
+	extras := group_extras(g)
+	if len(extras) != 1 {
+		t.Fatalf("want 1 extra, got %d", len(extras))
+	}
+	if extras[0].Dir != SplitH {
+		t.Error("extra should be SplitH")
+	}
+}
+
+func TestGroupExtras_TShape(t *testing.T) {
+	// H(V(1,3), 2): T-shape
+	// BFS order: H-split at depth 0 first, then V-split at depth 1
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+	g.Add(mock_session(3, "S3"), 1, SplitV)
+
+	extras := group_extras(g)
+	if len(extras) != 2 {
+		t.Fatalf("want 2 extras, got %d", len(extras))
+	}
+	// First join should be H (column skeleton)
+	if extras[0].Dir != SplitH {
+		t.Errorf("extras[0] should be SplitH, got %v", extras[0].Dir)
+	}
+	// Second join should be V (fill row)
+	if extras[1].Dir != SplitV {
+		t.Errorf("extras[1] should be SplitV, got %v", extras[1].Dir)
+	}
+}
+
+func TestGroupExtras_3x2Grid(t *testing.T) {
+	// H(V(1,4), H(V(2,5), V(3,6))): 3 cols × 2 rows
+	// Expected BFS order: H at d0, H at d1, then V at d1, V at d2, V at d2
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+	g.Add(mock_session(3, "S3"), 2, SplitH)
+	g.Add(mock_session(4, "S4"), 1, SplitV)
+	g.Add(mock_session(5, "S5"), 2, SplitV)
+	g.Add(mock_session(6, "S6"), 3, SplitV)
+
+	extras := group_extras(g)
+	if len(extras) != 5 {
+		t.Fatalf("want 5 extras, got %d", len(extras))
+	}
+	// All H-splits should come before V-splits at each depth level
+	last_h := -1
+	first_v := len(extras)
+	for i, e := range extras {
+		if e.Dir == SplitH {
+			last_h = i
+		}
+		if e.Dir == SplitV && i < first_v {
+			first_v = i
+		}
+	}
+	if last_h >= first_v {
+		t.Errorf("H-splits should precede V-splits: last_h=%d first_v=%d", last_h, first_v)
+	}
+}
+
+func TestGroupExtras_SingleSession(t *testing.T) {
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	extras := group_extras(g)
+	if extras != nil {
+		t.Errorf("single session should return nil extras, got %v", extras)
+	}
+}
+
+// ── CountColumns / MaxRowsInAnyColumn Tests ─────────────────────────────
+
+func TestCountColumns(t *testing.T) {
+	tests := []struct {
+		name string
+		g    *TabGroup
+		want int
+	}{
+		{"single", func() *TabGroup {
+			return NewTabGroup(1, mock_session(1, "S"))
+		}(), 1},
+		{"2H", func() *TabGroup {
+			g := NewTabGroup(1, mock_session(1, "S1"))
+			g.Add(mock_session(2, "S2"), 1, SplitH)
+			return g
+		}(), 2},
+		{"3H", func() *TabGroup {
+			g := NewTabGroup(1, mock_session(1, "S1"))
+			g.Add(mock_session(2, "S2"), 1, SplitH)
+			g.Add(mock_session(3, "S3"), 2, SplitH)
+			return g
+		}(), 3},
+		{"V only", func() *TabGroup {
+			g := NewTabGroup(1, mock_session(1, "S1"))
+			g.Add(mock_session(2, "S2"), 1, SplitV)
+			return g
+		}(), 1},
+	}
+	for _, tt := range tests {
+		if got := tt.g.CountColumns(); got != tt.want {
+			t.Errorf("%s: CountColumns = %d, want %d", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestMaxRowsInAnyColumn(t *testing.T) {
+	// H(V(1,3), 2): left col has 2 rows, right has 1 → max = 2
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+	g.Add(mock_session(3, "S3"), 1, SplitV)
+	if got := g.MaxRowsInAnyColumn(); got != 2 {
+		t.Errorf("MaxRowsInAnyColumn = %d, want 2", got)
+	}
+}
+
+// ── insert_claude_auto (actions.go) is tested via actions_test.go ───────
+
 func TestCountVLeaves(t *testing.T) {
 	// Single leaf
 	if v := count_v_leaves(&SplitNode{SessionID: 1}); v != 1 {

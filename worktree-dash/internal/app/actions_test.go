@@ -157,6 +157,67 @@ func TestActionsForWorktree_HostBuildStopped(t *testing.T) {
 	}
 }
 
+// ── insert_claude_auto ──────────────────────────────────────────────────
+
+func TestInsertClaudeAuto_InsertsAfterClaude(t *testing.T) {
+	actions := []ui.PickerAction{
+		{Key: "b", Label: "Shell"},
+		{Key: "c", Label: "Claude"},
+		{Key: "z", Label: "Zsh"},
+	}
+	result := insert_claude_auto(actions)
+	if len(result) != 4 {
+		t.Fatalf("want 4 actions, got %d", len(result))
+	}
+	if result[1].Key != "c" {
+		t.Errorf("result[1] should be 'c', got %q", result[1].Key)
+	}
+	if result[2].Key != "C" {
+		t.Errorf("result[2] should be 'C' (auto), got %q", result[2].Key)
+	}
+	if result[3].Key != "z" {
+		t.Errorf("result[3] should be 'z', got %q", result[3].Key)
+	}
+}
+
+func TestInsertClaudeAuto_NoClaude(t *testing.T) {
+	actions := []ui.PickerAction{
+		{Key: "b", Label: "Shell"},
+		{Key: "z", Label: "Zsh"},
+	}
+	result := insert_claude_auto(actions)
+	if len(result) != 2 {
+		t.Errorf("should return unchanged when no 'c' key, got %d", len(result))
+	}
+}
+
+func TestActionsForWorktree_ClaudeAutoInserted(t *testing.T) {
+	m := &Model{claude_auto_mode: false} // auto OFF → should insert [C]
+	wt := worktree.Worktree{Type: worktree.TypeDocker, Running: true, ContainerExists: true}
+	got := m.actions_for_worktree(wt)
+	found := false
+	for _, a := range got {
+		if a.Key == "C" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected [C] Claude (Auto) when claude_auto_mode is OFF")
+	}
+}
+
+func TestActionsForWorktree_ClaudeAutoNotInserted(t *testing.T) {
+	m := &Model{claude_auto_mode: true} // auto ON → no [C] option
+	wt := worktree.Worktree{Type: worktree.TypeDocker, Running: true, ContainerExists: true}
+	got := m.actions_for_worktree(wt)
+	for _, a := range got {
+		if a.Key == "C" {
+			t.Error("should NOT have [C] Claude (Auto) when claude_auto_mode is ON")
+		}
+	}
+}
+
 // ── flow_scripts_dir ─────────────────────────────────────────────────────
 
 func TestFlowScriptsDir_ConfigAbsPath(t *testing.T) {

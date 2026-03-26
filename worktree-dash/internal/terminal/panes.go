@@ -111,54 +111,7 @@ func capture_pane_id(ts *TmuxServer, target string) string {
 	return strings.TrimSpace(out)
 }
 
-// discover_pane_excluding lists panes in window 0 and returns the first ID
-// that isn't in the exclude set.
-func discover_pane_excluding(ts *TmuxServer, exclude ...string) string {
-	out, err := ts.Run("list-panes", "-t", "wt:0", "-F", "#{pane_id}")
-	if err != nil {
-		return ""
-	}
-	known := make(map[string]bool, len(exclude))
-	for _, id := range exclude {
-		known[id] = true
-	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		id := strings.TrimSpace(line)
-		if id != "" && !known[id] {
-			return id
-		}
-	}
-	return ""
-}
 
-// query_pane_width returns the current width of a tmux pane, or 80 as fallback.
-func query_pane_width(ts *TmuxServer, pane_id string) int {
-	if pane_id == "" {
-		return 80
-	}
-	out, err := ts.Run("display-message", "-t", pane_id, "-p", "#{pane_width}")
-	if err != nil {
-		return 80
-	}
-	var w int
-	fmt.Sscanf(strings.TrimSpace(out), "%d", &w)
-	if w <= 0 {
-		return 80
-	}
-	return w
-}
-
-// parse_pane_ids parses the output of list-panes -F "#{pane_id}" into a slice.
-func parse_pane_ids(out string) []string {
-	var ids []string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		id := strings.TrimSpace(line)
-		if id != "" {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
 
 // ConfigureBindings sets up tmux key bindings for pane navigation.
 // prefix (Ctrl+]) then q = return focus to left pane (auto-unzooms if zoomed)
@@ -391,20 +344,6 @@ func (pl *PaneLayout) HasActiveSession() bool {
 }
 
 // ── Zoom & Focus ───────────────────────────────────────────────────────
-
-// is_pane_in_viewport checks if a pane ID is currently in window 0 (the viewport).
-func (pl *PaneLayout) is_pane_in_viewport(pane_id string) bool {
-	out, err := pl.server.Run("list-panes", "-t", "wt:0", "-F", "#{pane_id}")
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.TrimSpace(line) == pane_id {
-			return true
-		}
-	}
-	return false
-}
 
 // equalize_right_panes distributes space evenly among the right-side panes.
 // Walks the split tree recursively, allocating width proportional to column

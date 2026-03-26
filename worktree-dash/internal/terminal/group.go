@@ -76,6 +76,14 @@ func remove_session(root *SplitNode, session_id int) *SplitNode {
 	}
 	root.Left = remove_session(root.Left, session_id)
 	root.Right = remove_session(root.Right, session_id)
+	// Collapse degenerate internal nodes: if one child became nil after
+	// deep removal, replace this node with the surviving child.
+	if root.Left == nil {
+		return root.Right
+	}
+	if root.Right == nil {
+		return root.Left
+	}
 	return root
 }
 

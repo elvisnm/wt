@@ -1118,9 +1118,13 @@ func (m Model) handle_terminal_key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if tl.SessionID > 0 {
 				session_id := tl.SessionID
 				return m.open_panel_input("Rename", "New name:", func(mdl *Model, val string) (Model, tea.Cmd) {
+					name := strings.TrimSpace(val)
+					if name == "" {
+						return *mdl, nil
+					}
 					for _, s := range mdl.term_mgr.Sessions() {
 						if s.ID == session_id {
-							s.Label = val
+							s.Label = name
 							break
 						}
 					}

@@ -194,14 +194,14 @@ func (mgr *Manager) Open(label string, cmd_name string, args []string, width, he
 	return s, nil
 }
 
-// OpenNew always creates a new session in its own tab group.
+// open_new_with creates a new session in its own tab group using the given constructor.
 // Appends a number (#2, #3, ...) if a live session with the same base label exists.
-func (mgr *Manager) OpenNew(label string, cmd_name string, args []string, width, height int, dir string) (*Session, error) {
+func (mgr *Manager) open_new_with(label string, cmd_name string, args []string, width, height int, dir string, create func(id int, label, cmd string, args []string, w, h int, d string, srv *TmuxServer) (*Session, error)) (*Session, error) {
 	mgr.mu.Lock()
 	count := 0
 	for _, g := range mgr.groups {
 		for _, s := range g.sessions {
-			if s.Label == label || (len(s.Label) > len(label) && s.Label[:len(label)] == label && s.Label[len(label):len(label)+2] == " #") {
+			if s.Label == label || strings.HasPrefix(s.Label, label+" #") {
 				count++
 			}
 		}
@@ -216,7 +216,7 @@ func (mgr *Manager) OpenNew(label string, cmd_name string, args []string, width,
 	mgr.next_group_id++
 	mgr.mu.Unlock()
 
-	s, err := NewSession(id, final_label, cmd_name, args, width, height, dir, mgr.server)
+	s, err := create(id, final_label, cmd_name, args, width, height, dir, mgr.server)
 	if err != nil {
 		return nil, err
 	}
@@ -236,46 +236,15 @@ func (mgr *Manager) OpenNew(label string, cmd_name string, args []string, width,
 	return s, nil
 }
 
+// OpenNew always creates a new session in its own tab group.
+func (mgr *Manager) OpenNew(label string, cmd_name string, args []string, width, height int, dir string) (*Session, error) {
+	return mgr.open_new_with(label, cmd_name, args, width, height, dir, NewSession)
+}
+
 // OpenNewSendKeys is like OpenNew but uses send-keys to type the command
 // into an interactive shell instead of passing it via tmux new-window.
 func (mgr *Manager) OpenNewSendKeys(label string, cmd_name string, args []string, width, height int, dir string) (*Session, error) {
-	mgr.mu.Lock()
-	count := 0
-	for _, g := range mgr.groups {
-		for _, s := range g.sessions {
-			if s.Label == label || (len(s.Label) > len(label) && s.Label[:len(label)] == label && s.Label[len(label):len(label)+2] == " #") {
-				count++
-			}
-		}
-	}
-	final_label := label
-	if count > 0 {
-		final_label = fmt.Sprintf("%s #%d", label, count+1)
-	}
-	id := mgr.next_id
-	mgr.next_id++
-	gid := mgr.next_group_id
-	mgr.next_group_id++
-	mgr.mu.Unlock()
-
-	s, err := NewSessionSendKeys(id, final_label, cmd_name, args, width, height, dir, mgr.server)
-	if err != nil {
-		return nil, err
-	}
-
-	g := NewTabGroup(gid, s)
-
-	mgr.mu.Lock()
-	mgr.groups = append(mgr.groups, g)
-	mgr.active_tab = len(mgr.groups) - 1
-	pl := mgr.panes
-	mgr.mu.Unlock()
-
-	if pl != nil {
-		pl.ShowSession(s.Window())
-	}
-
-	return s, nil
+	return mgr.open_new_with(label, cmd_name, args, width, height, dir, NewSessionSendKeys)
 }
 
 // equalize_active_locked equalizes the right-side panes if the active group
@@ -1026,7 +995,7 @@ func (mgr *Manager) tab_labels_internal(flat_cursor int) []TabLabel {
 	}
 
 	// Second pass: attach highlighted layout maps to the last child of each group
-	for i, g := range mgr.groups {
+	for _, g := range mgr.groups {
 		if !g.IsSplit() {
 			continue
 		}
@@ -1039,7 +1008,6 @@ func (mgr *Manager) tab_labels_internal(flat_cursor int) []TabLabel {
 		}
 
 		// Find the last entry for this group and attach the map
-		_ = i
 		for j := len(result) - 1; j >= 0; j-- {
 			if result[j].GroupID == g.ID && result[j].IsGroupChild {
 				result[j].LayoutMap = layout_map

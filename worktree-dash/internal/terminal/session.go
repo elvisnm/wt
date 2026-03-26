@@ -30,23 +30,24 @@ type Session struct {
 	mu   sync.Mutex
 }
 
-// build_shell_cmd builds a shell command string with proper quoting.
+// quote_args joins arguments with shell-safe quoting.
+func quote_args(cmd_name string, args []string) string {
+	result := cmd_name
+	for _, a := range args {
+		if strings.ContainsAny(a, " \t\"'\\$") {
+			result += " '" + strings.ReplaceAll(a, "'", "'\\''") + "'"
+		} else {
+			result += " " + a
+		}
+	}
+	return result
+}
+
+// build_shell_cmd builds a shell command string with exec prefix.
 // Uses exec so the shell replaces itself with the target process,
 // which allows remain-on-exit to detect when the command exits.
 func build_shell_cmd(cmd_name string, args []string) string {
-	shell_cmd := "exec " + cmd_name
-	if len(args) > 0 {
-		quoted := make([]string, len(args))
-		for i, a := range args {
-			if strings.ContainsAny(a, " \t\"'\\$") {
-				quoted[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
-			} else {
-				quoted[i] = a
-			}
-		}
-		shell_cmd += " " + strings.Join(quoted, " ")
-	}
-	return shell_cmd
+	return "exec " + quote_args(cmd_name, args)
 }
 
 // NewSession creates a tmux window running the given command.
@@ -150,22 +151,8 @@ func NewSessionSendKeys(id int, label string, cmd_name string, args []string, wi
 		"-y", fmt.Sprintf("%d", height),
 	)
 
-	// Build the command string
-	shell_cmd := cmd_name
-	if len(args) > 0 {
-		quoted := make([]string, len(args))
-		for i, a := range args {
-			if strings.ContainsAny(a, " \t\"'\\$") {
-				quoted[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
-			} else {
-				quoted[i] = a
-			}
-		}
-		shell_cmd += " " + strings.Join(quoted, " ")
-	}
-
-	// Send clear first to avoid visual noise from prompt initialization,
-	// then send the actual command.
+	// Send clear + command as keystrokes into the interactive shell.
+	shell_cmd := quote_args(cmd_name, args)
 	server.Run("send-keys", "-t", target, "clear && "+shell_cmd, "Enter")
 
 	s := &Session{
@@ -240,6 +227,8 @@ func (s *Session) monitor_loop() {
 // SetWorktree sets the worktree context for this session.
 // Used by the split picker to scope session types to the same worktree.
 func (s *Session) SetWorktree(alias, dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.WorktreeAlias = alias
 	s.WorktreeDir = dir
 }
