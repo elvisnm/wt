@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -133,5 +134,32 @@ func TestClampSplitPaneLimits(t *testing.T) {
 				t.Errorf("MaxPanesPerGroup = %d, want %d", s.MaxPanesPerGroup, tt.want)
 			}
 		})
+	}
+}
+
+func TestClaudeAutoMode_Default(t *testing.T) {
+	s := Defaults()
+	if s.ClaudeAutoMode {
+		t.Error("ClaudeAutoMode should default to false")
+	}
+}
+
+func TestClaudeAutoMode_Persistence(t *testing.T) {
+	s := Defaults()
+	s.ClaudeAutoMode = true
+	s.clamp()
+	if !s.ClaudeAutoMode {
+		t.Error("ClaudeAutoMode should survive clamp")
+	}
+}
+
+func TestClaudeAutoMode_JSON(t *testing.T) {
+	data := []byte(`{"claude_auto_mode": true, "left_pane_pct": 20, "max_panes_per_group": 4}`)
+	var s Settings
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	if !s.ClaudeAutoMode {
+		t.Error("ClaudeAutoMode should be true from JSON")
 	}
 }

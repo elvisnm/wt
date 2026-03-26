@@ -502,7 +502,136 @@ func TestMaxRowsInAnyColumn(t *testing.T) {
 	}
 }
 
-// ── insert_claude_auto (actions.go) is tested via actions_test.go ───────
+// ── Flatten Helpers ──────────────────────────────────────────────────────
+
+func TestFlattenHChildren(t *testing.T) {
+	// H(1, H(2, H(3, 4))) → [1, 2, 3, 4]
+	tree := &SplitNode{SessionID: -1, Dir: SplitH,
+		Left: &SplitNode{SessionID: 1},
+		Right: &SplitNode{SessionID: -1, Dir: SplitH,
+			Left: &SplitNode{SessionID: 2},
+			Right: &SplitNode{SessionID: -1, Dir: SplitH,
+				Left:  &SplitNode{SessionID: 3},
+				Right: &SplitNode{SessionID: 4},
+			},
+		},
+	}
+	children := flatten_h_children(tree)
+	if len(children) != 4 {
+		t.Fatalf("want 4 children, got %d", len(children))
+	}
+	for i, c := range children {
+		if !c.is_leaf() || c.SessionID != i+1 {
+			t.Errorf("child[%d]: want leaf %d, got leaf=%v id=%d", i, i+1, c.is_leaf(), c.SessionID)
+		}
+	}
+}
+
+func TestFlattenHChildren_VRoot(t *testing.T) {
+	// V(1, 2) — root is V, not H → returns [V(1,2)] as a single element
+	tree := &SplitNode{SessionID: -1, Dir: SplitV,
+		Left: &SplitNode{SessionID: 1}, Right: &SplitNode{SessionID: 2}}
+	children := flatten_h_children(tree)
+	if len(children) != 1 {
+		t.Fatalf("V root: want 1 child, got %d", len(children))
+	}
+}
+
+func TestFlattenVChildren(t *testing.T) {
+	// V(1, V(2, 3)) → [1, 2, 3]
+	tree := &SplitNode{SessionID: -1, Dir: SplitV,
+		Left: &SplitNode{SessionID: 1},
+		Right: &SplitNode{SessionID: -1, Dir: SplitV,
+			Left:  &SplitNode{SessionID: 2},
+			Right: &SplitNode{SessionID: 3},
+		},
+	}
+	children := flatten_v_children(tree)
+	if len(children) != 3 {
+		t.Fatalf("want 3 children, got %d", len(children))
+	}
+}
+
+func TestFlattenVChildren_Leaf(t *testing.T) {
+	leaf := &SplitNode{SessionID: 1}
+	children := flatten_v_children(leaf)
+	if len(children) != 1 {
+		t.Fatalf("leaf: want 1 child, got %d", len(children))
+	}
+}
+
+// ── first_leaf ──────────────────────────────────────────────────────────
+
+func TestFirstLeaf(t *testing.T) {
+	if id := first_leaf(nil); id != -1 {
+		t.Errorf("nil: want -1, got %d", id)
+	}
+	if id := first_leaf(&SplitNode{SessionID: 5}); id != 5 {
+		t.Errorf("leaf: want 5, got %d", id)
+	}
+	// H(V(3, 4), 2) → first leaf is 3 (leftmost)
+	tree := &SplitNode{SessionID: -1, Dir: SplitH,
+		Left: &SplitNode{SessionID: -1, Dir: SplitV,
+			Left: &SplitNode{SessionID: 3}, Right: &SplitNode{SessionID: 4}},
+		Right: &SplitNode{SessionID: 2}}
+	if id := first_leaf(tree); id != 3 {
+		t.Errorf("deep tree: want 3, got %d", id)
+	}
+}
+
+// ── quote_args / build_shell_cmd ────────────────────────────────────────
+
+func TestQuoteArgs(t *testing.T) {
+	if got := quote_args("claude", nil); got != "claude" {
+		t.Errorf("no args: got %q", got)
+	}
+	if got := quote_args("claude", []string{"--flag"}); got != "claude --flag" {
+		t.Errorf("simple flag: got %q", got)
+	}
+	if got := quote_args("cmd", []string{"hello world"}); got != "cmd 'hello world'" {
+		t.Errorf("space in arg: got %q", got)
+	}
+	if got := quote_args("cmd", []string{"it's"}); got != "cmd 'it'\\''s'" {
+		t.Errorf("single quote: got %q", got)
+	}
+}
+
+func TestBuildShellCmd(t *testing.T) {
+	if got := build_shell_cmd("zsh", nil); got != "exec zsh" {
+		t.Errorf("no args: got %q", got)
+	}
+	if got := build_shell_cmd("claude", []string{"--enable-auto-mode"}); got != "exec claude --enable-auto-mode" {
+		t.Errorf("with flag: got %q", got)
+	}
+}
+
+// ── TabGroup.Label / Sessions / Contains ────────────────────────────────
+
+func TestTabGroupLabel(t *testing.T) {
+	g := NewTabGroup(1, mock_session(1, "MyShell"))
+	if got := g.Label(); got != "MyShell" {
+		t.Errorf("Label = %q, want MyShell", got)
+	}
+}
+
+func TestTabGroupSessions(t *testing.T) {
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	g.Add(mock_session(2, "S2"), 1, SplitH)
+	ss := g.Sessions()
+	if len(ss) != 2 {
+		t.Errorf("Sessions count = %d, want 2", len(ss))
+	}
+}
+
+func TestTabGroupContains(t *testing.T) {
+	g := NewTabGroup(1, mock_session(1, "S1"))
+	if !g.Contains(1) {
+		t.Error("should contain session 1")
+	}
+	if g.Contains(99) {
+		t.Error("should not contain session 99")
+	}
+}
 
 func TestCountVLeaves(t *testing.T) {
 	// Single leaf
