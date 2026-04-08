@@ -1,0 +1,17 @@
+# Go binary
+worktree-dash/worktree-dash
+worktree-dash/wt
+*.exe
+
+# OS
+.DS_Store
+
+# Node
+node_modules/
+
+# Local planning docs
+next-steps/
+
+# Beads (local task tracking)
+.gitattributes
+AGENTS.md

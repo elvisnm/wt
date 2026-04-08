@@ -1,0 +1,45 @@
+[package]
+name = "wt-dash"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "wt"
+path = "src/main.rs"
+
+[dependencies]
+# TUI framework
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Terminal emulation
+alacritty_terminal = "0.25"
+portable-pty = "0.8"
+
+# Serialization (config parsing)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Regex (lightweight, no unicode tables)
+regex-lite = "0.1"
+
+# Date/time
+chrono = "0.4"
+
+# Error handling
+anyhow = "1"
+
+# Unix process management
+libc = "0.2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

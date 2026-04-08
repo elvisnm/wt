@@ -1,0 +1,185 @@
+package ui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/elvisnm/wt/internal/config"
+	"github.com/elvisnm/wt/internal/labels"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+// PickerAction represents a selectable action in the picker overlay
+type PickerAction struct {
+	Key   string
+	Label string
+	Desc  string
+}
+
+// FormatPickerLabel returns the display label for a picker action: "[key] Label — Desc"
+func FormatPickerLabel(a PickerAction) string {
+	return fmt.Sprintf("[%s] %s — %s", a.Key, a.Label, a.Desc)
+}
+
+// Shared actions reused across multiple picker slices.
+var (
+	actionClaude           = PickerAction{Key: "c", Label: labels.Claude, Desc: "Claude Code"}
+	ActionClaudeAuto       = PickerAction{Key: "C", Label: labels.Claude + " (Auto)", Desc: "Claude Code — auto mode"}
+	actionRemove           = PickerAction{Key: "x", Label: labels.Remove, Desc: "Remove worktree"}
+	actionZsh              = PickerAction{Key: "z", Label: labels.Zsh, Desc: "Host shell"}
+	actionContainerShell   = PickerAction{Key: "b", Label: labels.Shell, Desc: "Container shell"}
+	actionLocalShell       = PickerAction{Key: "b", Label: labels.Shell, Desc: "Worktree shell"}
+	actionContainerRestart = PickerAction{Key: "r", Label: "Restart", Desc: "Restart container"}
+	actionContainerStop    = PickerAction{Key: "t", Label: "Stop", Desc: "Stop container"}
+	actionInfo             = PickerAction{Key: "i", Label: "Info", Desc: "Worktree info"}
+	actionPull             = PickerAction{Key: "g", Label: labels.Pull, Desc: "Pull latest changes"}
+)
+
+var WorktreeActions = []PickerAction{
+	actionContainerShell,
+	actionZsh,
+	actionClaude,
+	actionPull,
+	actionContainerRestart,
+	actionContainerStop,
+	actionRemove,
+}
+
+var StoppedActions = []PickerAction{
+	{Key: "u", Label: "Start", Desc: "Start container"},
+	actionZsh,
+	actionClaude,
+	actionPull,
+	actionRemove,
+}
+
+var MaintenanceActions = []PickerAction{
+	{Key: "p", Label: "Prune", Desc: "Remove orphaned volumes"},
+	{Key: "s", Label: "Autostop", Desc: "Stop idle containers"},
+	{Key: "r", Label: "Rebuild", Desc: "Rebuild base image"},
+}
+
+var LocalActions = []PickerAction{
+	{Key: "u", Label: "Start", Desc: "Start dev server"},
+	actionLocalShell,
+	actionClaude,
+	actionPull,
+	{Key: "n", Label: labels.Create, Desc: "Create container"},
+	actionInfo,
+	actionRemove,
+}
+
+var SplitSessionActions = []PickerAction{
+	{Key: "b", Label: "Shell", Desc: "Container shell"},
+	{Key: "c", Label: "Claude", Desc: "Claude Code"},
+	{Key: "z", Label: "Zsh", Desc: "Host shell"},
+	{Key: "l", Label: "Logs", Desc: "Container logs"},
+}
+
+var MergeDirectionActions = []PickerAction{
+	{Key: "|", Label: "Side by side", Desc: "Vertical divider"},
+	{Key: "_", Label: "Below", Desc: "Horizontal divider"},
+}
+
+var RemoveActions = []PickerAction{
+	{Key: "n", Label: "Normal", Desc: "Fails if dirty"},
+	{Key: "f", Label: "Force", Desc: "Even if dirty"},
+}
+
+var LocalRunningActions = []PickerAction{
+	actionLocalShell,
+	actionClaude,
+	actionPull,
+	{Key: "l", Label: labels.Logs, Desc: "Dev logs"},
+	{Key: "o", Label: "Start service", Desc: "Start a stopped service"},
+	{Key: "p", Label: "Stop service", Desc: "Stop a running service"},
+	{Key: "r", Label: "Restart", Desc: "Restart services"},
+	actionInfo,
+	{Key: "t", Label: "Stop", Desc: "Stop dev server"},
+	actionRemove,
+}
+
+// FilterMaintenanceActions returns MaintenanceActions filtered by config feature flags.
+// When cfg is nil, returns the full list.
+func FilterMaintenanceActions(cfg *config.Config) []PickerAction {
+	if cfg == nil {
+		return MaintenanceActions
+	}
+	var actions []PickerAction
+	for _, a := range MaintenanceActions {
+		switch a.Key {
+		case "p": // Prune
+			if cfg.FeatureEnabled("prune") {
+				actions = append(actions, a)
+			}
+		case "s": // Autostop
+			if cfg.FeatureEnabled("autostop") {
+				actions = append(actions, a)
+			}
+		case "r": // Rebuild base
+			if cfg.FeatureEnabled("rebuildBase") {
+				actions = append(actions, a)
+			}
+		default:
+			actions = append(actions, a)
+		}
+	}
+	return actions
+}
+
+func RenderPicker(actions []PickerAction, cursor int, width, height int, title string) string {
+	picker_style := lipgloss.NewStyle().
+		Width(width - 2).
+		Height(height - 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(FocusBorderColor)
+
+	title_rendered := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(FocusBorderColor).
+		Render(fmt.Sprintf(" %s ", title))
+
+	var lines []string
+	inner_w := width - 4
+	for i, a := range actions {
+		if i == cursor {
+			key_plain := lipgloss.NewStyle().Width(3).Render(a.Key)
+			label_plain := lipgloss.NewStyle().Width(14).Render(a.Label)
+			line := fmt.Sprintf(" %s %s %s", key_plain, label_plain, a.Desc)
+			line = lipgloss.NewStyle().
+				Background(SelectedBgColor).
+				Foreground(lipgloss.Color("255")).
+				Bold(true).
+				Width(inner_w).
+				MaxHeight(1).
+				Render(line)
+			lines = append(lines, line)
+			continue
+		}
+
+		key_rendered := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(FocusBorderColor).
+			Width(3).
+			Render(a.Key)
+
+		label_rendered := lipgloss.NewStyle().
+			Width(14).
+			Render(a.Label)
+
+		desc_rendered := lipgloss.NewStyle().
+			Foreground(DimTextColor).
+			MaxWidth(inner_w - 20).
+			Render(a.Desc)
+
+		line := fmt.Sprintf(" %s %s %s", key_rendered, label_rendered, desc_rendered)
+		lines = append(lines, line)
+	}
+
+	content := strings.Join(lines, "\n")
+	styled := picker_style.Render(content)
+	styled = inject_title(styled, title_rendered)
+
+	return styled
+}

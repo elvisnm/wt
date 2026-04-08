@@ -1,0 +1,380 @@
+# Configuration Reference
+
+All configuration lives in `wt.config.js` at your project root. This is a CommonJS module — you can use `require()`, environment variables, and conditional logic.
+
+For the annotated full schema with inline comments, see [wt.config.schema.md](../wt.config.schema.md).
+
+## Minimal Config
+
+```js
+module.exports = {
+  name: 'myapp',
+  services: {
+    ports: { web: 3000 },
+    primary: 'web',
+  },
+};
+```
+
+Everything else has sensible defaults. This gives you: generate strategy, `.env.worktree` files, SHA-256 port offsets, and basic autostop/prune features.
+
+## Config Fields
+
+### name (required)
+
+```js
+name: 'myapp'
+```
+
+Project identifier. Used as prefix for containers (`myapp-alias`), volumes (`myapp_alias_*`), compose projects (`myapp-slug`), and env var prefix fallback.
+
+### repo
+
+```js
+repo: {
+  worktreesDir: '../myapp-worktrees',
+  branchPrefixes: ['feat', 'fix', 'chore', 'hotfix', 'release'],
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `worktreesDir` | `../{name}-worktrees` | Where worktree directories are created. Relative to repo root parent |
+| `branchPrefixes` | `['feat', 'fix', ...]` | Allowed branch prefixes for validation. `null` to skip validation |
+
+### docker
+
+```js
+docker: {
+  baseImage: 'myapp-dev:latest',
+  composeStrategy: 'generate',
+  generate: { ... },
+  composeFile: null,
+  sharedInfra: { ... },
+  proxy: { ... },
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `baseImage` | `null` | Docker image name:tag. `null` means compose must define images |
+| `composeStrategy` | `'generate'` | `'generate'` or a path to a shared compose file |
+| `composeFile` | `null` | Explicit path to shared compose file (for non-generate strategy) |
+
+#### docker.generate
+
+Only used when `composeStrategy` is `'generate'`.
+
+| Field | Default | Description |
+|---|---|---|
+| `containerWorkdir` | `'/app'` | Mount point inside container |
+| `entrypoint` | `'pnpm dev'` | Startup command |
+| `extraMounts` | `[]` | Additional volume mounts (`host:container` format) |
+| `extraEnv` | `{}` | Additional environment variables |
+
+#### docker.sharedInfra
+
+| Field | Default | Description |
+|---|---|---|
+| `network` | `null` | External Docker network to join. `null` = isolated per worktree |
+| `composePath` | `null` | Path to shared infra project (Traefik, DB, Redis). Supports `~` |
+
+#### docker.proxy
+
+| Field | Default | Description |
+|---|---|---|
+| `type` | `'ports'` | `'traefik'`, `'ports'`, or `null` |
+| `dynamicDir` | `'traefik/dynamic'` | Traefik dynamic config directory (relative to `sharedInfra.composePath`) |
+| `domainTemplate` | `'{alias}.localhost'` | Domain template. `{alias}` replaced at runtime |
+
+### services
+
+```js
+services: {
+  ports: {
+    web: 3000,
+    api: 4000,
+    worker: 5000,
+  },
+  primary: 'web',
+  quickLinks: [
+    { label: 'Web', service: 'web', pathPrefix: '' },
+    { label: 'API', service: 'api', pathPrefix: '/api' },
+  ],
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `ports` | `{}` | Map of service name to base port |
+| `primary` | first service | Primary service for health checks, URLs, exec |
+| `quickLinks` | `[]` | Links shown in dashboard details |
+
+#### services.pm2
+
+PM2 ecosystem configuration for local worktrees. Only used with `--no-docker`.
+
+```js
+services: {
+  pm2: {
+    ecosystemConfig: 'ecosystem.config.cjs',
+    debugPorts: { app: 9229, api: 9230 },
+    envPassthrough: ['MYAPP_PATH', 'MYAPP_DATABASE_URL'],
+  },
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `ecosystemConfig` | `null` | Source ecosystem file in repo root. `null` disables PM2 generation |
+| `debugPorts` | `{}` | Base `--inspect` ports per service. Offset applied automatically |
+| `envPassthrough` | `[]` | Env vars from `.env.worktree` to pass through to PM2 processes |
+
+### portOffset
+
+```js
+portOffset: {
+  algorithm: 'sha256',
+  min: 100,
+  range: 2000,
+  autoResolve: true,
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `algorithm` | `'sha256'` | `'sha256'` or `'cksum'` |
+| `min` | `100` | Minimum offset value |
+| `range` | `2000` | Offset range: `(hash % range) + min` |
+| `autoResolve` | `true` | Auto-increment on port collision |
+
+Port offsets apply to both Docker worktrees (host port mapping) and local worktrees (services listen on offset ports directly).
+
+### database
+
+```js
+database: {
+  type: 'mongodb',
+  host: 'localhost',
+  containerHost: 'myapp_mongo',
+  port: 27017,
+  defaultDb: 'mydb',
+  replicaSet: null,
+  dbNamePrefix: 'db_',
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `type` | `null` | `'mongodb'`, `'postgres'`, `'supabase'`, `'mysql'`, or `null` |
+| `host` | `null` | DB host (for host-side operations) |
+| `containerHost` | `null` | DB hostname inside Docker network |
+| `port` | `null` | DB port |
+| `defaultDb` | `null` | Default/shared database name |
+| `replicaSet` | `null` | MongoDB replica set name |
+| `dbNamePrefix` | `'db_'` | Worktree DB naming: `{prefix}{alias}` |
+
+Set `database: { type: null }` to disable database features.
+
+### redis
+
+```js
+redis: {
+  containerHost: 'myapp_redis',
+  port: 6379,
+}
+```
+
+Set to `null` to disable Redis.
+
+### env
+
+```js
+env: {
+  prefix: 'MYAPP',
+  filename: '.env.worktree',
+  vars: {
+    projectPath: '{PREFIX}_PATH',
+    dbConnection: '{PREFIX}_DATABASE_URL',
+    environment: '{PREFIX}_ENV',
+  },
+  worktreeVars: {
+    name: 'WORKTREE_NAME',
+    alias: 'WORKTREE_ALIAS',
+    hostPortOffset: 'WORKTREE_HOST_PORT_OFFSET',
+  },
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `prefix` | uppercase(`name`) | Prefix for project env vars |
+| `filename` | `'.env.worktree'` | Env file name in each worktree |
+| `vars` | `{}` | Map of logical key to env var name. `{PREFIX}` replaced with `prefix` |
+| `worktreeVars` | hardcoded `WORKTREE_*` | Map of logical key to `WORKTREE_*` var name |
+
+The `{PREFIX}` template in `vars` values gets replaced with `env.prefix` at load time. So `'{PREFIX}_PATH'` with prefix `'MYAPP'` becomes `'MYAPP_PATH'`.
+
+#### env.localDefaults
+
+Templated environment variables written to `.env.worktree` for local (non-Docker) worktrees. Templates support `{name}`, `{path}`, `{domain}`, `{appPort}`.
+
+```js
+env: {
+  localDefaults: {
+    'MYAPP_REDIS_PREFIX': 'wt:{name}:',
+    'MYAPP_DOMAIN': '{domain}',
+    'MYAPP_APP_URL': 'http://{domain}:{appPort}/',
+    'PM2_HOME': '{path}/.pm2',
+  },
+}
+```
+
+| Template | Replaced with |
+|---|---|
+| `{name}` | Worktree name (directory basename) |
+| `{path}` | Absolute path to worktree |
+| `{domain}` | Domain from `docker.proxy.domainTemplate` |
+| `{appPort}` | Primary port + offset |
+
+### features
+
+```js
+features: {
+  lan: false,
+  autostop: true,
+  prune: true,
+  rebuildBase: false,
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `lan` | `false` | LAN access via nip.io |
+| `autostop` | `true` | Auto-stop idle containers |
+| `prune` | `true` | Orphaned volume cleanup |
+| `rebuildBase` | `false` | Base image rebuild command |
+| `localDev` | `false` | Enable local (non-Docker) worktree support with PM2 isolation |
+
+### dash
+
+```js
+dash: {
+  commands: {
+    shell:  { label: 'Shell',  cmd: 'bash' },
+    claude: { label: 'Claude', cmd: 'claude' },
+    logs:   { label: 'Logs',   cmd: null },
+  },
+  localDevCommand: 'pnpm dev',
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `commands` | shell + claude | Terminal tab commands. `cmd: null` = built-in handler |
+| `localDevCommand` | `'pnpm dev'` | Dev command for non-Docker worktrees |
+| `services` | `undefined` | Service management config (see below) |
+
+See [Dashboard — Custom Commands](dashboard.md#custom-commands) for details on adding commands.
+
+#### dash.services
+
+Controls how the dashboard discovers and manages services. Omit entirely if your project uses PM2 everywhere (the default).
+
+```js
+dash: {
+  services: {
+    manager: 'static',
+    list: [
+      { name: 'web', port: 3000 },
+      { name: 'api', port: 4000 },
+      { name: 'sync', port: 5000, processes: ['combined_sync', 'listings_sync'] },
+    ],
+    runningCheck: 'devTab',
+    docker: { manager: 'pm2' },
+  },
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `manager` | `'pm2'` | `'pm2'` or `'static'`. Use `'static'` when services don't run under PM2 (e.g. turbo, vite) |
+| `list` | `[]` | Service entries with `name`, `port`, and optional `processes`. Should mirror `services.ports` |
+| `list[].processes` | `undefined` | Array of PM2 process names when they differ from `name`. Status is online if any listed process is running |
+| `runningCheck` | `'pm2'` | `'pm2'` or `'devTab'`. How the dashboard checks if local services are running |
+| `docker` | `undefined` | Override for Docker containers. Set `{ manager: 'pm2' }` when Docker uses PM2 but local doesn't |
+
+**When to use:**
+
+| Setup | What to set |
+|---|---|
+| PM2 everywhere (generate strategy, monolith container) | Omit `dash.services` entirely |
+| Shared compose (separate containers, no PM2) | `manager: 'static'`, `runningCheck: 'devTab'` |
+| Local: turbo/vite, Docker: PM2 inside container | `manager: 'static'`, `runningCheck: 'devTab'`, `docker: { manager: 'pm2' }` |
+| Local PM2 with isolated PM2_HOME | `manager: 'static'` or omit, enable `features.localDev` |
+
+### paths
+
+```js
+paths: {
+  flowScripts: null,
+  dockerOverrides: null,
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `flowScripts` | `null` | Directory with worktree-flow scripts. `null` = `scripts/worktree` |
+| `dockerOverrides` | `null` | Directory copied into each worktree. `null` = disabled |
+
+### setup
+
+```js
+setup: {
+  symlinks: [
+    { src: '../.claude/skills', dst: '.claude/skills' },
+  ],
+  copyFiles: [
+    'scripts/port-config.js',
+    'globals.js',
+  ],
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `symlinks` | `[]` | Paths to symlink into each worktree on creation. `{ src, dst }` |
+| `copyFiles` | `[]` | Files to copy from repo root into each worktree on creation (relative paths) |
+
+`copyFiles` is useful when local worktrees need files from the main branch that may not exist on the worktree's branch (e.g., port offset support files).
+
+## Config Loading
+
+The config loader (`worktree-flow/config.js`) walks upward from CWD to find `wt.config.js`. It:
+
+1. Requires the file
+2. Deep-merges with defaults
+3. Resolves `{PREFIX}` templates in env var names
+4. Converts relative paths to absolute
+5. Exports the resolved config plus helper functions
+
+Helper functions exported from `config.js`:
+
+| Function | Description |
+|---|---|
+| `load_config({ cwd, required })` | Load and resolve config |
+| `container_name(config, alias)` | `{name}-{alias}` |
+| `compose_project(config, slug)` | `{name}-{slug}` |
+| `compute_offset(config, input)` | Deterministic port offset |
+| `compute_ports(config, offset)` | All service ports shifted |
+| `db_name(config, alias)` | `{prefix}{alias}` |
+| `domain_for(config, alias)` | Domain from template |
+| `get_compose_info(config, path)` | Shared compose helper |
+| `services_for_mode(config, mode)` | Service list for a mode |
+| `feature_enabled(config, name)` | Check feature flag |
+
+## Examples
+
+Two complete example configs are included in [wt.config.schema.md](../wt.config.schema.md):
+- **Generate strategy example** — Monolithic container, multiple services, MongoDB, Traefik, full features
+- **build-check** — Shared compose, 2 services, Supabase, minimal features
