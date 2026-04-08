@@ -1263,21 +1263,24 @@ impl App {
         let path = self.worktrees[self.cursor].path.to_string_lossy().to_string();
         let auto_mode = self.settings.claude_auto_mode;
 
-        // Resolve claude: check config, then common paths
-        let claude_bin = self.cfg.as_ref()
-            .and_then(|c| c.dash.commands.get("claude"))
-            .map(|cmd| cmd.cmd.clone())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                // Check common locations
-                let home = std::env::var("HOME").unwrap_or_default();
-                let local = format!("{}/.claude/local/claude", home);
-                if std::path::Path::new(&local).exists() {
-                    local
-                } else {
-                    "claude".to_string()
-                }
-            });
+        // Resolve claude binary: config → local install → PATH
+        let claude_bin = {
+            let from_config = self.cfg.as_ref()
+                .and_then(|c| c.dash.commands.get("claude"))
+                .map(|cmd| cmd.cmd.clone())
+                .filter(|s| !s.is_empty());
+
+            let home = std::env::var("HOME").unwrap_or_default();
+            let local_path = format!("{}/.claude/local/claude", home);
+
+            match from_config {
+                Some(cmd) if std::path::Path::new(&cmd).exists() => cmd,
+                Some(cmd) if cmd == "claude" && std::path::Path::new(&local_path).exists() => local_path,
+                Some(cmd) => cmd,
+                None if std::path::Path::new(&local_path).exists() => local_path,
+                None => "claude".to_string(),
+            }
+        };
 
         let mut args: Vec<String> = Vec::new();
         if auto_mode {
