@@ -447,32 +447,80 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     }
 
     // Session: two lines — name on first, icon+status on second (aligned with name)
-    let (indent, prefix, status_indent, status_indent_sel) = if entry.is_group_child {
-        ("└", "│", " │ ", " | ")
-    } else {
-        (" ", "", " ", " ")
-    };
+    if entry.is_group_child {
+        // Group child: └│ prefix on line 1, space+│ on line 2
+        let name_text = format!("{}{}", entry.label, num_suffix);
+        let name_chars = name_text.chars().count();
+        let status_text = format!("{} {}", icon, status);
+        let status_chars = status_text.chars().count();
+        let pad1 = width.saturating_sub(3 + name_chars); // " └│" = 3 chars
+        let pad2 = width.saturating_sub(3 + status_chars); // "  │" = 3 chars (space + space + │ + space before icon)
+
+        if is_cursor && panel_focused {
+            let sel = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
+            let sel_dim = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
+            return vec![
+                Line::from(vec![
+                    Span::styled(" └│", sel),
+                    Span::styled(name_text, sel),
+                    Span::styled(" ".repeat(pad1), sel),
+                ]),
+                Line::from(vec![
+                    Span::styled("  │ ", sel_dim),
+                    Span::styled(status_text, sel_dim),
+                    Span::styled(" ".repeat(pad2.saturating_sub(1)), sel_dim),
+                ]),
+            ];
+        }
+
+        return vec![
+            Line::from(vec![
+                Span::styled(" └│", Style::default().fg(HEADER_COLOR)),
+                Span::styled(entry.label.clone(), Style::default().fg(DIM_TEXT_COLOR)),
+                Span::styled(num_suffix, Style::default().fg(HEADER_COLOR)),
+            ]),
+            Line::from(vec![
+                Span::styled("  │ ", Style::default().fg(HEADER_COLOR)),
+                Span::styled(icon.to_string(), Style::default().fg(icon_color)),
+                Span::raw(" "),
+                Span::styled(status, Style::default().fg(HEADER_COLOR)),
+            ]),
+        ];
+    }
+
+    // Non-group session
+    let name_text = format!("{}{}", entry.label, num_suffix);
+    let name_chars = name_text.chars().count();
+    let status_text = format!("{} {}", icon, status);
+    let status_chars = status_text.chars().count();
+    let pad1 = width.saturating_sub(1 + name_chars);
+    let pad2 = width.saturating_sub(1 + status_chars);
 
     if is_cursor && panel_focused {
         let sel = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
         let sel_dim = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
-        let line1 = format!("{}{}{}{}", indent, prefix, entry.label, num_suffix);
-        let line2 = format!("{}{} {}", status_indent_sel, icon, status);
         return vec![
-            Line::from(Span::styled(truncate_pad(&line1, width), sel)),
-            Line::from(Span::styled(truncate_pad(&line2, width), sel_dim)),
+            Line::from(vec![
+                Span::styled(" ", sel),
+                Span::styled(name_text, sel),
+                Span::styled(" ".repeat(pad1), sel),
+            ]),
+            Line::from(vec![
+                Span::styled(" ", sel_dim),
+                Span::styled(status_text, sel_dim),
+                Span::styled(" ".repeat(pad2), sel_dim),
+            ]),
         ];
     }
 
     vec![
         Line::from(vec![
-            Span::raw(indent.to_string()),
-            Span::styled(prefix.to_string(), Style::default().fg(HEADER_COLOR)),
+            Span::raw(" "),
             Span::styled(entry.label.clone(), Style::default().fg(DIM_TEXT_COLOR)),
             Span::styled(num_suffix, Style::default().fg(HEADER_COLOR)),
         ]),
         Line::from(vec![
-            Span::styled(status_indent.to_string(), Style::default().fg(HEADER_COLOR)),
+            Span::raw(" "),
             Span::styled(icon.to_string(), Style::default().fg(icon_color)),
             Span::raw(" "),
             Span::styled(status, Style::default().fg(HEADER_COLOR)),
