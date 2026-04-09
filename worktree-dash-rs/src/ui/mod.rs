@@ -1383,7 +1383,7 @@ fn render_section_header(frame: &mut Frame, area: Rect, title: &str, focused: bo
     } else {
         Style::default().fg(HEADER_COLOR).bg(HEADER_BG)
     };
-    let line_style = Style::default().fg(BORDER_COLOR).bg(HEADER_BG);
+    let line_style = Style::default().fg(HEADER_COLOR).bg(HEADER_BG);
 
     let label = format!(" {} ", title);
     let remaining = (area.width as usize).saturating_sub(label.len() + 1);
