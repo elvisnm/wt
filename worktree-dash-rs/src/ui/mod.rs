@@ -247,7 +247,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
 
     if app.tabs.is_empty() {
         if area.height > 1 {
-            let content_area = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+            let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     " No sessions open",
@@ -259,8 +259,8 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
         return;
     }
 
-    let inner_w = area.width.saturating_sub(2) as usize;
-    let inner_h = area.height.saturating_sub(1) as usize;
+    let inner_w = area.width.saturating_sub(1) as usize;
+    let inner_h = area.height.saturating_sub(2) as usize;
 
     // Build flat list of tab entries with sequential numbering (1-9)
     // Group headers have no number — only sessions get numbers
@@ -368,7 +368,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
         }
     }
 
-    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
     let content = Paragraph::new(lines);
     frame.render_widget(content, content_area);
 }
@@ -449,7 +449,7 @@ fn render_worktrees_panel(frame: &mut Frame, area: Rect, app: &App, overlay_acti
     let focused = app.focus == Panel::Worktrees && !overlay_active;
     render_section_header(frame, area, "worktrees", focused);
 
-    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
     if app.worktrees.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(" No worktrees discovered", Style::default().fg(DIM_TEXT_COLOR)))),
@@ -583,7 +583,7 @@ fn render_services_panel(frame: &mut Frame, area: Rect, app: &App, overlay_activ
     let focused = app.focus == Panel::Services && !overlay_active;
     render_section_header(frame, area, "services", focused);
 
-    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
     if app.services.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(" No services", Style::default().fg(DIM_TEXT_COLOR)))),
@@ -656,7 +656,7 @@ fn render_details_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active
     let focused = app.focus == Panel::Details && !overlay_active;
     render_section_header(frame, area, "details", focused);
 
-    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
     let text = if app.cursor < app.worktrees.len() {
         build_detail_lines(&app.worktrees[app.cursor], app.spin_frame, app.cfg.as_ref())
     } else {
@@ -826,7 +826,7 @@ fn detail_line(label: &str, value: &str, label_style: Style) -> Line<'static> {
 fn render_usage_panel(frame: &mut Frame, area: Rect, app: &App) {
     render_section_header(frame, area, "usage", false);
 
-    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
     let text = if let Some(ref err) = app.usage_err {
         vec![Line::from(Span::styled(err.clone(), Style::default().fg(STOPPED_COLOR)))]
     } else if let Some(ref data) = app.usage_data {
@@ -848,7 +848,7 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
     let header = if is_detail { "task detail" } else { "tasks" };
     render_section_header(frame, area, header, focused);
 
-    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
 
     if let Some(ref err) = app.tasks_err {
         frame.render_widget(Paragraph::new(Line::from(Span::styled(
@@ -1271,19 +1271,29 @@ fn panel_title(title: &str, focused: bool) -> Span<'static> {
     Span::styled(title.to_string(), style)
 }
 
-/// Render a section header line (replaces bordered panel titles).
+/// Render a section header with trailing line: ─ title ─────────
+/// Takes 2 rows: header line + blank spacer.
 fn render_section_header(frame: &mut Frame, area: Rect, title: &str, focused: bool) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let style = if focused {
+    let title_style = if focused {
         Style::default().fg(FOCUS_BORDER_COLOR).bold()
     } else {
         Style::default().fg(HEADER_COLOR)
     };
+    let line_style = Style::default().fg(BORDER_COLOR);
+
+    let label = format!(" {} ", title);
+    let remaining = (area.width as usize).saturating_sub(label.len() + 1);
+    let rule = "─".repeat(remaining);
+
     let header_area = Rect::new(area.x, area.y, area.width, 1);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(format!(" {}", title), style))),
+        Paragraph::new(Line::from(vec![
+            Span::styled(label, title_style),
+            Span::styled(rule, line_style),
+        ])),
         header_area,
     );
 }
