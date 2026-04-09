@@ -64,16 +64,16 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
         vec![box_line(col_w, b, vec![s("  ", d), s("u", k), s("           start", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("t", k), s("           stop", d)])],
         vec![box_bottom(col_w, b)],
-    ].concat();
-
-    // Right column: Services, Tasks, Operations, Terminal, Split Panels
-    let right: Vec<Vec<Span>> = [
         vec![box_top("Services", col_w, b, t)],
         vec![vec![]],
         vec![box_line(col_w, b, vec![s("  ", d), s("Enter", k), s("       preview logs", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("l", k), s("           pin logs (tab)", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("r", k), s("           restart service", d)])],
         vec![box_bottom(col_w, b)],
+    ].concat();
+
+    // Right column: Tasks, Operations, Terminal, Split Panels
+    let right: Vec<Vec<Span>> = [
         vec![box_top("Tasks (Shift+T)", col_w, b, t)],
         vec![vec![]],
         vec![box_line(col_w, b, vec![s("  ", d), s("j", k), s(" / ", d), s("k", k), s("       navigate tasks", d)])],
