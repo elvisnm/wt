@@ -1158,7 +1158,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             ("Ctrl+]", "Detach"),
             ("Ctrl+f", "Fullscreen"),
             ("Ctrl+x", "Close"),
-            ("Shift+↑/↓", "Scroll"),
+            ("Shift+ ↑/↓", "Scroll"),
             ("PgUp/PgDn", "Scroll"),
         ]
     } else if app.confirm_quit {
@@ -1185,30 +1185,33 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
                 ("c", "Claude"),
                 ("n", "Create"),
                 ("j/k", "Navigate"),
-                ("Tab", "Next Panel"),
+                ("Tab", "Next"),
+                ("Shift+ Tab", "Back"),
                 ("?", "Help"),
                 ("Ctrl+q", "Quit"),
             ],
             Panel::Terminal => vec![
                 ("Enter", "Focus"),
-                ("h/l", "Switch Tab"),
                 ("x", "Close"),
                 ("f", "Fullscreen"),
                 ("r", "Rename"),
-                ("Shift + \\", "Split H"),
-                ("Shift + -", "Split V"),
-                ("Tab", "Next Panel"),
+                ("Shift+ \\", "Split H"),
+                ("Shift+ -", "Split V"),
+                ("Tab", "Next"),
+                ("Shift+ Tab", "Back"),
             ],
             Panel::Services => vec![
                 ("Enter", "Preview"),
                 ("l", "Logs Tab"),
                 ("r", "Restart"),
                 ("j/k", "Navigate"),
-                ("Tab", "Next Panel"),
+                ("Tab", "Next"),
+                ("Shift+ Tab", "Back"),
             ],
             Panel::Details => vec![
                 ("j/k", "Scroll"),
-                ("Tab", "Next Panel"),
+                ("Tab", "Next"),
+                ("Shift+ Tab", "Back"),
             ],
             Panel::Tasks => if app.tasks_detail.is_some() {
                 vec![
@@ -1221,7 +1224,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
                     ("Enter", "Detail"),
                     ("c", "Close"),
                     ("d", "Delete"),
-                    ("Tab", "Next Panel"),
+                    ("Tab", "Next"),
+                ("Shift+ Tab", "Back"),
                 ]
             },
         }
