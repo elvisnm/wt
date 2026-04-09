@@ -8,7 +8,7 @@ pub mod style;
 pub mod term_view;
 
 pub use layout::{Layout, ResizeOpts};
-pub use overlay::{NotifyKind, NotifyState, PickerAction};
+pub use overlay::{NotifyState, PickerAction};
 pub use style::*;
 
 use ratatui::{
@@ -19,13 +19,15 @@ use ratatui::{
 use crate::app::{App, Panel};
 
 pub fn render(frame: &mut Frame, app: &App) {
-    // When a blocking overlay is active (confirm, error, picker),
-    // no panel should show green — only the overlay gets focus color
-    let overlay_active = app.confirm_quit
+    // When a blocking overlay is active (picker, input, confirm toast),
+    // no panel should show green — only the overlay gets focus color.
+    // Error/info toasts do NOT block — user keeps working normally.
+    let overlay_active = app.toasts.iter().any(|t| {
+            matches!(&t.action, Some(overlay::ToastAction::Confirm))
+        })
         || matches!(&app.notify_state, overlay::NotifyState::Picker { .. })
         || matches!(&app.notify_state, overlay::NotifyState::Confirm { .. })
-        || matches!(&app.notify_state, overlay::NotifyState::Input { .. })
-        || matches!(&app.notify_state, overlay::NotifyState::Message { kind: overlay::NotifyKind::Error, .. });
+        || matches!(&app.notify_state, overlay::NotifyState::Input { .. });
 
     let area = frame.area();
 
@@ -35,19 +37,10 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
 
-    // Compute top bar height: activity spinner OR notification OR quit confirm
-    let notify_bar_height = if app.confirm_quit {
-        2 // title + question
-    } else if let overlay::NotifyState::Message { message, .. } = &app.notify_state {
-        let lines = message.lines().count().max(1) as u16;
-        lines + 1 // +1 for the title/hint row
-    } else if app.activity.is_some() {
-        1 // single-line activity spinner
-    } else {
-        0
-    };
+    // Compute top bar height: activity spinner only
+    let notify_bar_height = if app.activity.is_some() { 1u16 } else { 0 };
 
-    // Split: [optional notify bar] + main content + status bar
+    // Split: [optional activity bar] + main content + status bar
     let (main_area, status_area, notify_area) = if notify_bar_height > 0 {
         let outer = ratatui::layout::Layout::default()
             .direction(Direction::Vertical)
@@ -66,40 +59,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         (outer[0], outer[1], None)
     };
 
-    // Render notification/confirm bar
+    // Render activity spinner bar
     if let Some(bar_area) = notify_area {
-        if app.confirm_quit {
-            let bg = HEADER_BG;
-            let bold = Style::default().fg(STARTING_COLOR).bg(bg).add_modifier(ratatui::style::Modifier::BOLD);
-            let text = Style::default().fg(DIM_TEXT_COLOR).bg(bg);
-            let action_label = Style::default().fg(HEADER_COLOR).bg(bg);
-
-            let msg = " Quit wt dashboard?";
-            let actions = "Enter: confirm  Esc: cancel ";
-            // Split actions into styled spans
-            let action_spans = vec![
-                Span::styled("Enter", bold),
-                Span::styled(": confirm  ", action_label),
-                Span::styled("Esc", bold),
-                Span::styled(": cancel ", action_label),
-            ];
-            let actions_len: usize = actions.len();
-            let padding = (bar_area.width as usize).saturating_sub(msg.len() + actions_len);
-
-            let bar = Paragraph::new(vec![
-                Line::from(Span::styled(" Exit ", bold)),
-                Line::from({
-                    let mut spans = vec![
-                        Span::styled(msg, text),
-                        Span::styled(" ".repeat(padding), text),
-                    ];
-                    spans.extend(action_spans);
-                    spans
-                }),
-            ]).style(Style::default().bg(bg));
-            frame.render_widget(bar, bar_area);
-        } else if let Some(ref activity) = app.activity {
-            // Activity spinner bar
+        if let Some(ref activity) = app.activity {
             let bg = HEADER_BG;
             let spinner = SPIN_FRAMES[app.spin_frame % SPIN_FRAMES.len()];
             let bar = Paragraph::new(Line::from(vec![
@@ -107,8 +69,6 @@ pub fn render(frame: &mut Frame, app: &App) {
                 Span::styled(format!("{} ", activity), Style::default().fg(DIM_TEXT_COLOR).bg(bg)),
             ])).style(Style::default().bg(bg));
             frame.render_widget(bar, bar_area);
-        } else {
-            render_notify_bar(frame, bar_area, &app.notify_state);
         }
     }
 
@@ -127,22 +87,24 @@ pub fn render(frame: &mut Frame, app: &App) {
             // Sidebar hidden — just show terminal area full width
             render_terminal_area(frame, main_area, app, overlay_active);
         }
-        render_status_bar(frame, status_area, app);
-        return;
+    } else {
+        // Main split: left panel | right terminal area
+        let main_layout = ratatui::layout::Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(app.settings.left_pane_pct),
+                Constraint::Percentage(100 - app.settings.left_pane_pct),
+            ])
+            .split(main_area);
+
+        render_left_column(frame, main_layout[0], app, overlay_active);
+        render_terminal_area(frame, main_layout[1], app, overlay_active);
     }
 
-    // Main split: left panel | right terminal area
-    let main_layout = ratatui::layout::Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(app.settings.left_pane_pct),
-            Constraint::Percentage(100 - app.settings.left_pane_pct),
-        ])
-        .split(main_area);
-
-    render_left_column(frame, main_layout[0], app, overlay_active);
-    render_terminal_area(frame, main_layout[1], app, overlay_active);
     render_status_bar(frame, status_area, app);
+
+    // Floating toasts — rendered last so they appear on top of everything
+    overlay::render_toasts(frame, area, &app.toasts);
 }
 
 fn render_left_column(frame: &mut Frame, area: Rect, app: &App, overlay_active: bool) {
@@ -221,10 +183,6 @@ fn render_left_column(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
 
 fn render_notify_panel(frame: &mut Frame, area: Rect, app: &App) {
     if area.height == 0 {
-        return;
-    }
-    // Messages and confirm_quit render as top bar — show idle state here
-    if app.confirm_quit || matches!(&app.notify_state, overlay::NotifyState::Message { .. }) {
         return;
     }
     // Picker, Input, Confirm overlays still render in this panel
@@ -1430,11 +1388,6 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             ("Ctrl+x", "Close"),
             ("Shift+ ↑/↓", "Scroll"),
         ]
-    } else if app.confirm_quit {
-        vec![
-            ("Enter", "Confirm"),
-            ("Esc", "Cancel"),
-        ]
     } else if matches!(&app.notify_state, overlay::NotifyState::Picker { .. }) {
         vec![
             ("↑/↓", "Navigate"),
@@ -1709,64 +1662,6 @@ fn render_scrollbar(frame: &mut Frame, area: Rect, total: usize, visible: usize,
 }
 
 // ── Notification Bar Renderer ─────────────────────────────────────────────
-
-fn render_notify_bar(frame: &mut Frame, area: Rect, state: &overlay::NotifyState) {
-    if let overlay::NotifyState::Message { title, message, kind } = state {
-        let bg = HEADER_BG;
-        let title_color = match kind {
-            overlay::NotifyKind::Success => RUNNING_COLOR,
-            overlay::NotifyKind::Error => STOPPED_COLOR,
-            overlay::NotifyKind::Info => HINT_COLOR,
-        };
-
-        let bar_style = Style::default().fg(DIM_TEXT_COLOR).bg(bg);
-        let bold = Style::default().fg(title_color).bg(bg).add_modifier(ratatui::style::Modifier::BOLD);
-        let action_label = Style::default().fg(HEADER_COLOR).bg(bg);
-
-        let mut lines: Vec<Line> = Vec::new();
-
-        // Title row — add outcome badge only when title doesn't already say it
-        let title_is_outcome = matches!(title.as_str(), "Success" | "Error" | "Info");
-        if title_is_outcome {
-            lines.push(Line::from(Span::styled(format!(" {} ", title), bold)));
-        } else {
-            let badge = match kind {
-                overlay::NotifyKind::Success => " SUCCESS ",
-                overlay::NotifyKind::Error => " ERROR ",
-                overlay::NotifyKind::Info => " INFO ",
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {} ", title), bold),
-                Span::styled(badge, action_label),
-            ]));
-        }
-
-        // Message lines
-        let msg_lines: Vec<&str> = message.lines().collect();
-        for (i, line) in msg_lines.iter().enumerate() {
-            let is_last = i == msg_lines.len() - 1;
-            if is_last {
-                // Last message line: right-align actions
-                let hint_key = "Esc";
-                let hint_label = ": close ";
-                let msg_text = format!(" {}", line);
-                let padding = (area.width as usize)
-                    .saturating_sub(msg_text.len() + hint_key.len() + hint_label.len());
-                lines.push(Line::from(vec![
-                    Span::styled(msg_text, bar_style),
-                    Span::styled(" ".repeat(padding), bar_style),
-                    Span::styled(hint_key, bold),
-                    Span::styled(hint_label, action_label),
-                ]));
-            } else {
-                lines.push(Line::from(Span::styled(format!(" {}", line), bar_style)));
-            }
-        }
-
-        let bar = Paragraph::new(lines).style(bar_style);
-        frame.render_widget(bar, area);
-    }
-}
 
 // ── Init Wizard Renderer ─────────────────────────────────────────────────
 
