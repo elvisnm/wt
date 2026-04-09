@@ -69,11 +69,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render notification/confirm bar
     if let Some(bar_area) = notify_area {
         if app.confirm_quit {
-            let bg = Color::Yellow;
-            let fg = Color::Black;
-            let bold = Style::default().fg(fg).bg(bg).add_modifier(ratatui::style::Modifier::BOLD);
-            let text = Style::default().fg(fg).bg(bg);
-            let action_label = Style::default().fg(Color::Rgb(100, 80, 0)).bg(bg);
+            let bg = HEADER_BG;
+            let bold = Style::default().fg(STARTING_COLOR).bg(bg).add_modifier(ratatui::style::Modifier::BOLD);
+            let text = Style::default().fg(DIM_TEXT_COLOR).bg(bg);
+            let action_label = Style::default().fg(HEADER_COLOR).bg(bg);
 
             let msg = " Quit wt dashboard?";
             let actions = "Enter: confirm  Esc: cancel ";
@@ -101,13 +100,12 @@ pub fn render(frame: &mut Frame, app: &App) {
             frame.render_widget(bar, bar_area);
         } else if let Some(ref activity) = app.activity {
             // Activity spinner bar
-            let bg = HINT_COLOR; // cyan/info color
-            let fg = Color::Black;
-            let style = Style::default().fg(fg).bg(bg);
+            let bg = HEADER_BG;
             let spinner = SPIN_FRAMES[app.spin_frame % SPIN_FRAMES.len()];
             let bar = Paragraph::new(Line::from(vec![
-                Span::styled(format!(" {} {} ", spinner, activity), style),
-            ])).style(style);
+                Span::styled(format!(" {} ", spinner), Style::default().fg(HINT_COLOR).bg(bg)),
+                Span::styled(format!("{} ", activity), Style::default().fg(DIM_TEXT_COLOR).bg(bg)),
+            ])).style(Style::default().bg(bg));
             frame.render_widget(bar, bar_area);
         } else {
             render_notify_bar(frame, bar_area, &app.notify_state);
@@ -1374,16 +1372,18 @@ fn panel_title(title: &str, focused: bool) -> Span<'static> {
 
 /// Render a section header with trailing line: ─ title ─────────
 /// Takes 2 rows: header line + blank spacer.
+const HEADER_BG: Color = Color::Indexed(236);
+
 fn render_section_header(frame: &mut Frame, area: Rect, title: &str, focused: bool) {
     if area.height == 0 || area.width == 0 {
         return;
     }
     let title_style = if focused {
-        Style::default().fg(FOCUS_BORDER_COLOR).bold()
+        Style::default().fg(FOCUS_BORDER_COLOR).bg(HEADER_BG).bold()
     } else {
-        Style::default().fg(HEADER_COLOR)
+        Style::default().fg(HEADER_COLOR).bg(HEADER_BG)
     };
-    let line_style = Style::default().fg(BORDER_COLOR);
+    let line_style = Style::default().fg(BORDER_COLOR).bg(HEADER_BG);
 
     let label = format!(" {} ", title);
     let remaining = (area.width as usize).saturating_sub(label.len() + 1);
@@ -1394,7 +1394,7 @@ fn render_section_header(frame: &mut Frame, area: Rect, title: &str, focused: bo
         Paragraph::new(Line::from(vec![
             Span::styled(label, title_style),
             Span::styled(rule, line_style),
-        ])),
+        ])).style(Style::default().bg(HEADER_BG)),
         header_area,
     );
 }
@@ -1445,20 +1445,16 @@ pub fn visible_window(total: usize, cursor: usize, max_lines: usize) -> (usize, 
 
 fn render_notify_bar(frame: &mut Frame, area: Rect, state: &overlay::NotifyState) {
     if let overlay::NotifyState::Message { title, message, kind } = state {
-        let (bg, fg) = match kind {
-            overlay::NotifyKind::Success => (Color::Green, Color::Black),
-            overlay::NotifyKind::Error => (Color::Red, Color::White),
-            overlay::NotifyKind::Info => (Color::Cyan, Color::Black),
-        };
-        let action_label_fg = match kind {
-            overlay::NotifyKind::Success => Color::Rgb(40, 80, 40),
-            overlay::NotifyKind::Error => Color::Rgb(180, 120, 120),
-            overlay::NotifyKind::Info => Color::Rgb(40, 80, 80),
+        let bg = HEADER_BG;
+        let title_color = match kind {
+            overlay::NotifyKind::Success => RUNNING_COLOR,
+            overlay::NotifyKind::Error => STOPPED_COLOR,
+            overlay::NotifyKind::Info => HINT_COLOR,
         };
 
-        let bar_style = Style::default().fg(fg).bg(bg);
-        let bold = bar_style.add_modifier(ratatui::style::Modifier::BOLD);
-        let action_label = Style::default().fg(action_label_fg).bg(bg);
+        let bar_style = Style::default().fg(DIM_TEXT_COLOR).bg(bg);
+        let bold = Style::default().fg(title_color).bg(bg).add_modifier(ratatui::style::Modifier::BOLD);
+        let action_label = Style::default().fg(HEADER_COLOR).bg(bg);
 
         let mut lines: Vec<Line> = Vec::new();
 
