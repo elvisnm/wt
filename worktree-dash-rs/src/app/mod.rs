@@ -2380,8 +2380,8 @@ impl App {
     /// Compute the terminal area size in cols/rows based on current layout.
     fn terminal_area_size(&self) -> (u16, u16) {
         let left_pct = self.settings.left_pane_pct;
-        let cols = self.width.saturating_sub(self.width * left_pct / 100).saturating_sub(2);
-        let rows = self.height.saturating_sub(2);
+        let cols = self.width.saturating_sub(self.width * left_pct / 100);
+        let rows = self.height.saturating_sub(2); // status bar + title row
         (cols.max(10), rows.max(5))
     }
 
