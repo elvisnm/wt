@@ -389,11 +389,11 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
         ("☰", HEADER_COLOR)
     } else if !entry.alive {
         if entry.exit_code == Some(0) {
-            ("●", RUNNING_COLOR)
+            ("□", RUNNING_COLOR)
         } else if entry.exit_code.is_some() {
-            ("●", STOPPED_COLOR)
+            ("□", STOPPED_COLOR)
         } else {
-            ("○", DIM_TEXT_COLOR)
+            ("□", DIM_TEXT_COLOR)
         }
     } else {
         match entry.agent_state {
@@ -401,9 +401,9 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
                 let frame = SPIN_FRAMES[spin_frame % SPIN_FRAMES.len()];
                 (frame, HINT_COLOR)
             }
-            AgentState::Blocked => ("!", STOPPED_COLOR),
-            AgentState::Idle => ("●", RUNNING_COLOR),
-            AgentState::Unknown => ("■", if entry.is_active { HIGHLIGHT_COLOR } else { DIM_TEXT_COLOR }),
+            AgentState::Blocked => ("□", STOPPED_COLOR),
+            AgentState::Idle => ("□", RUNNING_COLOR),
+            AgentState::Unknown => ("□", DIM_TEXT_COLOR),
         }
     };
 
@@ -446,15 +446,18 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
         ])];
     }
 
-    // Session: two lines — name on first, icon+status on second
-    let indent = if entry.is_group_child { "  " } else { " " };
-    let prefix = if entry.is_group_child { "- " } else { "" };
+    // Session: two lines — name on first, icon+status on second (aligned with name)
+    let (indent, prefix, status_indent) = if entry.is_group_child {
+        ("  ", "└ ", "    ")  // 2 + 2 = 4 chars before name, 4 chars before status
+    } else {
+        (" ", "", " ")       // 1 char before name, 1 char before status
+    };
 
     if is_cursor && panel_focused {
         let sel = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
         let sel_dim = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
         let line1 = format!("{}{}{}{}", indent, prefix, entry.label, num_suffix);
-        let line2 = format!("{} {} {}", indent, icon, status);
+        let line2 = format!("{}{} {}", status_indent, icon, status);
         return vec![
             Line::from(Span::styled(truncate_pad(&line1, width), sel)),
             Line::from(Span::styled(truncate_pad(&line2, width), sel_dim)),
@@ -469,7 +472,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
             Span::styled(num_suffix, Style::default().fg(HEADER_COLOR)),
         ]),
         Line::from(vec![
-            Span::raw(format!("{} ", indent)),
+            Span::raw(status_indent.to_string()),
             Span::styled(icon.to_string(), Style::default().fg(icon_color)),
             Span::raw(" "),
             Span::styled(status, Style::default().fg(HEADER_COLOR)),
