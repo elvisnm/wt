@@ -1209,7 +1209,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     let shortcuts: Vec<(&str, &str)> = if app.terminal_focused {
         vec![
             ("Ctrl+]", "Detach"),
-            ("Ctrl+ ,/.", "Switch"),
+            ("Ctrl+j/k", "Switch"),
             ("Ctrl+f", "Fullscreen"),
             ("Ctrl+x", "Close"),
             ("Shift+ ↑/↓", "Scroll"),
