@@ -1,214 +1,139 @@
 # Getting Started
 
-This guide walks through adding wt to an existing project.
-
 ## Prerequisites
 
+- [Homebrew](https://brew.sh/) (macOS/Linux)
 - Node.js >= 18
-- Docker with Compose v2 (required for Docker worktrees but optional for local mode)
-- PM2 (`npm install -g pm2`) for local worktrees
 - Git
-- Your project has a git repository
 
-## Step 1: Generate a Config
-
-**Option A: From a project template** (recommended when one exists)
-
-If your project ships a `wt.config.js.<name>` template, initialize from it:
+## Install
 
 ```bash
-wt init --custom=<name>
+brew tap elvisnm/wt
+brew install wt
 ```
 
-This copies the template to `wt.config.js` and auto-personalizes machine-specific values (like the Claude binary path). Use `--force` to overwrite an existing config.
+## First Run
 
-**Option B: Auto-detect from scratch**
-
-From the wt directory, run the init wizard targeting your project:
+Open any git project and launch the dashboard:
 
 ```bash
-node worktree-flow/wt-init.js /path/to/your-project
+cd your-project
+wt
 ```
 
-The wizard will:
-1. Detect your project type (Node.js, Go, Rust, Python)
-2. Find existing docker-compose files
-3. Ask about services, ports, database, features
-4. Write `wt.config.js` to your project root
+If no `wt.config.js` exists, the **init wizard** appears:
 
-You can also create the config manually. Here's a minimal example:
+1. **Stack detection** — auto-detects your project type (Node.js, Next.js, Python, Rust, Go, Rails, etc.)
+2. **Project name** — defaults to the directory name
+3. **Worktrees directory** — where worktrees are created (default: `../{name}-worktrees`)
+4. **Preview and confirm** — writes `wt.config.js`
+
+The dashboard loads and you're ready to create your first worktree.
+
+## Create a Worktree
+
+1. Select **Root** in the worktree list
+2. Press **Enter** to open the action menu
+3. Select **Create** (`n`)
+4. Follow the prompts: branch name, base ref, alias
+
+The worktree is created in the worktrees directory and appears in the list.
+
+## Start a Worktree
+
+1. Select a worktree in the list
+2. Press **Enter** → **Start** (`u`)
+
+What happens depends on your project:
+
+| Project type | Start behavior |
+|---|---|
+| **Web app** (Node, Next, Python, etc.) | Runs `dash.localDevCommand` or lifecycle start as a daemon |
+| **Build project** (Rust, Go) | Compiles and installs the binary |
+| **Docker project** | Starts Docker containers |
+
+Services appear in the **Services** panel with online/offline status.
+
+## View Logs
+
+- Press **`l`** on a worktree to view its logs
+- Press **Enter** on a service in the Services panel for a log preview
+- Press **`l`** on a service to open logs as a full tab
+
+## Key Shortcuts
+
+| Key | Action |
+|---|---|
+| `Enter` | Action menu / preview |
+| `b` | Shell |
+| `c` | Claude Code |
+| `l` | Logs |
+| `u` | Start / Build |
+| `t` | Stop |
+| `n` | Create worktree |
+| `i` | Toggle details |
+| `Ctrl+Q` | Quit |
+| `?` | Full keybindings help |
+
+## Configuration
+
+The `wt.config.js` file controls everything. Minimal example:
 
 ```js
-// wt.config.js
 module.exports = {
   name: 'myapp',
+  stack: 'node',
 
-  docker: {
-    composeStrategy: 'generate',
-    generate: {
-      entrypoint: 'npm run dev',
-    },
-  },
-
-  services: {
-    ports: { web: 3000 },
-    primary: 'web',
-  },
-
-  database: { type: null },
-  redis: null,
-
-  env: {
-    prefix: 'MYAPP',
-    filename: '.env.worktree',
-  },
-
-  features: {
-    autostop: true,
-    prune: true,
+  repo: {
+    worktreesDir: '../myapp-worktrees',
   },
 };
 ```
 
-## Step 2: Choose a Docker Strategy
-
-You have two options. Pick the one that fits your project.
-
-### Option A: Generate (recommended for simple setups)
-
-wt generates a `docker-compose.worktree.yml` for each worktree. One container per worktree runs all your services inside (via PM2 or your entrypoint).
+For web apps with services:
 
 ```js
-docker: {
-  composeStrategy: 'generate',
-  baseImage: 'myapp-dev:latest',  // or null to use Dockerfile
-  generate: {
-    containerWorkdir: '/app',
-    entrypoint: 'npm run dev',
+module.exports = {
+  name: 'myapp',
+  stack: 'node',
+
+  repo: {
+    worktreesDir: '../myapp-worktrees',
   },
-},
-```
 
-Best for: monolithic apps, single-container setups, PM2-managed services.
-
-### Option B: Shared Compose
-
-Use an existing `docker-compose.yml` with environment variable substitution. wt writes port assignments and metadata to `.env.worktree`, then runs `docker compose -f <file> -p <project> up`.
-
-```js
-docker: {
-  composeStrategy: 'docker/docker-compose.dev.yml',
-  composeFile: 'docker/docker-compose.dev.yml',
-  generate: null,
-},
-```
-
-Your compose file uses variables like `${WEB_PORT}`, `${BRANCH_SLUG}`, `${PROJECT_ROOT}`:
-
-```yaml
-services:
-  web:
-    build: ./docker/web
-    container_name: myapp-${BRANCH_SLUG:-dev}-web
-    ports:
-      - "${WEB_PORT:-3000}:3000"
-    volumes:
-      - ${PROJECT_ROOT}:/app
-```
-
-Best for: multi-container setups, existing compose workflows, monorepos.
-
-See [Docker Strategies](docker-strategies.md) for full details on both approaches.
-
-### Option C: Local (no Docker)
-
-Run worktrees directly on the host with PM2 managing services. Each worktree gets an isolated PM2 daemon via `PM2_HOME`.
-
-```js
-features: {
-  localDev: true,
-},
-
-services: {
-  pm2: {
-    ecosystemConfig: 'ecosystem.config.cjs',
+  dash: {
+    localDevCommand: 'pnpm dev',
+    services: {
+      manager: 'static',
+      list: [
+        { name: 'web', port: 3000 },
+        { name: 'api', port: 4000 },
+      ],
+      runningCheck: 'devTab',
+    },
   },
-},
+};
 ```
 
-Best for: projects that don't need Docker isolation, fast startup, lower resource usage.
+For build projects (Rust, Go):
 
-Create with:
-```bash
-node worktree-flow/wt-up.js feat/my-feature --from=origin/main --no-docker
-```
+```js
+module.exports = {
+  name: 'myapp',
 
-## Step 3: Add Package Scripts (Optional)
-
-If your project uses npm/pnpm, add convenience scripts to `package.json`:
-
-```json
-{
-  "scripts": {
-    "dc": "node /path/to/wt/worktree-flow/wt-menu.js",
-    "dc:create": "node /path/to/wt/worktree-flow/wt-create.js",
-    "dc:up": "node /path/to/wt/worktree-flow/wt-up.js",
-    "dc:down": "node /path/to/wt/worktree-flow/wt-down.js",
-    "dc:status": "node /path/to/wt/worktree-flow/wt-status.js",
-    "dc:info": "node /path/to/wt/worktree-flow/wt-info.js",
-    "dc:logs": "node /path/to/wt/worktree-flow/wt-logs.js",
-    "dc:bash": "node /path/to/wt/worktree-flow/wt-shell.js",
-    "dc:restart": "node /path/to/wt/worktree-flow/wt-restart.js"
-  }
-}
-```
-
-Or set `paths.flowScripts` in your config to the wt scripts directory and the dashboard will find them automatically.
-
-## Step 4: Create Your First Worktree
-
-```bash
-# Interactive wizard (recommended for first time)
-pnpm dc:create
-# or
-node /path/to/wt/worktree-flow/wt-create.js
-
-# Direct creation
-pnpm dc:up feat/my-feature --from=origin/main
-```
-
-The wizard will prompt for:
-- Branch name (validated against `repo.branchPrefixes`)
-- Base ref (what to fork from)
-- Service mode (which services to run)
-- Alias (short name — auto-derived from branch)
-- Database strategy (isolated or shared)
-- Extra options (LAN, polling)
-
-## Step 5: Verify
-
-```bash
-# Check status
-pnpm dc:status
-
-# Get detailed info
-pnpm dc:info my-feat
-
-# Open a shell
-pnpm dc:bash my-feat
-```
-
-For local worktrees:
-```bash
-# Check PM2 status
-PM2_HOME=<worktree-path>/.pm2 pm2 list
-
-# View logs
-PM2_HOME=<worktree-path>/.pm2 pm2 logs
+  dash: {
+    build: {
+      cmd: 'cargo build && cp target/debug/myapp .builds/myapp-{alias}',
+      install: '{path}/.builds/myapp-{alias}',
+    },
+    logFile: '/tmp/myapp-{alias}.log',
+  },
+};
 ```
 
 ## Next Steps
 
-- [CLI Commands Reference](commands.md) — all available commands and options
-- [Configuration Reference](configuration.md) — every config field explained
-- [Dashboard Guide](dashboard.md) — using the Go TUI
+- [Configuration Reference](configuration.md) — every config field
+- [Dashboard Guide](dashboard.md) — panels, keybindings, features
+- [Docker Strategies](docker-strategies.md) — generate vs shared compose

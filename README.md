@@ -100,11 +100,10 @@ wt
 
 | Topic | Link |
 |---|---|
+| Getting started | [docs/getting-started.md](docs/getting-started.md) |
+| Dashboard guide | [docs/dashboard.md](docs/dashboard.md) |
 | Configuration reference | [docs/configuration.md](docs/configuration.md) |
-| CLI commands | [docs/commands.md](docs/commands.md) |
-| Dashboard keybindings | [docs/dashboard.md](docs/dashboard.md) |
 | Docker strategies | [docs/docker-strategies.md](docs/docker-strategies.md) |
-| Adding wt to your project | [docs/getting-started.md](docs/getting-started.md) |
 | Full config schema | [wt.config.schema.md](wt.config.schema.md) |
 
 ## Project Structure
