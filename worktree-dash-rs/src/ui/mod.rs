@@ -118,13 +118,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         if app.fullscreen {
             if let Some(sid) = app.fullscreen_session_id {
                 if let Some(session) = app.pty_mgr.get(sid) {
-                    let title_text = format!(" {} ", session.label);
-                    let title_area = Rect::new(main_area.x, main_area.y, main_area.width, 1);
-                    frame.render_widget(
-                        Paragraph::new(Line::from(Span::styled(title_text, Style::default().fg(FOCUS_BORDER_COLOR).bold()))),
-                        title_area,
-                    );
-                    let term_area = pad_rect(Rect::new(main_area.x, main_area.y + 1, main_area.width, main_area.height.saturating_sub(1)));
+                    let term_area = pad_rect(Rect::new(main_area.x, main_area.y, main_area.width, main_area.height));
                     let term_widget = term_view::TermView::new(session.term());
                     frame.render_widget(term_widget, term_area);
                 }
@@ -1116,23 +1110,17 @@ fn render_terminal_area(frame: &mut Frame, area: Rect, app: &App, overlay_active
 
     if let Some(session_id) = active_session_id {
         if let Some(session) = app.pty_mgr.get(session_id) {
-            // Title line at top
-            let title_text = format!(" {} ", session.label);
-            let title_style = if focused { Style::default().fg(FOCUS_BORDER_COLOR).bold() } else { Style::default().fg(DIM_TEXT_COLOR) };
-            let title_area = Rect::new(area.x, area.y, area.width, 1);
-            frame.render_widget(Paragraph::new(Line::from(Span::styled(title_text, title_style))), title_area);
-
-            // Focus indicator: ◥ on top-right corner
+            // Focus indicator: ◥ on top-right corner of title row
             if focused && area.width > 0 {
                 let indicator_x = area.x + area.width - 1;
                 let buf = frame.buffer_mut();
-                if indicator_x < buf.area().width && area.y < buf.area().height {
+                if area.y < buf.area().height && indicator_x < buf.area().width {
                     buf[(indicator_x, area.y)].set_symbol("◥");
                     buf[(indicator_x, area.y)].set_style(Style::default().fg(FOCUS_BORDER_COLOR));
                 }
             }
 
-            // Terminal content below title with 1-char padding on all sides
+            // Terminal content below empty title row
             let term_area = pad_rect(Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1)));
             let term_widget = term_view::TermView::new(session.term());
             frame.render_widget(term_widget, term_area);
@@ -1160,25 +1148,8 @@ fn render_split_node(
         SplitNode::Leaf(session_id) => {
             if let Some(session) = pty_mgr.get(*session_id) {
                 let is_focused = focused_session_id == Some(*session_id);
-                let _pane_border = if is_focused && terminal_focused {
-                    FOCUS_BORDER_COLOR
-                } else {
-                    BORDER_COLOR
-                };
-                let title_color = if is_focused && terminal_focused {
-                    FOCUS_BORDER_COLOR
-                } else {
-                    DIM_TEXT_COLOR
-                };
 
-                let title_text = format!(" {} ", session.label);
-                let title_area = Rect::new(area.x, area.y, area.width, 1);
-                frame.render_widget(
-                    Paragraph::new(Line::from(Span::styled(title_text, Style::default().fg(title_color)))),
-                    title_area,
-                );
-
-                // Focus indicator: ◥ on top-right corner
+                // Focus indicator: ◥ on top-right corner of title row
                 if is_focused && terminal_focused && area.width > 0 {
                     let indicator_x = area.x + area.width - 1;
                     let buf = frame.buffer_mut();
@@ -1188,6 +1159,7 @@ fn render_split_node(
                     }
                 }
 
+                // Terminal content below empty title row
                 let term_area = pad_rect(Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1)));
                 let term_widget = term_view::TermView::new(session.term());
                 frame.render_widget(term_widget, term_area);
