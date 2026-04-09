@@ -354,7 +354,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
         use crate::pty::split::DotMapSpan;
         let map_h = dot_map_lines.len();
         for (j, map_line) in dot_map_lines.iter().enumerate() {
-            let line_idx = inner_h.saturating_sub(map_h) + j;
+            let line_idx = inner_h.saturating_sub(map_h + 1) + j;
             if line_idx < lines.len() {
                 let map_spans: Vec<Span> = map_line.spans.iter().map(|s| match s {
                     DotMapSpan::Dot { highlighted: true } => {
