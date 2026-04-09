@@ -1195,8 +1195,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
                 ("x", "Close"),
                 ("f", "Fullscreen"),
                 ("r", "Rename"),
-                ("Shift+\\", "Split H"),
-                ("Shift+-", "Split V"),
+                ("Shift + \\", "Split H"),
+                ("Shift + -", "Split V"),
                 ("Tab", "Next Panel"),
             ],
             Panel::Services => vec![
