@@ -1685,8 +1685,10 @@ impl App {
                         SplitNode::leaf(new_id),
                     ));
                 }
-                // Focus the new session and resize
+                // Focus the new session, enter terminal mode, and resize
                 self.focused_session_id = Some(new_id);
+                self.focus = Panel::Terminal;
+                self.terminal_focused = true;
                 self.resize_split_ptys();
             }
             Err(e) => {
