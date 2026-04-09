@@ -452,18 +452,18 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
         ]);
     }
 
-    // → icon label (N)
-    let arrow = if entry.is_group_child { "  → " } else { " " };
+    // indent icon label (N)
+    let indent = if entry.is_group_child { "   " } else { " " };
 
     if is_cursor && panel_focused {
-        let line = format!("{}{} {}{}", arrow, icon, entry.label, num_suffix);
+        let line = format!("{}{} {}{}", indent, icon, entry.label, num_suffix);
         return Line::from(Span::styled(
             truncate_pad(&line, width),
             Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
         ));
     }
     if is_cursor {
-        let line = format!("{}{} {}{}", arrow, icon, entry.label, num_suffix);
+        let line = format!("{}{} {}{}", indent, icon, entry.label, num_suffix);
         return Line::from(Span::styled(
             truncate_pad(&line, width),
             Style::default().bold(),
@@ -471,7 +471,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     }
 
     Line::from(vec![
-        Span::styled(arrow.to_string(), Style::default().fg(HEADER_COLOR)),
+        Span::raw(indent.to_string()),
         Span::styled(icon.to_string(), Style::default().fg(icon_color)),
         Span::raw(" "),
         Span::styled(entry.label.clone(), label_style),
@@ -503,39 +503,40 @@ fn render_worktrees_panel(frame: &mut Frame, area: Rect, app: &App, overlay_acti
     let inner_w = content_area.width.saturating_sub(1) as usize;
     let inner_h = content_area.height as usize;
     let total = app.worktrees.len();
-    let (start, end) = visible_window(total, app.cursor, inner_h);
+    let visible_items = inner_h / 2; // 2 lines per worktree
+    let (start, end) = visible_window(total, app.cursor, visible_items);
 
     let lines: Vec<Line> = app.worktrees[start..end]
         .iter()
         .enumerate()
-        .map(|(i, wt)| {
+        .flat_map(|(i, wt)| {
             let idx = start + i;
             let selected = idx == app.cursor;
             let is_build_project = app.cfg.as_ref().map_or(false, |c| c.dash.build.is_some());
-            format_worktree_line(wt, inner_w, selected, focused, is_build_project)
+            format_worktree_lines(wt, inner_w, selected, focused, is_build_project)
         })
         .collect();
 
     frame.render_widget(Paragraph::new(lines), content_area);
 }
 
-fn format_worktree_line(wt: &crate::worktree::Worktree, width: usize, selected: bool, panel_focused: bool, is_build_project: bool) -> Line<'static> {
+fn format_worktree_lines(wt: &crate::worktree::Worktree, _width: usize, selected: bool, panel_focused: bool, is_build_project: bool) -> Vec<Line<'static>> {
     use crate::worktree::WorktreeType;
 
     let name = if wt.alias.is_empty() { &wt.name } else { &wt.alias };
-
-    // Right-side status text — adapts to project type
     let is_root = wt.alias == "Root";
-    let right = if is_root {
+
+    // Second line: type/status
+    let sub = if is_root {
         "project".to_string()
     } else if wt.health.ends_with("...") && !wt.running {
         wt.health.trim_end_matches("...").to_string()
     } else if is_build_project {
         "build".to_string()
     } else if wt.running && wt.wt_type == WorktreeType::Local {
-        "dev".to_string()
+        "running".to_string()
     } else if wt.running {
-        format!("{} {}", wt.cpu, wt.mem)
+        "running".to_string()
     } else if wt.container_exists {
         "docker".to_string()
     } else if wt.wt_type == WorktreeType::Local {
@@ -549,76 +550,52 @@ fn format_worktree_line(wt: &crate::worktree::Worktree, width: usize, selected: 
         ("◆", FOCUS_BORDER_COLOR)
     } else if wt.health.ends_with("...") {
         ("◐", STARTING_COLOR)
-    } else if wt.running && wt.health == "healthy" {
-        ("●", RUNNING_COLOR)
-    } else if wt.running && wt.health == "starting" {
-        ("◐", STARTING_COLOR)
     } else if wt.running {
         ("●", RUNNING_COLOR)
     } else if wt.container_exists {
         ("○", STOPPED_COLOR)
-    } else if wt.wt_type == WorktreeType::Local {
+    } else {
         ("◇", DIM_TEXT_COLOR)
-    } else {
-        ("○", STOPPED_COLOR)
     };
 
-    // Truncate name if needed
-    let right_w = right.len();
-    let max_name = width.saturating_sub(right_w + 5).max(4);
-    let display_name = if name.len() > max_name {
-        format!("{}~", &name[..max_name.saturating_sub(1)])
-    } else {
-        name.to_string()
-    };
-
-    // Calculate padding
-    // " {icon} {name}" + padding + "{right} "
-    let label_w = 1 + 1 + 1 + display_name.len(); // space + icon + space + name
-    let pad = width.saturating_sub(label_w + right_w + 1).max(1);
-    let padding = " ".repeat(pad);
-
-    // Build the line using spans for consistent alignment
-    // All lines use the same structure so "right" text stays aligned
     let name_style = if selected && panel_focused {
         Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold()
     } else if selected {
         Style::default().bold()
     } else {
-        Style::default().fg(DIM_TEXT_COLOR)
+        Style::default()
     };
 
-    let full_style = if selected && panel_focused {
-        Some(Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold())
-    } else if selected {
-        Some(Style::default().bold())
-    } else {
-        None
-    };
-
-    let icon_style = if let Some(s) = full_style {
-        s
+    let icon_style = if selected && panel_focused {
+        Style::default().fg(Color::White).bg(SELECTED_BG_COLOR)
     } else {
         Style::default().fg(icon_color)
     };
 
-    let right_style = if let Some(s) = full_style {
-        s
+    let sub_style = if selected && panel_focused {
+        Style::default().fg(Color::White).bg(SELECTED_BG_COLOR)
     } else {
         Style::default().fg(HEADER_COLOR)
     };
 
-    let pad_style = if let Some(s) = full_style { s } else { Style::default() };
+    let bg_style = if selected && panel_focused {
+        Style::default().bg(SELECTED_BG_COLOR)
+    } else {
+        Style::default()
+    };
 
-    Line::from(vec![
-        Span::styled(" ", pad_style),
-        Span::styled(icon.to_string(), icon_style),
-        Span::styled(" ", pad_style),
-        Span::styled(display_name, name_style),
-        Span::styled(padding, pad_style),
-        Span::styled(right, right_style),
-        Span::styled(" ", pad_style),
-    ])
+    vec![
+        Line::from(vec![
+            Span::styled(" ", bg_style),
+            Span::styled(icon.to_string(), icon_style),
+            Span::styled(" ", bg_style),
+            Span::styled(name.to_string(), name_style),
+        ]),
+        Line::from(vec![
+            Span::styled("   ", bg_style),
+            Span::styled(sub, sub_style),
+        ]),
+    ]
 }
 
 fn render_services_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: bool) {
