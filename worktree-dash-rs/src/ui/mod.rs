@@ -278,6 +278,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                 session_id: tab.session_id,
                 num: 0,
                 is_active,
+                is_focused: false,
                 alive: tab.alive,
                 exit_code: None,
                 is_group_head: true,
@@ -290,11 +291,13 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                     .map(|s| s.label.clone())
                     .unwrap_or_else(|| format!("session-{}", sid));
                 let child_exit = app.pty_mgr.get(*sid).and_then(|s| s.exit_code);
+                let child_focused = app.focused_session_id == Some(*sid) && app.terminal_focused;
                 entries.push(TabEntry {
                     label: child_label,
                     session_id: *sid,
                     num: seq,
                     is_active,
+                    is_focused: child_focused,
                     alive: app.pty_mgr.get(*sid).map(|s| s.alive).unwrap_or(false),
                     exit_code: child_exit,
                     is_group_head: false,
@@ -304,11 +307,13 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
             }
         } else {
             let tab_exit = app.pty_mgr.get(tab.session_id).and_then(|s| s.exit_code);
+            let tab_focused = app.focused_session_id == Some(tab.session_id) && app.terminal_focused && is_active;
             entries.push(TabEntry {
                 label: tab.label.clone(),
                 session_id: tab.session_id,
                 num: seq,
                 is_active,
+                is_focused: tab_focused,
                 alive: tab.alive,
                 exit_code: tab_exit,
                 is_group_head: false,
@@ -381,6 +386,7 @@ struct TabEntry {
     session_id: usize,
     num: usize,
     is_active: bool,
+    is_focused: bool,
     alive: bool,
     exit_code: Option<u32>,
     is_group_head: bool,
@@ -414,12 +420,12 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
         } else {
             ("○", DIM_TEXT_COLOR) // empty = dead
         }
-    } else if entry.is_active {
-        // Active session: spinner if running, square if idle
+    } else if entry.is_focused {
+        // Focused + terminal mode: spinner (will be agent-state-aware later)
         let frame = SPIN_FRAMES[spin_frame % SPIN_FRAMES.len()];
         (frame, HINT_COLOR)
     } else {
-        ("■", DIM_TEXT_COLOR) // square = alive but not active
+        ("■", if entry.is_active { HIGHLIGHT_COLOR } else { DIM_TEXT_COLOR })
     };
 
     let prefix_style = Style::default().fg(HEADER_COLOR);
