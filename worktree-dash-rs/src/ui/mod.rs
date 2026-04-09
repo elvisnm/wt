@@ -281,6 +281,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                 is_focused: false,
                 alive: tab.alive,
                 exit_code: None,
+                agent_state: crate::detect::AgentState::Unknown,
                 is_group_head: true,
                 is_group_child: false,
             });
@@ -300,6 +301,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                     is_focused: child_focused,
                     alive: app.pty_mgr.get(*sid).map(|s| s.alive).unwrap_or(false),
                     exit_code: child_exit,
+                    agent_state: app.agent_states.get(sid).copied().unwrap_or(crate::detect::AgentState::Unknown),
                     is_group_head: false,
                     is_group_child: true,
                 });
@@ -316,6 +318,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                 is_focused: tab_focused,
                 alive: tab.alive,
                 exit_code: tab_exit,
+                agent_state: app.agent_states.get(&tab.session_id).copied().unwrap_or(crate::detect::AgentState::Unknown),
                 is_group_head: false,
                 is_group_child: false,
             });
@@ -389,6 +392,7 @@ struct TabEntry {
     is_focused: bool,
     alive: bool,
     exit_code: Option<u32>,
+    agent_state: crate::detect::AgentState,
     is_group_head: bool,
     is_group_child: bool,
 }
@@ -410,6 +414,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     };
 
     // Icon based on state
+    use crate::detect::AgentState;
     let (icon, icon_color) = if entry.is_group_head {
         ("☰", HINT_COLOR) // sandwich for group
     } else if !entry.alive {
@@ -420,12 +425,23 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
         } else {
             ("○", DIM_TEXT_COLOR) // empty = dead
         }
-    } else if entry.is_focused {
-        // Focused + terminal mode: spinner (will be agent-state-aware later)
-        let frame = SPIN_FRAMES[spin_frame % SPIN_FRAMES.len()];
-        (frame, HINT_COLOR)
     } else {
-        ("■", if entry.is_active { HIGHLIGHT_COLOR } else { DIM_TEXT_COLOR })
+        match entry.agent_state {
+            AgentState::Working => {
+                let frame = SPIN_FRAMES[spin_frame % SPIN_FRAMES.len()];
+                (frame, HINT_COLOR) // spinner = actively working
+            }
+            AgentState::Blocked => {
+                ("!", STOPPED_COLOR) // needs attention
+            }
+            AgentState::Idle => {
+                ("●", RUNNING_COLOR) // idle = green dot (ready)
+            }
+            AgentState::Unknown => {
+                // Plain shell or unrecognized
+                ("■", if entry.is_active { HIGHLIGHT_COLOR } else { DIM_TEXT_COLOR })
+            }
+        }
     };
 
     let prefix_style = Style::default().fg(HEADER_COLOR);

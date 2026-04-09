@@ -161,6 +161,7 @@ pub struct App {
     repo_root: String,
     pub cfg: Option<config::Config>,
     pub palette: ui::style::Palette,
+    pub agent_states: std::collections::HashMap<usize, crate::detect::AgentState>,
 
     // Terminal dimensions
     width: u16,
@@ -232,6 +233,7 @@ impl App {
             repo_root,
             cfg,
             palette: ui::style::Palette::gruvbox(),
+            agent_states: std::collections::HashMap::new(),
             fullscreen: false,
             fullscreen_session_id: None,
             sidebar_hidden: false,
@@ -2884,6 +2886,30 @@ impl App {
     }
 
     /// Check if notification should auto-dismiss.
+    /// Update agent states by reading terminal screen content.
+    /// Called periodically (every ~30 ticks / ~1 second).
+    pub fn update_agent_states(&mut self) {
+        for tab in &self.tabs {
+            if let Some(ref split) = tab.split {
+                for sid in split.session_ids() {
+                    if let Some(session) = self.pty_mgr.get(sid) {
+                        if session.alive {
+                            let content = crate::detect::read_screen(&session.term());
+                            let state = crate::detect::detect_state(&content);
+                            self.agent_states.insert(sid, state);
+                        }
+                    }
+                }
+            } else if let Some(session) = self.pty_mgr.get(tab.session_id) {
+                if session.alive {
+                    let content = crate::detect::read_screen(&session.term());
+                    let state = crate::detect::detect_state(&content);
+                    self.agent_states.insert(tab.session_id, state);
+                }
+            }
+        }
+    }
+
     pub fn check_notify_dismiss(&mut self, tick: u64) {
         if let Some(dismiss_at) = self.notify_dismiss_at {
             if tick >= dismiss_at {

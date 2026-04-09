@@ -7,6 +7,7 @@ pub mod cmd;
 mod heihei;
 mod config;
 mod daemon;
+mod detect;
 mod docker;
 mod init;
 mod pm2;
@@ -140,6 +141,11 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, debug: bool) 
             app.check_pending_create();
             app.check_pending_build();
             app.check_pending_start();
+
+            // Update agent states every ~1 second (30 ticks at 30fps)
+            if tick % 30 == 0 {
+                app.update_agent_states();
+            }
 
             if app.heihei_active && crate::heihei::should_close() {
                 app.heihei_active = false;
