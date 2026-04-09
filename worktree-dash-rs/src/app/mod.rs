@@ -289,6 +289,7 @@ impl App {
             cpu: String::new(),
             mem: String::new(),
             mem_pct: String::new(),
+            build_path: String::new(),
         };
         worktrees.insert(0, root_entry);
         self.worktrees = worktrees;
@@ -2251,12 +2252,13 @@ impl App {
         if self.cursor >= self.worktrees.len() {
             return;
         }
-        let alias = self.worktrees[self.cursor].alias.clone();
+        let wt = &self.worktrees[self.cursor];
+        let name = wt.name.clone(); // directory name (what wt-down.js expects)
+        let alias = wt.alias.clone(); // display name
         let script = self.flow_script("wt-down.js");
         let root = self.repo_root.clone();
 
-        // Run directly in a PTY tab
-        let mut node_args: Vec<String> = vec![script, alias.clone(), "--remove".to_string()];
+        let mut node_args: Vec<String> = vec![script, name.clone(), "--remove".to_string()];
         if force {
             node_args.push("--force".to_string());
         }
@@ -2270,7 +2272,6 @@ impl App {
             "",
         );
 
-        // Track for auto-close on process exit
         self.pending_remove = Some((alias.clone(), String::new()));
         self.activity = Some(format!("Removing {}...", alias));
     }
@@ -2743,10 +2744,19 @@ impl App {
                 break;
             }
         }
+        // Keep last 5 lines of message (most relevant info is at the end)
+        let truncated: String = {
+            let lines: Vec<&str> = message.lines().collect();
+            if lines.len() > 5 {
+                lines[lines.len() - 5..].join("\n")
+            } else {
+                message.to_string()
+            }
+        };
         let duration = Some(std::time::Duration::from_secs(5));
         self.toasts.push(Toast {
             title: title.to_string(),
-            message: message.to_string(),
+            message: truncated,
             kind,
             created_at: std::time::Instant::now(),
             duration,
@@ -2867,9 +2877,19 @@ impl App {
         let new_worktree_found = new_count > old_count;
 
         if new_worktree_found {
-            // Worktree created — dev server may still be running in the tab (that's fine)
             self.pending_create_tab = false;
             self.activity = None;
+
+            // Close the create tab
+            let tab = self.tabs.remove(tab_idx);
+            self.pty_mgr.remove(tab.session_id);
+            if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
+                self.active_tab = self.tabs.len() - 1;
+            }
+            self.tab_cursor = self.flat_index_for_tab(self.active_tab);
+            self.terminal_focused = false;
+            self.focus = Panel::Worktrees;
+
             self.refresh_status();
             self.push_toast("Success", "Worktree created successfully", ui::overlay::ToastKind::Success);
             return;
@@ -2967,7 +2987,32 @@ impl App {
         self.focus = Panel::Worktrees;
 
         if exit_code == Some(0) {
-            let msg = if output_text.is_empty() { "Build succeeded".into() } else { output_text };
+            // Extract installed path from output
+            let installed = output_lines.iter()
+                .find(|l| l.starts_with("Installed:") || l.contains("Installed:"))
+                .and_then(|l| l.split("Installed:").nth(1))
+                .map(|p| p.trim().to_string());
+
+            // Find the build tab's worktree alias from the label "Build (alias)"
+            let build_alias = tab.label
+                .strip_prefix("Build (")
+                .and_then(|s| s.strip_suffix(')'))
+                .unwrap_or("")
+                .to_string();
+
+            // Store build_path on the worktree
+            if let Some(ref path) = installed {
+                for wt in &mut self.worktrees {
+                    if wt.alias == build_alias {
+                        wt.build_path = path.clone();
+                    }
+                }
+            }
+
+            let msg = match &installed {
+                Some(path) => format!("Build succeeded\n{}", path),
+                None => "Build succeeded".to_string(),
+            };
             self.push_toast("Build", &msg, ui::overlay::ToastKind::Success);
         } else {
             let msg = if output_text.is_empty() { "Build failed".into() } else { output_text };
@@ -3037,8 +3082,7 @@ impl App {
         }
 
         if exit_code == Some(0) {
-            let msg = if output_text.is_empty() { "Started successfully".into() } else { output_text };
-            self.push_toast("Start", &msg, ui::overlay::ToastKind::Success);
+            self.push_toast("Start", "Started successfully", ui::overlay::ToastKind::Success);
         } else {
             let msg = if output_text.is_empty() { "Start failed".into() } else { output_text };
             self.push_toast("Start", &msg, ui::overlay::ToastKind::Error);

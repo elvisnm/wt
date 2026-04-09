@@ -38,6 +38,7 @@ pub struct Worktree {
     pub cpu: String,
     pub mem: String,
     pub mem_pct: String,
+    pub build_path: String,
 }
 
 impl Worktree {
@@ -130,6 +131,7 @@ pub fn discover(worktrees_dir: &Path, existing: &[Worktree], cfg: Option<&Config
                 cpu: String::new(),
                 mem: String::new(),
                 mem_pct: String::new(),
+                build_path: String::new(),
             };
 
             if has_env {
@@ -156,6 +158,7 @@ pub fn discover(worktrees_dir: &Path, existing: &[Worktree], cfg: Option<&Config
                 wt.cpu = prev.cpu.clone();
                 wt.mem = prev.mem.clone();
                 wt.uptime = prev.uptime.clone();
+                wt.build_path = prev.build_path.clone();
             }
 
             results.push(wt);
@@ -276,6 +279,7 @@ pub fn discover(worktrees_dir: &Path, existing: &[Worktree], cfg: Option<&Config
             cpu: String::new(),
             mem: String::new(),
             mem_pct: String::new(),
+            build_path: String::new(),
         };
 
         // Preserve runtime state from previous discovery
@@ -288,6 +292,7 @@ pub fn discover(worktrees_dir: &Path, existing: &[Worktree], cfg: Option<&Config
             wt.cpu = prev.cpu.clone();
             wt.mem = prev.mem.clone();
             wt.mem_pct = prev.mem_pct.clone();
+            wt.build_path = prev.build_path.clone();
         }
 
         results.push(wt);

@@ -773,7 +773,6 @@ fn build_detail_lines(wt: &crate::worktree::Worktree, spin_frame: usize, cfg: Op
     if !wt.container.is_empty() {
         lines.push(detail_line("Container", &wt.container, label_style));
     }
-
     // Ports — from worktree (Docker) or config (local)
     let show_ports = if wt.offset != 0 {
         // Docker: use computed ports from worktree
@@ -825,24 +824,22 @@ fn build_detail_lines(wt: &crate::worktree::Worktree, spin_frame: usize, cfg: Op
         .unwrap_or_else(|_| wt.path.clone())
         .to_string_lossy()
         .to_string();
-    lines.push(Line::from(Span::styled(" Path:", label_style)));
-    let wrap_width = 32;
-    let mut remaining = canon_path.as_str();
-    while !remaining.is_empty() {
-        let (chunk, rest) = if remaining.len() > wrap_width {
-            let break_at = remaining[..wrap_width]
-                .rfind('/')
-                .map(|i| i + 1)
-                .unwrap_or(wrap_width);
-            (&remaining[..break_at], &remaining[break_at..])
+    lines.extend(detail_lines("Path", &canon_path, label_style, 32));
+
+    // Build path — resolve from config template if not already set
+    if let Some(build_cfg) = cfg.and_then(|c| c.dash.build.as_ref()) {
+        let resolved = if !wt.build_path.is_empty() {
+            wt.build_path.clone()
+        } else if !build_cfg.install.is_empty() {
+            cfg.unwrap().expand_cmd(&build_cfg.install, wt)
         } else {
-            (remaining, "")
+            String::new()
         };
-        lines.push(Line::from(Span::styled(
-            format!("   {}", chunk),
-            Style::default().fg(DIM_TEXT_COLOR),
-        )));
-        remaining = rest;
+        if !resolved.is_empty() && std::path::Path::new(&resolved).exists() {
+            lines.extend(detail_lines("Build", &resolved, label_style, 32));
+        } else {
+            lines.push(detail_line("Build", "-", label_style));
+        }
     }
 
     lines
@@ -853,6 +850,44 @@ fn detail_line(label: &str, value: &str, label_style: Style) -> Line<'static> {
         Span::styled(format!(" {:<10}", format!("{}:", label)), label_style),
         Span::styled(value.to_string(), Style::default().fg(DIM_TEXT_COLOR)),
     ])
+}
+
+/// Like detail_line but wraps long values across multiple lines.
+/// Breaks on `/` for paths when possible.
+fn detail_lines(label: &str, value: &str, label_style: Style, width: usize) -> Vec<Line<'static>> {
+    let prefix = format!(" {:<10}", format!("{}:", label));
+    let indent = " ".repeat(prefix.len());
+    let val_width = width.saturating_sub(prefix.len() + 1); // +1 right padding
+
+    let mut result = Vec::new();
+    let mut remaining = value;
+    let mut first = true;
+    while !remaining.is_empty() {
+        let (chunk, rest) = if remaining.len() > val_width {
+            // Try to break at '/' for paths
+            let break_at = remaining[..val_width]
+                .rfind('/')
+                .map(|i| i + 1)
+                .unwrap_or(val_width);
+            (&remaining[..break_at], &remaining[break_at..])
+        } else {
+            (remaining, "")
+        };
+        if first {
+            result.push(Line::from(vec![
+                Span::styled(prefix.clone(), label_style),
+                Span::styled(chunk.to_string(), Style::default().fg(DIM_TEXT_COLOR)),
+            ]));
+            first = false;
+        } else {
+            result.push(Line::from(vec![
+                Span::styled(indent.clone(), label_style),
+                Span::styled(chunk.to_string(), Style::default().fg(DIM_TEXT_COLOR)),
+            ]));
+        }
+        remaining = rest;
+    }
+    result
 }
 
 fn render_usage_panel(frame: &mut Frame, area: Rect, app: &App) {
