@@ -2895,7 +2895,7 @@ impl App {
                     if let Some(session) = self.pty_mgr.get(sid) {
                         if session.alive {
                             let content = crate::detect::read_screen(&session.term());
-                            let state = crate::detect::detect_state(&content);
+                            let state = crate::detect::detect_state(&content, &session.label);
                             self.agent_states.insert(sid, state);
                         }
                     }
@@ -2903,7 +2903,7 @@ impl App {
             } else if let Some(session) = self.pty_mgr.get(tab.session_id) {
                 if session.alive {
                     let content = crate::detect::read_screen(&session.term());
-                    let state = crate::detect::detect_state(&content);
+                    let state = crate::detect::detect_state(&content, &session.label);
                     self.agent_states.insert(tab.session_id, state);
                 }
             }

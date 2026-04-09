@@ -239,7 +239,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
 
     if app.tabs.is_empty() {
         if area.height > 1 {
-            let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
+            let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     " No sessions open",
@@ -252,7 +252,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
     }
 
     let inner_w = area.width.saturating_sub(1) as usize;
-    let inner_h = area.height.saturating_sub(2) as usize;
+    let inner_h = area.height.saturating_sub(1) as usize;
 
     // Build flat list of tab entries with sequential numbering (1-9)
     // Group headers have no number — only sessions get numbers
@@ -372,7 +372,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
         }
     }
 
-    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
+    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
     let content = Paragraph::new(lines);
     frame.render_widget(content, content_area);
 }
@@ -395,7 +395,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
 
     // Icon based on state
     let (icon, icon_color) = if entry.is_group_head {
-        ("☰", BORDER_COLOR) // sandwich for group, subtle color
+        ("☰", HEADER_COLOR) // sandwich for group
     } else if !entry.alive {
         if entry.exit_code == Some(0) {
             ("●", RUNNING_COLOR)
@@ -491,7 +491,7 @@ fn render_worktrees_panel(frame: &mut Frame, area: Rect, app: &App, overlay_acti
     let focused = app.focus == Panel::Worktrees && !overlay_active;
     render_section_header(frame, area, "worktrees", focused);
 
-    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
+    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
     if app.worktrees.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(" No worktrees discovered", Style::default().fg(DIM_TEXT_COLOR)))),

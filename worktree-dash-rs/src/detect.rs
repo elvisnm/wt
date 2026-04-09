@@ -15,13 +15,14 @@ pub enum AgentState {
     Unknown,
 }
 
-/// Detect agent state from visible screen content.
+/// Detect agent state from visible screen content and session label.
 /// Returns Unknown if no agent patterns are recognized.
-pub fn detect_state(screen_content: &str) -> AgentState {
+pub fn detect_state(screen_content: &str, label: &str) -> AgentState {
     let lower = screen_content.to_lowercase();
+    let label_lower = label.to_lowercase();
 
     // --- Claude Code detection ---
-    if is_claude_session(&lower) {
+    if label_lower.contains("claude") || is_claude_session(&lower) {
         return detect_claude(screen_content, &lower);
     }
 
