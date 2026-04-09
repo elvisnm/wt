@@ -238,16 +238,6 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
     render_section_header(frame, area, "tabs", focused);
 
     if app.tabs.is_empty() {
-        if area.height > 1 {
-            let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    " No sessions open",
-                    Style::default().fg(DIM_TEXT_COLOR),
-                ))),
-                content_area,
-            );
-        }
         return;
     }
 
@@ -456,14 +446,15 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
         ])];
     }
 
-    // Session: two lines
+    // Session: two lines — name on first, icon+status on second
     let indent = if entry.is_group_child { "  " } else { " " };
+    let prefix = if entry.is_group_child { "- " } else { "" };
 
     if is_cursor && panel_focused {
         let sel = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
         let sel_dim = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
-        let line1 = format!("{}{} {}{}", indent, icon, entry.label, num_suffix);
-        let line2 = format!("{} {}", indent, status);
+        let line1 = format!("{}{}{}{}", indent, prefix, entry.label, num_suffix);
+        let line2 = format!("{} {} {}", indent, icon, status);
         return vec![
             Line::from(Span::styled(truncate_pad(&line1, width), sel)),
             Line::from(Span::styled(truncate_pad(&line2, width), sel_dim)),
@@ -473,13 +464,14 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     vec![
         Line::from(vec![
             Span::raw(indent.to_string()),
-            Span::styled(icon.to_string(), Style::default().fg(icon_color)),
-            Span::raw(" "),
+            Span::styled(prefix.to_string(), Style::default().fg(HEADER_COLOR)),
             Span::styled(entry.label.clone(), Style::default().fg(DIM_TEXT_COLOR)),
             Span::styled(num_suffix, Style::default().fg(HEADER_COLOR)),
         ]),
         Line::from(vec![
             Span::raw(format!("{} ", indent)),
+            Span::styled(icon.to_string(), Style::default().fg(icon_color)),
+            Span::raw(" "),
             Span::styled(status, Style::default().fg(HEADER_COLOR)),
         ]),
     ]
