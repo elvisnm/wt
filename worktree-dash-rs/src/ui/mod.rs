@@ -424,14 +424,10 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     };
 
     let num_style = Style::default().fg(HEADER_COLOR);
-    let label_style = if entry.is_group_head {
+    let label_style = if entry.is_group_child {
         Style::default().fg(DIM_TEXT_COLOR)
-    } else if entry.is_group_child {
-        Style::default().fg(DIM_TEXT_COLOR)
-    } else if entry.is_active {
-        Style::default().fg(HIGHLIGHT_COLOR)
     } else {
-        Style::default()
+        Style::default().fg(DIM_TEXT_COLOR)
     };
 
     // Build the line
@@ -452,20 +448,18 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
         ]);
     }
 
-    // indent icon label (N)
     let indent = if entry.is_group_child { "  " } else { " " };
+    let line_text = format!("{}{} {}{}", indent, icon, entry.label, num_suffix);
 
     if is_cursor && panel_focused {
-        let line = format!("{}{} {}{}", indent, icon, entry.label, num_suffix);
         return Line::from(Span::styled(
-            truncate_pad(&line, width),
+            truncate_pad(&line_text, width),
             Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
         ));
     }
     if is_cursor {
-        let line = format!("{}{} {}{}", indent, icon, entry.label, num_suffix);
         return Line::from(Span::styled(
-            truncate_pad(&line, width),
+            truncate_pad(&line_text, width),
             Style::default().bold(),
         ));
     }

@@ -1,6 +1,6 @@
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 use crate::settings::{
@@ -95,13 +95,10 @@ impl SettingsState {
 }
 
 pub fn render_settings(frame: &mut Frame, area: Rect, state: &SettingsState) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER_COLOR));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = Rect::new(
+        area.x + 1, area.y + 1,
+        area.width.saturating_sub(2), area.height.saturating_sub(2),
+    );
 
     let w = inner.width as usize;
     let h = inner.height as usize;

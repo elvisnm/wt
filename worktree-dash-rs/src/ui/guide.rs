@@ -1,19 +1,17 @@
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 use super::style::*;
 
 /// Render the guide page in the terminal area, centered like the Go dashboard.
 pub fn render_guide(frame: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER_COLOR));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    // Pad 1 char on each side (matching terminal content padding)
+    let inner = Rect::new(
+        area.x + 1, area.y + 1,
+        area.width.saturating_sub(2), area.height.saturating_sub(2),
+    );
 
     let w = inner.width as usize;
     let h = inner.height as usize;
