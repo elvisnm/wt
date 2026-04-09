@@ -2505,11 +2505,27 @@ impl App {
                     } else {
                         self.tasks_detail_scroll = self.tasks_detail_scroll.saturating_sub((-delta) as usize);
                     }
-                    // Clamp: estimate max content lines from description length
+                    // Clamp: count wrapped lines to get accurate max
                     if let Some(ref task) = self.tasks_detail {
-                        let est_lines = task.title.len() / 30 + task.description.lines().count() + 10;
+                        let panel_w = self.layout.width.saturating_sub(2) as usize; // padded width
+                        let wrap = |text: &str| -> usize {
+                            if text.is_empty() { return 1; }
+                            let mut count = 0;
+                            for line in text.lines() {
+                                let chars = line.chars().count();
+                                count += if panel_w > 0 && chars > panel_w {
+                                    (chars + panel_w - 1) / panel_w
+                                } else {
+                                    1
+                                };
+                            }
+                            count
+                        };
+                        let total_lines = wrap(&task.title) + 2 // title + priority + status
+                            + if task.description.is_empty() { 0 } else { 1 + wrap(&task.description) }
+                            + if task.labels.is_empty() { 0 } else { 2 };
                         let visible = self.layout.tasks_height.saturating_sub(3) as usize;
-                        let max_scroll = est_lines.saturating_sub(visible);
+                        let max_scroll = total_lines.saturating_sub(visible);
                         self.tasks_detail_scroll = self.tasks_detail_scroll.min(max_scroll);
                     }
                 } else if !self.tasks_list.is_empty() {
