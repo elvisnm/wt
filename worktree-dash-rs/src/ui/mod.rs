@@ -320,14 +320,19 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
     let visible_items = inner_h / 2; // ~2 lines per entry
     let (start, end) = visible_window(total, cursor, visible_items);
 
-    // Find the session ID under the cursor (for dot map highlighting)
-    let cursor_session_id = entries.get(cursor).map(|e| e.session_id);
+    // Find the highlighted session for dot map:
+    // Use focused_session_id when in terminal mode, otherwise panel cursor
+    let highlight_session_id = if app.terminal_focused {
+        app.focused_session_id
+    } else {
+        entries.get(cursor).map(|e| e.session_id)
+    };
 
     // Find active group's dot map
     let active_tab = app.tabs.get(app.active_tab);
     let dot_map_lines = active_tab
         .and_then(|t| t.split.as_ref())
-        .map(|split| split.dot_map(cursor_session_id))
+        .map(|split| split.dot_map(highlight_session_id))
         .unwrap_or_default();
 
     let mut lines: Vec<Line> = entries[start..end]
