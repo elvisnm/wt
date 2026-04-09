@@ -809,13 +809,13 @@ impl App {
                 return;
             }
 
-            // Ctrl+> to switch to next session in split group
-            if key.code == KeyCode::Char('>') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Ctrl+. to switch to next session
+            if key.code == KeyCode::Char('.') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.cycle_focused_session(1);
                 return;
             }
-            // Ctrl+< to switch to previous session in split group
-            if key.code == KeyCode::Char('<') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Ctrl+, to switch to previous session
+            if key.code == KeyCode::Char(',') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.cycle_focused_session(-1);
                 return;
             }
