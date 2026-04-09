@@ -1306,10 +1306,14 @@ fn render_task_editor(frame: &mut Frame, area: Rect, editor: &crate::beads::Task
     let mut lines: Vec<Line> = Vec::new();
 
     // Header
-    lines.push(Line::from(vec![
-        Span::styled("Edit Task ", Style::default().fg(FOCUS_BORDER_COLOR).bold()),
-        Span::styled(&editor.task_id, Style::default().fg(DIM_TEXT_COLOR)),
-    ]));
+    if editor.is_new {
+        lines.push(Line::from(Span::styled("New Task", Style::default().fg(FOCUS_BORDER_COLOR).bold())));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("Edit Task ", Style::default().fg(FOCUS_BORDER_COLOR).bold()),
+            Span::styled(&editor.task_id, Style::default().fg(DIM_TEXT_COLOR)),
+        ]));
+    }
     lines.push(Line::from(""));
 
     for (i, &field) in EDITOR_FIELDS.iter().enumerate() {
@@ -1376,8 +1380,8 @@ fn render_task_editor(frame: &mut Frame, area: Rect, editor: &crate::beads::Task
                     ]));
                 }
             }
-            // If value is empty, still show cursor
-            if text_lines.is_empty() || (text_lines.len() == 1 && text_lines[0].is_empty() && value.is_empty()) {
+            // If split produced nothing (shouldn't happen), show cursor
+            if text_lines.is_empty() {
                 lines.push(Line::from(vec![
                     Span::styled("  ", dim),
                     Span::styled(" ", cursor_style),
@@ -1491,8 +1495,10 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
                 let mut v = vec![
                     ("↑/↓", "Navigate"),
                     ("Enter", "Detail"),
+                    ("Ctrl+n", "New"),
                     ("Ctrl+e", "Edit"),
-                    ("c", "Close"),
+                    ("Ctrl+c", "Close"),
+                    ("Ctrl+d", "Delete"),
                     ("Ctrl+s", "Search"),
                 ];
                 if app.tasks_search.is_some() {

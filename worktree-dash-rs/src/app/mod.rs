@@ -754,11 +754,8 @@ impl App {
             return;
         }
 
-        // ── Global: Ctrl+Q / Ctrl+C to quit (works everywhere) ──────
-        // ── Global: Ctrl+Q / Ctrl+C to quit ──────────────────────
-        if (key.code == KeyCode::Char('q') || key.code == KeyCode::Char('c'))
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-        {
+        // ── Global: Ctrl+Q to quit (works everywhere) ──────
+        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.confirm_quit = true;
             self.terminal_focused = false; // defocus terminal so confirm catches keys
             self.recalc_layout();
@@ -1180,6 +1177,10 @@ impl App {
                     }
                 }
             }
+            // Tasks panel — Ctrl+N to create new task
+            KeyCode::Char('n') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) && self.tasks_detail.is_none() => {
+                self.task_editor = Some(beads::TaskEditor::new_task());
+            }
             // Tasks panel — Esc clears search filter (when not in detail view)
             KeyCode::Esc if self.focus == Panel::Tasks && self.tasks_search.is_some() && self.tasks_detail.is_none() => {
                 self.tasks_search = None;
@@ -1210,7 +1211,7 @@ impl App {
                 self.tasks_detail_scroll = 0;
                 self.recalc_layout();
             }
-            KeyCode::Char('c') if self.focus == Panel::Tasks && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('c') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let indices = self.filtered_task_indices();
                 if let Some(&real_idx) = indices.get(self.tasks_cursor) {
                     let id = self.tasks_list[real_idx].id.clone();
@@ -1224,7 +1225,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('d') if self.focus == Panel::Tasks => {
+            KeyCode::Char('d') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let indices = self.filtered_task_indices();
                 if let Some(&real_idx) = indices.get(self.tasks_cursor) {
                     let id = self.tasks_list[real_idx].id.clone();

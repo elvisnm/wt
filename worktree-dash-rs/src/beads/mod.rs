@@ -143,6 +143,7 @@ pub struct TaskEditor {
     pub labels: String,
     pub cursor: usize,
     pub cursor_pos: usize, // character position within current field
+    pub is_new: bool,
 }
 
 impl TaskEditor {
@@ -161,6 +162,21 @@ impl TaskEditor {
             labels: task.labels.join(", "),
             cursor: 0,
             cursor_pos: 0,
+            is_new: false,
+        }
+    }
+
+    pub fn new_task() -> Self {
+        Self {
+            task_id: String::new(),
+            title: String::new(),
+            priority: "2".to_string(),
+            task_type: "task".to_string(),
+            description: String::new(),
+            labels: String::new(),
+            cursor: 0,
+            cursor_pos: 0,
+            is_new: true,
         }
     }
 
@@ -371,8 +387,11 @@ impl TaskEditor {
         }
     }
 
-    /// Save changes via `bd update`.
+    /// Save changes via `bd create` (new) or `bd update` (edit).
     pub fn save(&self) -> Result<(), String> {
+        if self.title.trim().is_empty() {
+            return Err("Title is required".to_string());
+        }
         let priority: Option<u8> = self.priority.parse().ok();
         let labels: Vec<String> = self
             .labels
@@ -381,14 +400,65 @@ impl TaskEditor {
             .filter(|s| !s.is_empty())
             .collect();
 
-        update_task(
-            &self.task_id,
-            Some(&self.title),
-            priority,
-            Some(&self.task_type),
-            Some(&self.description),
-            Some(&labels),
-        )
+        if self.is_new {
+            create_task(
+                &self.title,
+                priority.unwrap_or(2),
+                &self.task_type,
+                if self.description.is_empty() { None } else { Some(&self.description) },
+                &labels,
+            )
+        } else {
+            update_task(
+                &self.task_id,
+                Some(&self.title),
+                priority,
+                Some(&self.task_type),
+                Some(&self.description),
+                Some(&labels),
+            )
+        }
+    }
+}
+
+/// Create a new beads task.
+pub fn create_task(
+    title: &str,
+    priority: u8,
+    task_type: &str,
+    description: Option<&str>,
+    labels: &[String],
+) -> Result<(), String> {
+    let mut args: Vec<String> = vec![
+        "create".to_string(),
+        "--title".to_string(),
+        title.to_string(),
+        "--priority".to_string(),
+        priority.to_string(),
+        "--type".to_string(),
+        task_type.to_string(),
+    ];
+
+    if let Some(d) = description {
+        args.push("--description".to_string());
+        args.push(d.to_string());
+    }
+
+    if !labels.is_empty() {
+        args.push("--labels".to_string());
+        args.push(labels.join(","));
+    }
+
+    let output = std::process::Command::new("bd")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("bd create failed: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("bd create failed: {}", stderr.trim()))
     }
 }
 
