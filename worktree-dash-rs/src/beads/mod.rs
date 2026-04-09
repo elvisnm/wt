@@ -27,7 +27,7 @@ pub fn fetch_tasks() -> Result<Vec<Task>, String> {
     let output = std::process::Command::new("bd")
         .args(["list", "--json", "--status=open", "--limit", "50"])
         .output()
-        .map_err(|e| format!("bd list failed: {}", e))?;
+        .map_err(|e| crate::cmd::friendly_cmd_error("bd", &e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -43,7 +43,7 @@ pub fn fetch_detail(id: &str) -> Result<Task, String> {
     let output = std::process::Command::new("bd")
         .args(["show", id, "--json"])
         .output()
-        .map_err(|e| format!("bd show failed: {}", e))?;
+        .map_err(|e| crate::cmd::friendly_cmd_error("bd", &e))?;
 
     if !output.status.success() {
         return Err("bd show failed".to_string());
@@ -60,7 +60,7 @@ pub fn delete_task(id: &str) -> Result<(), String> {
     let output = std::process::Command::new("bd")
         .args(["delete", id, "--force"])
         .output()
-        .map_err(|e| format!("bd delete failed: {}", e))?;
+        .map_err(|e| crate::cmd::friendly_cmd_error("bd", &e))?;
 
     if output.status.success() {
         Ok(())
@@ -104,7 +104,7 @@ pub fn update_task(
     let output = std::process::Command::new("bd")
         .args(&args)
         .output()
-        .map_err(|e| format!("bd update failed: {}", e))?;
+        .map_err(|e| crate::cmd::friendly_cmd_error("bd", &e))?;
 
     if output.status.success() {
         Ok(())
@@ -452,7 +452,7 @@ pub fn create_task(
     let output = std::process::Command::new("bd")
         .args(&args)
         .output()
-        .map_err(|e| format!("bd create failed: {}", e))?;
+        .map_err(|e| crate::cmd::friendly_cmd_error("bd", &e))?;
 
     if output.status.success() {
         Ok(())
@@ -467,7 +467,7 @@ pub fn close_task(id: &str) -> Result<(), String> {
     let output = std::process::Command::new("bd")
         .args(["close", id])
         .output()
-        .map_err(|e| format!("bd close failed: {}", e))?;
+        .map_err(|e| crate::cmd::friendly_cmd_error("bd", &e))?;
 
     if output.status.success() {
         Ok(())

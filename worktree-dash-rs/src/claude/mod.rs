@@ -76,7 +76,7 @@ fn call_usage_api(token: &str) -> Result<Usage, String> {
             USAGE_URL,
         ])
         .output()
-        .map_err(|e| format!("curl failed: {}", e))?;
+        .map_err(|e| crate::cmd::friendly_cmd_error("curl", &e))?;
 
     let body = String::from_utf8_lossy(&output.stdout).to_string();
     let lines: Vec<&str> = body.trim().rsplitn(2, '\n').collect();
@@ -111,7 +111,7 @@ fn refresh_access_token(refresh_token: &str) -> Result<RefreshResponse, String> 
             TOKEN_URL,
         ])
         .output()
-        .map_err(|e| format!("refresh request failed: {}", e))?;
+        .map_err(|e| crate::cmd::friendly_cmd_error("curl", &e))?;
 
     if !output.status.success() {
         return Err("token refresh request failed".to_string());
@@ -125,7 +125,7 @@ fn read_credentials() -> Result<Credentials, String> {
     let output = std::process::Command::new("security")
         .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
         .output()
-        .map_err(|e| format!("keychain read failed: {}", e))?;
+        .map_err(|e| crate::cmd::friendly_cmd_error("security", &e))?;
 
     if !output.status.success() {
         return Err("no Claude Code credentials in Keychain".to_string());
@@ -142,7 +142,7 @@ fn write_tokens(access_token: &str, refresh_token: &str) -> Result<(), String> {
         let output = std::process::Command::new("security")
             .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
             .output()
-            .map_err(|e| format!("keychain read failed: {}", e))?;
+            .map_err(|e| crate::cmd::friendly_cmd_error("security", &e))?;
         let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
         serde_json::from_str(&raw).map_err(|e| format!("parse: {}", e))?
     };
@@ -162,7 +162,7 @@ fn write_tokens(access_token: &str, refresh_token: &str) -> Result<(), String> {
     let output = std::process::Command::new("security")
         .args(["add-generic-password", "-s", KEYCHAIN_SERVICE, "-w", &updated, "-U"])
         .output()
-        .map_err(|e| format!("keychain write failed: {}", e))?;
+        .map_err(|e| crate::cmd::friendly_cmd_error("security", &e))?;
 
     if !output.status.success() {
         return Err("keychain write failed".to_string());

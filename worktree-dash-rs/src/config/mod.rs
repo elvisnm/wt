@@ -432,7 +432,7 @@ pub fn load_from_path(config_path: &Path, repo_root: &Path) -> Result<Config> {
         .args(["-e", &script])
         .current_dir(repo_root)
         .output()
-        .context("failed to run node to evaluate config")?;
+        .map_err(|e| anyhow::anyhow!("{}", crate::cmd::friendly_cmd_error("node", &e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
