@@ -930,7 +930,15 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
 
     // Detail view
     if let Some(ref task) = app.tasks_detail {
-        let inner_h = content_area.height as usize;
+        // Pad content area: 1 char left and right
+        let padded = Rect::new(
+            content_area.x + 1,
+            content_area.y,
+            content_area.width.saturating_sub(2),
+            content_area.height,
+        );
+        let inner_w = padded.width as usize;
+        let inner_h = padded.height as usize;
 
         let p = match &task.priority {
             serde_json::Value::Number(n) => n.as_u64().unwrap_or(9),
@@ -944,7 +952,27 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         };
 
         let mut lines: Vec<Line> = Vec::new();
-        lines.push(Line::from(Span::styled(&task.title, Style::default().bold())));
+
+        // Title — wrap if longer than width
+        let title = &task.title;
+        let mut remaining = title.as_str();
+        while !remaining.is_empty() {
+            let (chunk, rest) = if remaining.chars().count() > inner_w {
+                let break_at = remaining.char_indices()
+                    .take(inner_w)
+                    .filter(|(_, c)| *c == ' ')
+                    .map(|(i, _)| i)
+                    .last()
+                    .unwrap_or(inner_w);
+                let (a, b) = remaining.split_at(break_at);
+                (a, b.trim_start())
+            } else {
+                (remaining, "")
+            };
+            lines.push(Line::from(Span::styled(chunk.to_string(), Style::default().bold())));
+            remaining = rest;
+        }
+
         lines.push(Line::from(vec![
             Span::styled(format!("P{} ", p), Style::default().fg(priority_color)),
             Span::styled(format!("{} ", task.task_type), Style::default().fg(FOCUS_BORDER_COLOR)),
@@ -957,7 +985,28 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         if !task.description.is_empty() {
             lines.push(Line::from(""));
             for desc_line in task.description.lines() {
-                lines.push(Line::from(Span::styled(desc_line.to_string(), Style::default().fg(DIM_TEXT_COLOR))));
+                // Wrap description lines
+                let mut rem = desc_line;
+                if rem.is_empty() {
+                    lines.push(Line::from(""));
+                    continue;
+                }
+                while !rem.is_empty() {
+                    let (chunk, rest) = if rem.chars().count() > inner_w {
+                        let break_at = rem.char_indices()
+                            .take(inner_w)
+                            .filter(|(_, c)| *c == ' ')
+                            .map(|(i, _)| i)
+                            .last()
+                            .unwrap_or(inner_w);
+                        let (a, b) = rem.split_at(break_at);
+                        (a, b.trim_start())
+                    } else {
+                        (rem, "")
+                    };
+                    lines.push(Line::from(Span::styled(chunk.to_string(), Style::default().fg(DIM_TEXT_COLOR))));
+                    rem = rest;
+                }
             }
         }
         if !task.labels.is_empty() {
@@ -973,7 +1022,7 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         let end = (scroll + inner_h).min(total);
         let visible = lines[scroll..end].to_vec();
 
-        frame.render_widget(Paragraph::new(visible), content_area);
+        frame.render_widget(Paragraph::new(visible), padded);
         return;
     }
 
