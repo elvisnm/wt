@@ -1,6 +1,6 @@
 # wt — Worktree Toolkit
 
-A config-driven worktree management system. Three components: **worktree-flow** (Node.js CLI), **worktree-dash-rs** (Rust TUI dashboard with embedded terminal), and **worktree-dash** (legacy Go TUI). Attach to any project by dropping a `wt.config.js` at the repo root.
+A config-driven worktree management system. Two components: **worktree-flow** (Node.js CLI scripts) and **worktree-dash-rs** (Rust TUI dashboard with embedded terminal). Attach to any project by dropping a `wt.config.js` at the repo root.
 
 ## Project Structure
 
@@ -53,8 +53,6 @@ wt/
 │       ├── beads/mod.rs            # Task tracking via bd CLI
 │       ├── settings/mod.rs         # Settings persistence (~/.wt/)
 │       └── cmd.rs                  # Shared command execution
-└── worktree-dash/                  # Go TUI (legacy, being replaced by Rust)
-    └── ...
 ```
 
 ## Architecture
@@ -183,13 +181,6 @@ Terminal sessions are PTY processes with output parsed through VTE into an alacr
 - **Shell execution** — `execSync` with `{ stdio: 'pipe', encoding: 'utf8' }`
 - **No external deps** in runtime scripts (except `@clack/prompts` in wt-menu.js and wt-create.js). Jest is a devDependency for tests.
 
-### Go (worktree-dash)
-- **snake_case** for unexported, **CamelCase** for exported
-- **Config via Node.js** — `exec.Command("node", "-e", script)` to evaluate JS config
-- **Package layout** — `internal/{app, cmdutil, config, docker, labels, pm2, sentinel, terminal, ui, worktree}`
-- **Bubbletea pattern** — Model/Update/View + Cmd messages
-- **Background refresh** — goroutines for stats (3s) and status (5s)
-
 ### Naming Conventions
 - **Container**: `{name}-{alias}` (e.g., `bc-test-workflow-web`)
 - **Compose project**: `{name}-{slug}` (e.g., `bc-test-workflow`)
@@ -213,10 +204,9 @@ Terminal sessions are PTY processes with output parsed through VTE into an alacr
 | Shared compose logic | `wt-up.js` (search "is_shared_compose"), `wt-status.js` (search "get_project_container_info") |
 | Status monitoring | `worktree-flow/wt-status.js` |
 | Interactive CLI | `worktree-flow/wt-menu.js`, `worktree-flow/wt-create.js` |
-| Go dashboard | `worktree-dash/internal/app/model.go`, `update.go`, `view.go` |
-| Go shared helpers | `worktree-dash/internal/cmdutil/cmdutil.go` |
-| Go config loader | `worktree-dash/internal/config/config.go` |
-| Go discovery | `worktree-dash/internal/worktree/discover.go` |
+| Rust dashboard | `worktree-dash-rs/src/app/mod.rs`, `ui/mod.rs`, `config/mod.rs` |
+| Worktree discovery | `worktree-dash-rs/src/worktree/mod.rs` |
+| Daemon management | `worktree-dash-rs/src/daemon.rs` |
 | Example configs | `wt.config.example.js`, check `~/dev/build-check/wt.config.js` |
 
 ## Git Conventions
@@ -227,23 +217,21 @@ Terminal sessions are PTY processes with output parsed through VTE into an alacr
 
 ## Building
 
-The official `wt` binary is installed via Homebrew. When developing locally, always build as `wt-dev` to avoid overwriting the installed version:
+The official `wt` binary is installed via Homebrew. When developing locally, build as `wt-dev`:
 
 ```bash
-cd worktree-dash && go build -o wt-dev .
+cd worktree-dash-rs && make dev
 ```
 
-This produces `worktree-dash/wt-dev`. Never build as just `wt` — that conflicts with the Homebrew-managed binary at `/usr/local/bin/wt`.
+This produces `worktree-dash-rs/wt-dev`, symlinked from `/usr/local/bin/wt-dev`.
 
 ## Testing
 
-- **Go**: `cd worktree-dash && go test ./...`
-- **Node.js**: `cd worktree-flow && npx jest` (292 tests across 4 suites). Coverage: `npx jest --coverage`
-- **Integration**: Create a worktree on a target project, verify wt:status/wt:info/wt:logs/wt:restart/wt:down lifecycle
+- **Rust**: `cd worktree-dash-rs && cargo test`
+- **Node.js**: `cd worktree-flow && npx jest`
+- **Integration**: Open `wt-dev --debug` on a target project, test start/stop/logs lifecycle
 
 ## Adding Support for a New Project
 
-1. Create `wt.config.js` at the project root (or run `node worktree-flow/wt-init.js`)
-2. Set `name`, `services.ports`, `docker.composeStrategy`, `docker.composeFile`
-3. Add `wt:*` scripts to `package.json` pointing to `worktree-flow/wt-*.js`
-4. Run `pnpm wt:create` or `node worktree-flow/wt-create.js` to create a worktree
+1. Open `wt` in the project directory — the init wizard detects the stack and generates `wt.config.js`
+2. Or create `wt.config.js` manually with `name`, `stack`, and optionally `dash.lifecycle` commands

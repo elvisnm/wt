@@ -148,7 +148,6 @@ wt/
       claude/                     # Usage API integration
       beads/                      # Task tracking integration
       settings/                   # Settings persistence (~/.wt/)
-  worktree-dash/                  # Go TUI dashboard (legacy, being replaced)
 ```
 
 ## Requirements
