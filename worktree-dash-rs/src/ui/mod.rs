@@ -1135,6 +1135,12 @@ fn render_terminal_area(frame: &mut Frame, area: Rect, app: &App, overlay_active
         return;
     }
 
+    // Task editor in right panel
+    if let Some(ref editor) = app.task_editor {
+        render_task_editor(frame, area, editor);
+        return;
+    }
+
     let focused = app.terminal_focused && !overlay_active;
     let border_color = if focused {
         FOCUS_BORDER_COLOR
@@ -1280,12 +1286,139 @@ fn render_split_node(
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
+fn render_task_editor(frame: &mut Frame, area: Rect, editor: &crate::beads::TaskEditor) {
+    use crate::beads::{EditorField, EDITOR_FIELDS};
+
+    let label_style = Style::default().fg(HINT_COLOR);
+    let value_style = Style::default().fg(Color::White);
+    let dim = Style::default().fg(DIM_TEXT_COLOR);
+    let active_label = Style::default().fg(FOCUS_BORDER_COLOR).bold();
+
+    // Padded content area
+    let content = Rect::new(
+        area.x + 2,
+        area.y + 1,
+        area.width.saturating_sub(4),
+        area.height.saturating_sub(2),
+    );
+    let inner_w = content.width as usize;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header
+    lines.push(Line::from(vec![
+        Span::styled("Edit Task ", Style::default().fg(FOCUS_BORDER_COLOR).bold()),
+        Span::styled(&editor.task_id, Style::default().fg(DIM_TEXT_COLOR)),
+    ]));
+    lines.push(Line::from(""));
+
+    for (i, &field) in EDITOR_FIELDS.iter().enumerate() {
+        let is_active = i == editor.cursor;
+        let (label, value) = match field {
+            EditorField::Title => ("Title", &editor.title),
+            EditorField::Priority => ("Priority", &editor.priority),
+            EditorField::Type => ("Type", &editor.task_type),
+            EditorField::Description => ("Description", &editor.description),
+            EditorField::Labels => ("Labels", &editor.labels),
+        };
+
+        let ls = if is_active { active_label } else { label_style };
+
+        // Label line
+        lines.push(Line::from(Span::styled(format!("{}:", label), ls)));
+
+        // Value line(s)
+        if is_active {
+            let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
+            let pos = editor.cursor_pos.min(value.len());
+
+            // Find which line the cursor is on and the column within it
+            let text_lines: Vec<&str> = value.split('\n').collect();
+            let mut byte_offset = 0usize;
+            let mut cursor_line_idx = 0usize;
+            let mut cursor_col = 0usize;
+            for (li, tl) in text_lines.iter().enumerate() {
+                let line_end = byte_offset + tl.len();
+                if pos <= line_end {
+                    cursor_line_idx = li;
+                    cursor_col = pos - byte_offset;
+                    break;
+                }
+                byte_offset = line_end + 1; // +1 for the \n
+            }
+
+            for (li, tl) in text_lines.iter().enumerate() {
+                if li == cursor_line_idx {
+                    let (before_c, after_c) = tl.split_at(cursor_col.min(tl.len()));
+                    let c_char = after_c.chars().next();
+                    let mut spans = vec![
+                        Span::styled("  ", dim),
+                        Span::styled(before_c.to_string(), value_style),
+                    ];
+                    match c_char {
+                        Some(ch) => {
+                            spans.push(Span::styled(ch.to_string(), cursor_style));
+                            let rest_start = ch.len_utf8();
+                            if rest_start < after_c.len() {
+                                spans.push(Span::styled(after_c[rest_start..].to_string(), value_style));
+                            }
+                        }
+                        None => {
+                            // Cursor at end of line
+                            spans.push(Span::styled(" ", cursor_style));
+                        }
+                    }
+                    lines.push(Line::from(spans));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ", dim),
+                        Span::styled(tl.to_string(), value_style),
+                    ]));
+                }
+            }
+            // If value is empty, still show cursor
+            if text_lines.is_empty() || (text_lines.len() == 1 && text_lines[0].is_empty() && value.is_empty()) {
+                lines.push(Line::from(vec![
+                    Span::styled("  ", dim),
+                    Span::styled(" ", cursor_style),
+                ]));
+            }
+        } else if value.is_empty() {
+            lines.push(Line::from(Span::styled("  -", dim)));
+        } else {
+            // Render with newlines preserved
+            for text_line in value.split('\n') {
+                if text_line.is_empty() {
+                    lines.push(Line::from(Span::styled("  ", dim)));
+                } else {
+                    for chunk in wrap_text(text_line, inner_w.saturating_sub(2)) {
+                        lines.push(Line::from(Span::styled(format!("  {}", chunk), dim)));
+                    }
+                }
+            }
+        }
+
+        lines.push(Line::from("")); // spacing between fields
+    }
+
+    frame.render_widget(Paragraph::new(lines), content);
+}
+
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     let k = Style::default().fg(HINT_COLOR);
     let d = Style::default().fg(DIM_TEXT_COLOR);
     let bg = Style::default().bg(Color::Indexed(236));
 
-    let shortcuts: Vec<(&str, &str)> = if app.terminal_focused {
+    let shortcuts: Vec<(&str, &str)> = if app.task_editor.is_some() {
+        vec![
+            ("Ctrl+s", "Save"),
+            ("Ctrl+x", "Cancel"),
+            ("Tab", "Next"),
+            ("Ctrl+a/e", "Home/End"),
+            ("Ctrl+k", "Kill line"),
+            ("Ctrl+w", "Del word"),
+        ]
+    } else if app.terminal_focused {
         vec![
             ("Ctrl+]", "Detach"),
             ("Ctrl+j/k", "Switch"),
@@ -1351,14 +1484,15 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             } else if app.tasks_detail.is_some() {
                 vec![
                     ("↑/↓", "Scroll"),
+                    ("Ctrl+e", "Edit"),
                     ("Esc", "Back to list"),
                 ]
             } else {
                 let mut v = vec![
                     ("↑/↓", "Navigate"),
                     ("Enter", "Detail"),
+                    ("Ctrl+e", "Edit"),
                     ("c", "Close"),
-                    ("d", "Delete"),
                     ("Ctrl+s", "Search"),
                 ];
                 if app.tasks_search.is_some() {

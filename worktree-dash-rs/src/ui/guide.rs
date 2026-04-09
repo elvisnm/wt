@@ -99,16 +99,22 @@ pub fn render_guide(frame: &mut Frame, area: Rect) {
             box_line(col_w, b, vec![s("    ", d), s("x", k), s("         close tab", d)]),
             box_empty(col_w, b),
         ),
-        (box_bottom(col_w, b), box_line(col_w, b, vec![s("  ", d), s("Ctrl+Q", k), s("      quit dashboard", d)])),
-        (vec![], box_line(col_w, b, vec![s("  ", d), s("?", k), s("           keybindings help", d)])),
-        (vec![], box_bottom(col_w, b)),
+        (
+            box_empty(col_w, b),
+            box_line(col_w, b, vec![s("  ", d), s("Ctrl+Q", k), s("      quit dashboard", d)]),
+        ),
+        (
+            box_empty(col_w, b),
+            box_line(col_w, b, vec![s("  ", d), s("?", k), s("           keybindings help", d)]),
+        ),
+        (box_bottom(col_w, b), box_bottom(col_w, b)),
     ];
 
     // Build final lines with centering
     let mut content_lines: Vec<Line> = Vec::new();
 
     // Title
-    let title = "wt — Quick Start";
+    let title = "Quick Start";
     let title_pad = w.saturating_sub(title.len()) / 2;
     content_lines.push(Line::from(vec![
         Span::raw(" ".repeat(title_pad)),

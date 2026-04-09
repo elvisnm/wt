@@ -82,6 +82,7 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
         vec![box_line(col_w, b, vec![s("  ", d), s("c", k), s("           close task", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("d", k), s("           delete task", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("Ctrl+s", k), s("      search/filter", d)])],
+        vec![box_line(col_w, b, vec![s("  ", d), s("Ctrl+e", k), s("      edit task", d)])],
         vec![box_bottom(col_w, b)],
         vec![box_top("Operations", col_w, b, t)],
         vec![vec![]],
@@ -114,7 +115,7 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
     let mut content_lines: Vec<Line> = Vec::new();
 
     // Title
-    let title = "wt — Keybindings";
+    let title = "Keybindings";
     let title_pad = w.saturating_sub(title.len()) / 2;
     content_lines.push(Line::from(vec![
         Span::raw(" ".repeat(title_pad)),

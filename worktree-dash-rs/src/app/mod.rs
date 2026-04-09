@@ -138,6 +138,7 @@ pub struct App {
     pub tasks_detail_max_scroll: std::cell::Cell<usize>,
     pub tasks_search: Option<String>,
     pub tasks_search_active: bool,
+    pub task_editor: Option<beads::TaskEditor>,
 
     // Fullscreen mode — hides left column, shows only focused session
     pub fullscreen: bool,
@@ -221,6 +222,7 @@ impl App {
             tasks_detail_max_scroll: std::cell::Cell::new(0),
             tasks_search: None,
             tasks_search_active: false,
+            task_editor: None,
             notify_state: NotifyState::Idle,
             pending_split_dir: None,
             split_target_session_id: None,
@@ -935,6 +937,88 @@ impl App {
             return;
         }
 
+        // ── Task editor (shown in right panel) ───────────────────
+        if let Some(ref mut editor) = self.task_editor {
+            match key.code {
+                // Save
+                KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    match editor.save() {
+                        Ok(()) => {
+                            self.task_editor = None;
+                            self.fetch_tasks();
+                            // Refresh detail if open
+                            if let Some(ref detail) = self.tasks_detail {
+                                let id = detail.id.clone();
+                                if let Ok(updated) = beads::fetch_detail(&id) {
+                                    self.tasks_detail = Some(updated);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.tasks_err = Some(e);
+                            self.task_editor = None;
+                        }
+                    }
+                }
+                // Cancel
+                KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.task_editor = None;
+                }
+                KeyCode::Esc => {
+                    self.task_editor = None;
+                }
+                // Navigate fields / lines
+                KeyCode::Up if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if !editor.move_cursor_line_up() {
+                        editor.navigate(-1);
+                    }
+                }
+                KeyCode::Down if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if !editor.move_cursor_line_down() {
+                        editor.navigate(1);
+                    }
+                }
+                KeyCode::Tab => editor.navigate(1),
+                KeyCode::BackTab => editor.navigate(-1),
+
+                // Emacs cursor movement
+                KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => editor.move_cursor_home(),
+                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => editor.move_cursor_end(),
+                KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => editor.move_cursor_right(),
+                KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => editor.move_cursor_left(),
+                KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => editor.move_cursor_word_left(),
+                KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => editor.move_cursor_word_right(),
+                KeyCode::Left if key.modifiers.contains(KeyModifiers::ALT) => editor.move_cursor_word_left(),
+                KeyCode::Right if key.modifiers.contains(KeyModifiers::ALT) => editor.move_cursor_word_right(),
+                KeyCode::Left => editor.move_cursor_left(),
+                KeyCode::Right => editor.move_cursor_right(),
+                KeyCode::Home => editor.move_cursor_home(),
+                KeyCode::End => editor.move_cursor_end(),
+
+                // Emacs editing
+                KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => editor.kill_to_end(),
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => editor.kill_to_start(),
+                KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => editor.delete_word_backward(),
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => editor.delete_char_forward(),
+                KeyCode::Delete => editor.delete_char_forward(),
+                KeyCode::Backspace => editor.delete_char(),
+
+                // Enter: newline in description, next field otherwise
+                KeyCode::Enter => {
+                    if editor.current_field() == beads::EditorField::Description {
+                        editor.insert_char('\n');
+                    } else {
+                        editor.navigate(1);
+                    }
+                }
+
+                // Regular typing
+                KeyCode::Char(c) => editor.insert_char(c),
+                _ => {}
+            }
+            return;
+        }
+
         // ── Input mode (rename) ──────────────────────────────────
         if let NotifyState::Input { ref mut value, .. } = self.notify_state {
             match key.code {
@@ -1079,6 +1163,22 @@ impl App {
                 self.tasks_search = Some(String::new());
                 self.tasks_cursor = 0;
                 self.tasks_detail = None;
+            }
+            // Tasks panel — Ctrl+E to edit task
+            KeyCode::Char('e') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Edit from detail view
+                if let Some(ref task) = self.tasks_detail {
+                    self.task_editor = Some(beads::TaskEditor::from_task(task));
+                } else {
+                    // Edit from list view — use selected task
+                    let indices = self.filtered_task_indices();
+                    if let Some(&real_idx) = indices.get(self.tasks_cursor) {
+                        let id = self.tasks_list[real_idx].id.clone();
+                        if let Ok(task) = beads::fetch_detail(&id) {
+                            self.task_editor = Some(beads::TaskEditor::from_task(&task));
+                        }
+                    }
+                }
             }
             // Tasks panel — Esc clears search filter (when not in detail view)
             KeyCode::Esc if self.focus == Panel::Tasks && self.tasks_search.is_some() && self.tasks_detail.is_none() => {

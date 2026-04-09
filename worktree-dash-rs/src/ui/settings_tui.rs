@@ -120,7 +120,7 @@ pub fn render_settings(frame: &mut Frame, area: Rect, state: &SettingsState) {
     let mut content_lines: Vec<Line> = Vec::new();
 
     // Title
-    let title = "wt — Settings";
+    let title = "Settings";
     let title_pad = w.saturating_sub(title.len()) / 2;
     content_lines.push(Line::from(vec![
         Span::raw(" ".repeat(title_pad)),
