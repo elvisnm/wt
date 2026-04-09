@@ -160,6 +160,7 @@ pub struct App {
     flow_scripts_dir: String,
     repo_root: String,
     pub cfg: Option<config::Config>,
+    pub palette: ui::style::Palette,
 
     // Terminal dimensions
     width: u16,
@@ -230,6 +231,7 @@ impl App {
             flow_scripts_dir,
             repo_root,
             cfg,
+            palette: ui::style::Palette::gruvbox(),
             fullscreen: false,
             fullscreen_session_id: None,
             sidebar_hidden: false,

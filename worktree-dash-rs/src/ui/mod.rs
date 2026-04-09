@@ -4,7 +4,7 @@ mod layout;
 pub mod overlay;
 pub mod settings_tui;
 pub mod splash;
-mod style;
+pub mod style;
 pub mod term_view;
 
 pub use layout::{Layout, ResizeOpts};
