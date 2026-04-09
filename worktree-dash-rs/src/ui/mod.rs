@@ -1289,7 +1289,9 @@ fn render_sidebar_separator(frame: &mut Frame, area: Rect, _focused: bool) {
     let sep_x = area.x + area.width.saturating_sub(1);
     let style = Style::default().fg(BORDER_COLOR);
     let buf = frame.buffer_mut();
-    for y in area.y..area.y + area.height {
+    let y_start = area.y + 1;
+    let y_end = (area.y + area.height).saturating_sub(1);
+    for y in y_start..y_end {
         if sep_x < buf.area().width {
             buf[(sep_x, y)].set_symbol("│");
             buf[(sep_x, y)].set_style(style);
