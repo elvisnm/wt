@@ -2500,8 +2500,18 @@ impl App {
             }
             Panel::Tasks => {
                 if self.tasks_detail.is_some() {
-                    let new = self.tasks_detail_scroll as i32 + delta as i32;
-                    self.tasks_detail_scroll = new.max(0) as usize;
+                    if delta > 0 {
+                        self.tasks_detail_scroll = self.tasks_detail_scroll.saturating_add(delta as usize);
+                    } else {
+                        self.tasks_detail_scroll = self.tasks_detail_scroll.saturating_sub((-delta) as usize);
+                    }
+                    // Clamp: estimate max content lines from description length
+                    if let Some(ref task) = self.tasks_detail {
+                        let est_lines = task.title.len() / 30 + task.description.lines().count() + 10;
+                        let visible = self.layout.tasks_height.saturating_sub(3) as usize;
+                        let max_scroll = est_lines.saturating_sub(visible);
+                        self.tasks_detail_scroll = self.tasks_detail_scroll.min(max_scroll);
+                    }
                 } else if !self.tasks_list.is_empty() {
                     let new = self.tasks_cursor as i32 + delta as i32;
                     self.tasks_cursor = new.clamp(0, self.tasks_list.len() as i32 - 1) as usize;
