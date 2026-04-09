@@ -697,7 +697,7 @@ fn render_details_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active
 fn build_detail_lines(wt: &crate::worktree::Worktree, spin_frame: usize, cfg: Option<&crate::config::Config>) -> Vec<Line<'static>> {
     use crate::worktree::WorktreeType;
 
-    let label_style = Style::default().fg(Color::Indexed(248));
+    let label_style = Style::default().fg(HEADER_COLOR);
 
     let type_label = if cfg.map_or(false, |c| c.dash.build.is_some()) {
         "build"
@@ -715,7 +715,7 @@ fn build_detail_lines(wt: &crate::worktree::Worktree, spin_frame: usize, cfg: Op
     if wt.health.ends_with("...") {
         let action = wt.health.trim_end_matches("...");
         lines.push(Line::from(vec![
-            Span::styled("Status:   ", label_style),
+            Span::styled(" Status:   ", label_style),
             Span::styled(format!("{} {}", SPIN_FRAMES[spin_frame % SPIN_FRAMES.len()], action), Style::default().fg(STARTING_COLOR)),
         ]));
     } else if wt.wt_type == WorktreeType::Docker {
@@ -727,17 +727,17 @@ fn build_detail_lines(wt: &crate::worktree::Worktree, spin_frame: usize, cfg: Op
             ("stopped".to_string(), STOPPED_COLOR)
         };
         lines.push(Line::from(vec![
-            Span::styled("Status:   ", label_style),
+            Span::styled(" Status:   ", label_style),
             Span::styled(status_text, Style::default().fg(color)),
         ]));
     } else if wt.running {
         lines.push(Line::from(vec![
-            Span::styled("Status:   ", label_style),
+            Span::styled(" Status:   ", label_style),
             Span::styled("running (dev)", Style::default().fg(RUNNING_COLOR)),
         ]));
     } else {
         lines.push(Line::from(vec![
-            Span::styled("Status:   ", label_style),
+            Span::styled(" Status:   ", label_style),
             Span::styled("stopped", Style::default().fg(STOPPED_COLOR)),
         ]));
     }
@@ -791,20 +791,19 @@ fn build_detail_lines(wt: &crate::worktree::Worktree, spin_frame: usize, cfg: Op
         if !ports.is_empty() {
             lines.push(Line::from(""));
             if wt.running {
-                // Show as clickable URLs
                 for (name, port) in &ports {
                     let url = format!("http://localhost:{}", port);
                     lines.push(Line::from(vec![
-                        Span::styled(format!("  {:<12}", name), label_style),
+                        Span::styled(format!("   {:<12}", name), label_style),
                         Span::styled(url, Style::default().fg(FOCUS_BORDER_COLOR)),
                     ]));
                 }
             } else {
-                lines.push(Line::from(Span::styled("Ports", label_style)));
+                lines.push(Line::from(Span::styled(" Ports", label_style)));
                 for (name, port) in &ports {
                     lines.push(Line::from(vec![
-                        Span::styled(format!("  {:<20}", name), Style::default().fg(Color::Indexed(248))),
-                        Span::styled(format!("{}", port), Style::default().fg(Color::Indexed(252))),
+                        Span::styled(format!("   {:<20}", name), Style::default().fg(HEADER_COLOR)),
+                        Span::styled(format!("{}", port), Style::default().fg(DIM_TEXT_COLOR)),
                     ]));
                 }
             }
@@ -817,12 +816,11 @@ fn build_detail_lines(wt: &crate::worktree::Worktree, spin_frame: usize, cfg: Op
         .unwrap_or_else(|_| wt.path.clone())
         .to_string_lossy()
         .to_string();
-    lines.push(Line::from(Span::styled("Path:", label_style)));
-    let wrap_width = 34;
+    lines.push(Line::from(Span::styled(" Path:", label_style)));
+    let wrap_width = 32;
     let mut remaining = canon_path.as_str();
     while !remaining.is_empty() {
         let (chunk, rest) = if remaining.len() > wrap_width {
-            // Try to break at a /
             let break_at = remaining[..wrap_width]
                 .rfind('/')
                 .map(|i| i + 1)
@@ -832,8 +830,8 @@ fn build_detail_lines(wt: &crate::worktree::Worktree, spin_frame: usize, cfg: Op
             (remaining, "")
         };
         lines.push(Line::from(Span::styled(
-            format!("  {}", chunk),
-            Style::default().fg(Color::Indexed(252)),
+            format!("   {}", chunk),
+            Style::default().fg(DIM_TEXT_COLOR),
         )));
         remaining = rest;
     }
@@ -843,8 +841,8 @@ fn build_detail_lines(wt: &crate::worktree::Worktree, spin_frame: usize, cfg: Op
 
 fn detail_line(label: &str, value: &str, label_style: Style) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!("{:<10}", format!("{}:", label)), label_style),
-        Span::styled(value.to_string(), Style::default()),
+        Span::styled(format!(" {:<10}", format!("{}:", label)), label_style),
+        Span::styled(value.to_string(), Style::default().fg(DIM_TEXT_COLOR)),
     ])
 }
 
