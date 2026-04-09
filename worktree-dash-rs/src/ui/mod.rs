@@ -124,7 +124,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                         Paragraph::new(Line::from(Span::styled(title_text, Style::default().fg(FOCUS_BORDER_COLOR).bold()))),
                         title_area,
                     );
-                    let term_area = Rect::new(main_area.x, main_area.y + 1, main_area.width, main_area.height.saturating_sub(1));
+                    let term_area = pad_rect(Rect::new(main_area.x, main_area.y + 1, main_area.width, main_area.height.saturating_sub(1)));
                     let term_widget = term_view::TermView::new(session.term());
                     frame.render_widget(term_widget, term_area);
                 }
@@ -1072,8 +1072,8 @@ fn render_terminal_area(frame: &mut Frame, area: Rect, app: &App, overlay_active
             let title_area = Rect::new(area.x, area.y, area.width, 1);
             frame.render_widget(Paragraph::new(Line::from(Span::styled(title_text, title_style))), title_area);
 
-            // Terminal content below title
-            let term_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+            // Terminal content below title with 1-char padding on all sides
+            let term_area = pad_rect(Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1)));
             let term_widget = term_view::TermView::new(session.term());
             frame.render_widget(term_widget, term_area);
             return;
@@ -1118,7 +1118,7 @@ fn render_split_node(
                     title_area,
                 );
 
-                let term_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+                let term_area = pad_rect(Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1)));
                 let term_widget = term_view::TermView::new(session.term());
                 frame.render_widget(term_widget, term_area);
             }
@@ -1187,7 +1187,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
                 ("j/k", "Navigate"),
                 ("Tab", "Next Panel"),
                 ("?", "Help"),
-                ("q", "Quit"),
+                ("Ctrl+q", "Quit"),
             ],
             Panel::Terminal => vec![
                 ("Enter", "Focus"),
@@ -1228,13 +1228,14 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::styled(" ", d)); // left padding
     for (i, (key, desc)) in shortcuts.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled("  ", d));
+            spans.push(Span::styled("   ", d));
         }
         spans.push(Span::styled("[", d));
         spans.push(Span::styled(key.to_string(), k));
-        spans.push(Span::styled("→", d));
+        spans.push(Span::styled(" → ", d));
         spans.push(Span::styled(desc.to_string(), d));
         spans.push(Span::styled("]", d));
     }
@@ -1282,6 +1283,16 @@ fn render_section_header(frame: &mut Frame, area: Rect, title: &str, focused: bo
         ])),
         header_area,
     );
+}
+
+/// Add 1-char padding on all sides of a rect.
+fn pad_rect(r: Rect) -> Rect {
+    Rect::new(
+        r.x + 1,
+        r.y,
+        r.width.saturating_sub(2),
+        r.height.saturating_sub(1),
+    )
 }
 
 /// Draw the vertical separator between sidebar and terminal area.
