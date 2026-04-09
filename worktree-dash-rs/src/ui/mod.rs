@@ -1128,11 +1128,17 @@ fn render_split_node(
                 SplitDir::Horizontal => Direction::Horizontal,
                 SplitDir::Vertical => Direction::Vertical,
             };
+            let sep_style = Style::default().fg(BORDER_COLOR);
+            let n = children.len();
 
-            let constraints: Vec<Constraint> = children
-                .iter()
-                .map(|_| Constraint::Ratio(1, children.len() as u32))
-                .collect();
+            // Build constraints: child, sep, child, sep, ..., child
+            let mut constraints: Vec<Constraint> = Vec::new();
+            for i in 0..n {
+                constraints.push(Constraint::Ratio(1, n as u32));
+                if i + 1 < n {
+                    constraints.push(Constraint::Length(1)); // separator
+                }
+            }
 
             let chunks = ratatui::layout::Layout::default()
                 .direction(dir)
@@ -1140,7 +1146,34 @@ fn render_split_node(
                 .split(area);
 
             for (i, child) in children.iter().enumerate() {
-                render_split_node(frame, chunks[i], child, pty_mgr, border_color, focused_session_id, terminal_focused);
+                let chunk_idx = i * 2;
+                render_split_node(frame, chunks[chunk_idx], child, pty_mgr, border_color, focused_session_id, terminal_focused);
+
+                // Draw separator between children
+                if i + 1 < n {
+                    let sep_rect = chunks[chunk_idx + 1];
+                    let buf = frame.buffer_mut();
+                    match direction {
+                        SplitDir::Horizontal => {
+                            // Vertical line │
+                            for y in sep_rect.y..sep_rect.y + sep_rect.height {
+                                if sep_rect.x < buf.area().width {
+                                    buf[(sep_rect.x, y)].set_symbol("│");
+                                    buf[(sep_rect.x, y)].set_style(sep_style);
+                                }
+                            }
+                        }
+                        SplitDir::Vertical => {
+                            // Horizontal line ─
+                            for x in sep_rect.x..sep_rect.x + sep_rect.width {
+                                if sep_rect.y < buf.area().height {
+                                    buf[(x, sep_rect.y)].set_symbol("─");
+                                    buf[(x, sep_rect.y)].set_style(sep_style);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
