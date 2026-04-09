@@ -449,7 +449,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
             Span::raw(" "),
             Span::styled(icon.to_string(), Style::default().fg(icon_color)),
             Span::raw(" "),
-            Span::styled(entry.label.clone(), Style::default().fg(DIM_TEXT_COLOR)),
+            Span::styled(entry.label.clone(), Style::default().fg(FOCUS_BORDER_COLOR).bold()),
         ])];
     }
 
@@ -496,7 +496,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
         Line::from(vec![
             Span::raw(indent),
             Span::styled(prefix, Style::default().fg(HEADER_COLOR)),
-            Span::styled(entry.label.clone(), Style::default().fg(DIM_TEXT_COLOR)),
+            Span::styled(entry.label.clone(), Style::default()),
             Span::styled(num_suffix, Style::default().fg(HEADER_COLOR)),
         ]),
         Line::from(vec![
