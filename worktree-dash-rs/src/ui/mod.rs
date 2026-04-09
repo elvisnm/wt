@@ -239,7 +239,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
 
     if app.tabs.is_empty() {
         if area.height > 1 {
-            let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+            let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     " No sessions open",
@@ -252,7 +252,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
     }
 
     let inner_w = area.width.saturating_sub(1) as usize;
-    let inner_h = area.height.saturating_sub(1) as usize;
+    let inner_h = area.height.saturating_sub(2) as usize;
 
     // Build flat list of tab entries with sequential numbering (1-9)
     // Group headers have no number — only sessions get numbers
@@ -372,7 +372,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
         }
     }
 
-    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
     let content = Paragraph::new(lines);
     frame.render_widget(content, content_area);
 }
@@ -453,7 +453,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     }
 
     // indent icon label (N)
-    let indent = if entry.is_group_child { "   " } else { " " };
+    let indent = if entry.is_group_child { "  " } else { " " };
 
     if is_cursor && panel_focused {
         let line = format!("{}{} {}{}", indent, icon, entry.label, num_suffix);
@@ -491,7 +491,7 @@ fn render_worktrees_panel(frame: &mut Frame, area: Rect, app: &App, overlay_acti
     let focused = app.focus == Panel::Worktrees && !overlay_active;
     render_section_header(frame, area, "worktrees", focused);
 
-    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
     if app.worktrees.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(" No worktrees discovered", Style::default().fg(DIM_TEXT_COLOR)))),
@@ -568,15 +568,25 @@ fn format_worktree_lines(wt: &crate::worktree::Worktree, width: usize, selected:
 
     let sub_style = Style::default().fg(HEADER_COLOR);
 
+    let name_pad = width.saturating_sub(3 + name.len());
+    let sub_pad = width.saturating_sub(3 + sub.len());
+
     if selected && panel_focused {
-        // Full-width highlight on both lines
-        let line1 = format!(" {} {}", icon, name);
-        let line2 = format!("   {}", sub);
-        let sel_style = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
-        let sel_sub = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
+        let sel = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
+        let sel_dim = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
         vec![
-            Line::from(Span::styled(truncate_pad(&line1, width), sel_style)),
-            Line::from(Span::styled(truncate_pad(&line2, width), sel_sub)),
+            Line::from(vec![
+                Span::styled(" ", sel),
+                Span::styled(icon.to_string(), sel),
+                Span::styled(" ", sel),
+                Span::styled(name.to_string(), sel),
+                Span::styled(" ".repeat(name_pad), sel),
+            ]),
+            Line::from(vec![
+                Span::styled("   ", sel_dim),
+                Span::styled(sub, sel_dim),
+                Span::styled(" ".repeat(sub_pad), sel_dim),
+            ]),
         ]
     } else {
         vec![
@@ -1287,7 +1297,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     spans.push(Span::styled(" ", d)); // left padding
     for (i, (key, desc)) in shortcuts.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled("   ", d));
+            spans.push(Span::styled(" ", d));
         }
         spans.push(Span::styled("[", d));
         spans.push(Span::styled(key.to_string(), k));
