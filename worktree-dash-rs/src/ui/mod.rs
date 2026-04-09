@@ -520,7 +520,7 @@ fn render_worktrees_panel(frame: &mut Frame, area: Rect, app: &App, overlay_acti
     frame.render_widget(Paragraph::new(lines), content_area);
 }
 
-fn format_worktree_lines(wt: &crate::worktree::Worktree, _width: usize, selected: bool, panel_focused: bool, is_build_project: bool) -> Vec<Line<'static>> {
+fn format_worktree_lines(wt: &crate::worktree::Worktree, width: usize, selected: bool, panel_focused: bool, is_build_project: bool) -> Vec<Line<'static>> {
     use crate::worktree::WorktreeType;
 
     let name = if wt.alias.is_empty() { &wt.name } else { &wt.alias };
@@ -566,36 +566,32 @@ fn format_worktree_lines(wt: &crate::worktree::Worktree, _width: usize, selected
         Style::default()
     };
 
-    let icon_style = if selected && panel_focused {
-        Style::default().fg(Color::White).bg(SELECTED_BG_COLOR)
-    } else {
-        Style::default().fg(icon_color)
-    };
+    let sub_style = Style::default().fg(HEADER_COLOR);
 
-    let sub_style = if selected && panel_focused {
-        Style::default().fg(Color::White).bg(SELECTED_BG_COLOR)
+    if selected && panel_focused {
+        // Full-width highlight on both lines
+        let line1 = format!(" {} {}", icon, name);
+        let line2 = format!("   {}", sub);
+        let sel_style = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
+        let sel_sub = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
+        vec![
+            Line::from(Span::styled(truncate_pad(&line1, width), sel_style)),
+            Line::from(Span::styled(truncate_pad(&line2, width), sel_sub)),
+        ]
     } else {
-        Style::default().fg(HEADER_COLOR)
-    };
-
-    let bg_style = if selected && panel_focused {
-        Style::default().bg(SELECTED_BG_COLOR)
-    } else {
-        Style::default()
-    };
-
-    vec![
-        Line::from(vec![
-            Span::styled(" ", bg_style),
-            Span::styled(icon.to_string(), icon_style),
-            Span::styled(" ", bg_style),
-            Span::styled(name.to_string(), name_style),
-        ]),
-        Line::from(vec![
-            Span::styled("   ", bg_style),
-            Span::styled(sub, sub_style),
-        ]),
-    ]
+        vec![
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(icon.to_string(), Style::default().fg(icon_color)),
+                Span::raw(" "),
+                Span::styled(name.to_string(), name_style),
+            ]),
+            Line::from(vec![
+                Span::raw("   "),
+                Span::styled(sub, sub_style),
+            ]),
+        ]
+    }
 }
 
 fn render_services_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: bool) {
