@@ -447,17 +447,17 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     }
 
     // Session: two lines — name on first, icon+status on second (aligned with name)
-    let (indent, prefix, status_indent) = if entry.is_group_child {
-        (" ", "└ ", "   ")  // 1 + 2 = 3 chars before name, 3 chars before status
+    let (indent, prefix, status_indent, status_indent_sel) = if entry.is_group_child {
+        (" ", "└ ", " │ ", " | ")  // │ connector on status line
     } else {
-        (" ", "", " ")
+        (" ", "", " ", " ")
     };
 
     if is_cursor && panel_focused {
         let sel = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
         let sel_dim = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
         let line1 = format!("{}{}{}{}", indent, prefix, entry.label, num_suffix);
-        let line2 = format!("{}{} {}", status_indent, icon, status);
+        let line2 = format!("{}{} {}", status_indent_sel, icon, status);
         return vec![
             Line::from(Span::styled(truncate_pad(&line1, width), sel)),
             Line::from(Span::styled(truncate_pad(&line2, width), sel_dim)),
@@ -472,7 +472,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
             Span::styled(num_suffix, Style::default().fg(HEADER_COLOR)),
         ]),
         Line::from(vec![
-            Span::raw(status_indent.to_string()),
+            Span::styled(status_indent.to_string(), Style::default().fg(HEADER_COLOR)),
             Span::styled(icon.to_string(), Style::default().fg(icon_color)),
             Span::raw(" "),
             Span::styled(status, Style::default().fg(HEADER_COLOR)),
