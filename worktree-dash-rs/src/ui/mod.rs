@@ -481,10 +481,13 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
 }
 
 fn truncate_pad(s: &str, width: usize) -> String {
-    if s.len() > width {
-        format!("{}~", &s[..width.saturating_sub(1)])
+    // Count display width (each char = 1 column for our purposes)
+    let display_w: usize = s.chars().count();
+    if display_w > width {
+        let truncated: String = s.chars().take(width.saturating_sub(1)).collect();
+        format!("{}~", truncated)
     } else {
-        format!("{}{}", s, " ".repeat(width.saturating_sub(s.len())))
+        format!("{}{}", s, " ".repeat(width.saturating_sub(display_w)))
     }
 }
 
