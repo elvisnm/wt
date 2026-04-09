@@ -375,6 +375,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
     let content_area = Rect::new(area.x, area.y + 3, area.width, area.height.saturating_sub(3));
     let content = Paragraph::new(lines);
     frame.render_widget(content, content_area);
+    render_scrollbar(frame, content_area, total, visible_items, start);
 }
 
 struct TabEntry {
@@ -566,6 +567,7 @@ fn render_worktrees_panel(frame: &mut Frame, area: Rect, app: &App, overlay_acti
         .collect();
 
     frame.render_widget(Paragraph::new(lines), content_area);
+    render_scrollbar(frame, content_area, total, visible_items, start);
 }
 
 fn format_worktree_lines(wt: &crate::worktree::Worktree, width: usize, selected: bool, panel_focused: bool, is_build_project: bool) -> Vec<Line<'static>> {
@@ -681,6 +683,7 @@ fn render_services_panel(frame: &mut Frame, area: Rect, app: &App, overlay_activ
         .collect();
 
     frame.render_widget(Paragraph::new(lines), content_area);
+    render_scrollbar(frame, content_area, total, inner_h, start);
 }
 
 fn format_service_line(svc: &crate::worktree::Service, width: usize, selected: bool, panel_focused: bool) -> Line<'static> {
@@ -1023,6 +1026,7 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         let visible = lines[scroll..end].to_vec();
 
         frame.render_widget(Paragraph::new(visible), padded);
+        render_scrollbar(frame, padded, total, inner_h, scroll);
         return;
     }
 
@@ -1082,6 +1086,7 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         .collect();
 
     frame.render_widget(Paragraph::new(lines), content_area);
+    render_scrollbar(frame, content_area, total, inner_h, start);
 }
 
 fn render_usage_line<'a>(label: &str, pct: f64, resets_at: Option<&str>, width: usize) -> Line<'a> {
@@ -1488,6 +1493,42 @@ pub fn visible_window(total: usize, cursor: usize, max_lines: usize) -> (usize, 
         start = end - max_lines;
     }
     (start, end)
+}
+
+/// Draw a vertical scrollbar on the right edge of an area.
+/// Only draws if total > visible (content overflows).
+fn render_scrollbar(frame: &mut Frame, area: Rect, total: usize, visible: usize, offset: usize) {
+    if total <= visible || area.height < 2 || area.width == 0 {
+        return;
+    }
+
+    let track_h = area.height as usize;
+    let thumb_h = ((visible as f64 / total as f64) * track_h as f64).ceil() as usize;
+    let thumb_h = thumb_h.max(1).min(track_h);
+    let max_offset = total.saturating_sub(visible);
+    let thumb_pos = if max_offset > 0 {
+        ((offset as f64 / max_offset as f64) * (track_h - thumb_h) as f64).round() as usize
+    } else {
+        0
+    };
+
+    let x = area.x + area.width - 1;
+    let buf = frame.buffer_mut();
+    let track_style = Style::default().fg(BORDER_COLOR);
+    let thumb_style = Style::default().fg(HEADER_COLOR);
+
+    for i in 0..track_h {
+        let y = area.y + i as u16;
+        if x < buf.area().width && y < buf.area().height {
+            if i >= thumb_pos && i < thumb_pos + thumb_h {
+                buf[(x, y)].set_symbol("┃");
+                buf[(x, y)].set_style(thumb_style);
+            } else {
+                buf[(x, y)].set_symbol("│");
+                buf[(x, y)].set_style(track_style);
+            }
+        }
+    }
 }
 
 // ── Notification Bar Renderer ─────────────────────────────────────────────
