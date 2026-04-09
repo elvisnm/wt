@@ -1068,13 +1068,7 @@ fn render_terminal_area(frame: &mut Frame, area: Rect, app: &App, overlay_active
 
     if let Some(session_id) = active_session_id {
         if let Some(session) = app.pty_mgr.get(session_id) {
-            let title_text = if focused {
-                format!(" {} — Ctrl+] to return ", session.label)
-            } else if app.focus == crate::app::Panel::Terminal {
-                format!(" {} — Enter to focus ", session.label)
-            } else {
-                format!(" {} ", session.label)
-            };
+            let title_text = format!(" {} ", session.label);
             let block = Block::default()
                 .title(Span::styled(
                     title_text,
