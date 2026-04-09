@@ -235,14 +235,16 @@ fn render_notify_panel(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: bool) {
     let focused = app.focus == Panel::Terminal && !app.terminal_focused && !overlay_active;
-    render_section_header(frame, area, "tabs", focused);
+    // Offset by 1 row for top spacing
+    let header_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    render_section_header(frame, header_area, "tabs", focused);
 
     if app.tabs.is_empty() {
         return;
     }
 
     let inner_w = area.width.saturating_sub(1) as usize;
-    let inner_h = area.height.saturating_sub(2) as usize;
+    let inner_h = area.height.saturating_sub(3) as usize; // +1 top spacing, +1 header, +1 spacer
 
     // Build flat list of tab entries with sequential numbering (1-9)
     // Group headers have no number — only sessions get numbers
@@ -363,7 +365,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
         }
     }
 
-    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
+    let content_area = Rect::new(area.x, area.y + 3, area.width, area.height.saturating_sub(3));
     let content = Paragraph::new(lines);
     frame.render_widget(content, content_area);
 }
@@ -424,7 +426,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     };
 
     let num_suffix = if entry.num > 0 && entry.num <= 9 {
-        format!(" ({})", entry.num)
+        format!(" [{}]", entry.num)
     } else {
         String::new()
     };
@@ -447,66 +449,34 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     }
 
     // Session: two lines — name on first, icon+status on second (aligned with name)
-    if entry.is_group_child {
-        // Group child: └│ prefix on line 1, space+│ on line 2
-        let name_text = format!("{}{}", entry.label, num_suffix);
-        let name_chars = name_text.chars().count();
-        let status_text = format!("{} {}", icon, status);
-        let status_chars = status_text.chars().count();
-        let pad1 = width.saturating_sub(3 + name_chars); // " └│" = 3 chars
-        let pad2 = width.saturating_sub(3 + status_chars); // "  │" = 3 chars (space + space + │ + space before icon)
+    // Two lines: name on first, status on second
+    let (indent, prefix, status_prefix) = if entry.is_group_child {
+        ("   ", "└ ", "   │ ")  // 3+2=5 before name, 3+2=5 before status
+    } else {
+        (" ", "", " ")
+    };
 
-        if is_cursor && panel_focused {
-            let sel = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
-            let sel_dim = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
-            return vec![
-                Line::from(vec![
-                    Span::styled(" └│", sel),
-                    Span::styled(name_text, sel),
-                    Span::styled(" ".repeat(pad1), sel),
-                ]),
-                Line::from(vec![
-                    Span::styled("  │ ", sel_dim),
-                    Span::styled(status_text, sel_dim),
-                    Span::styled(" ".repeat(pad2.saturating_sub(1)), sel_dim),
-                ]),
-            ];
-        }
-
-        return vec![
-            Line::from(vec![
-                Span::styled(" └│", Style::default().fg(HEADER_COLOR)),
-                Span::styled(entry.label.clone(), Style::default().fg(DIM_TEXT_COLOR)),
-                Span::styled(num_suffix, Style::default().fg(HEADER_COLOR)),
-            ]),
-            Line::from(vec![
-                Span::styled("  │ ", Style::default().fg(HEADER_COLOR)),
-                Span::styled(icon.to_string(), Style::default().fg(icon_color)),
-                Span::raw(" "),
-                Span::styled(status, Style::default().fg(HEADER_COLOR)),
-            ]),
-        ];
-    }
-
-    // Non-group session
     let name_text = format!("{}{}", entry.label, num_suffix);
     let name_chars = name_text.chars().count();
+    let prefix_chars = indent.chars().count() + prefix.chars().count();
     let status_text = format!("{} {}", icon, status);
     let status_chars = status_text.chars().count();
-    let pad1 = width.saturating_sub(1 + name_chars);
-    let pad2 = width.saturating_sub(1 + status_chars);
+    let status_prefix_chars = status_prefix.chars().count();
+    let pad1 = width.saturating_sub(prefix_chars + name_chars);
+    let pad2 = width.saturating_sub(status_prefix_chars + status_chars);
 
     if is_cursor && panel_focused {
         let sel = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
         let sel_dim = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
         return vec![
             Line::from(vec![
-                Span::styled(" ", sel),
+                Span::styled(indent, sel),
+                Span::styled(prefix, sel),
                 Span::styled(name_text, sel),
                 Span::styled(" ".repeat(pad1), sel),
             ]),
             Line::from(vec![
-                Span::styled(" ", sel_dim),
+                Span::styled(status_prefix, sel_dim),
                 Span::styled(status_text, sel_dim),
                 Span::styled(" ".repeat(pad2), sel_dim),
             ]),
@@ -515,12 +485,13 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
 
     vec![
         Line::from(vec![
-            Span::raw(" "),
+            Span::raw(indent),
+            Span::styled(prefix, Style::default().fg(HEADER_COLOR)),
             Span::styled(entry.label.clone(), Style::default().fg(DIM_TEXT_COLOR)),
             Span::styled(num_suffix, Style::default().fg(HEADER_COLOR)),
         ]),
         Line::from(vec![
-            Span::raw(" "),
+            Span::styled(status_prefix, Style::default().fg(HEADER_COLOR)),
             Span::styled(icon.to_string(), Style::default().fg(icon_color)),
             Span::raw(" "),
             Span::styled(status, Style::default().fg(HEADER_COLOR)),
