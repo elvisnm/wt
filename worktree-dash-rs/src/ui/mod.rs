@@ -279,6 +279,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                 num: 0,
                 is_active,
                 alive: tab.alive,
+                exit_code: None,
                 is_group_head: true,
                 is_group_child: false,
             });
@@ -288,24 +289,28 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                 let child_label = app.pty_mgr.get(*sid)
                     .map(|s| s.label.clone())
                     .unwrap_or_else(|| format!("session-{}", sid));
+                let child_exit = app.pty_mgr.get(*sid).and_then(|s| s.exit_code);
                 entries.push(TabEntry {
                     label: child_label,
                     session_id: *sid,
                     num: seq,
                     is_active,
-                    alive: tab.alive,
+                    alive: app.pty_mgr.get(*sid).map(|s| s.alive).unwrap_or(false),
+                    exit_code: child_exit,
                     is_group_head: false,
                     is_group_child: true,
                 });
                 seq += 1;
             }
         } else {
+            let tab_exit = app.pty_mgr.get(tab.session_id).and_then(|s| s.exit_code);
             entries.push(TabEntry {
                 label: tab.label.clone(),
                 session_id: tab.session_id,
                 num: seq,
                 is_active,
                 alive: tab.alive,
+                exit_code: tab_exit,
                 is_group_head: false,
                 is_group_child: false,
             });
@@ -333,7 +338,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
         .map(|(i, entry)| {
             let idx = start + i;
             let is_cursor = idx == cursor;
-            format_tab_entry(entry, inner_w, is_cursor, focused)
+            format_tab_entry(entry, inner_w, is_cursor, focused, app.spin_frame)
         })
         .collect();
 
@@ -373,38 +378,54 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
 
 struct TabEntry {
     label: String,
-    session_id: usize, // for highlight tracking
+    session_id: usize,
     num: usize,
     is_active: bool,
     alive: bool,
+    exit_code: Option<u32>,
     is_group_head: bool,
     is_group_child: bool,
 }
 
-fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focused: bool) -> Line<'static> {
+fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focused: bool, spin_frame: usize) -> Line<'static> {
+    // Number prefix in gray parentheses
     let prefix = if entry.is_group_child {
-        // Indented with number: "  3 "
         if entry.num > 0 && entry.num <= 9 {
-            format!("  {} ", entry.num)
+            format!("  ({}) ", entry.num)
         } else {
-            "    ".to_string()
+            "      ".to_string()
         }
+    } else if entry.is_group_head {
+        " ".to_string()
     } else if entry.num > 0 && entry.num <= 9 {
-        format!(" {} ", entry.num)
+        format!(" ({}) ", entry.num)
     } else {
-        "   ".to_string()
+        "     ".to_string()
     };
 
-    let icon = if !entry.alive {
-        ("○", STOPPED_COLOR)
+    // Icon based on state
+    let (icon, icon_color) = if entry.is_group_head {
+        ("☰", HINT_COLOR) // sandwich for group
+    } else if !entry.alive {
+        if entry.exit_code == Some(0) {
+            ("●", RUNNING_COLOR) // green dot = done success
+        } else if entry.exit_code.is_some() {
+            ("●", STOPPED_COLOR) // red dot = failed
+        } else {
+            ("○", DIM_TEXT_COLOR) // empty = dead
+        }
     } else if entry.is_active {
-        ("●", RUNNING_COLOR)
+        // Active session: spinner if running, square if idle
+        let frame = SPIN_FRAMES[spin_frame % SPIN_FRAMES.len()];
+        (frame, HINT_COLOR)
     } else {
-        ("◦", DIM_TEXT_COLOR)
+        ("■", DIM_TEXT_COLOR) // square = alive but not active
     };
+
+    let prefix_style = Style::default().fg(HEADER_COLOR);
 
     if is_cursor && panel_focused {
-        let line = format!("{}{}  {}", prefix, icon.0, entry.label);
+        let line = format!("{}{}  {}", prefix, icon, entry.label);
         return Line::from(Span::styled(
             truncate_pad(&line, width),
             Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
@@ -412,7 +433,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     }
 
     if is_cursor {
-        let line = format!("{}{}  {}", prefix, icon.0, entry.label);
+        let line = format!("{}{}  {}", prefix, icon, entry.label);
         return Line::from(Span::styled(
             truncate_pad(&line, width),
             Style::default().bold(),
@@ -428,8 +449,8 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     };
 
     Line::from(vec![
-        Span::styled(prefix, Style::default().fg(HEADER_COLOR)),
-        Span::styled(icon.0.to_string(), Style::default().fg(icon.1)),
+        Span::styled(prefix, prefix_style),
+        Span::styled(icon.to_string(), Style::default().fg(icon_color)),
         Span::raw("  "),
         Span::styled(entry.label.clone(), label_style),
     ])
