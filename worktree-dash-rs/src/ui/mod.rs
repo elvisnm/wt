@@ -118,17 +118,15 @@ pub fn render(frame: &mut Frame, app: &App) {
         if app.fullscreen {
             if let Some(sid) = app.fullscreen_session_id {
                 if let Some(session) = app.pty_mgr.get(sid) {
-                    let block = Block::default()
-                        .title(Span::styled(
-                            format!(" {} — Ctrl+F to exit fullscreen ", session.label),
-                            Style::default().fg(FOCUS_BORDER_COLOR).bold(),
-                        ))
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(FOCUS_BORDER_COLOR));
-                    let inner = block.inner(main_area);
-                    frame.render_widget(block, main_area);
+                    let title_text = format!(" {} ", session.label);
+                    let title_area = Rect::new(main_area.x, main_area.y, main_area.width, 1);
+                    frame.render_widget(
+                        Paragraph::new(Line::from(Span::styled(title_text, Style::default().fg(FOCUS_BORDER_COLOR).bold()))),
+                        title_area,
+                    );
+                    let term_area = Rect::new(main_area.x, main_area.y + 1, main_area.width, main_area.height.saturating_sub(1));
                     let term_widget = term_view::TermView::new(session.term());
-                    frame.render_widget(term_widget, inner);
+                    frame.render_widget(term_widget, term_area);
                 }
             } else {
                 render_terminal_area(frame, main_area, app, overlay_active);
@@ -1068,20 +1066,16 @@ fn render_terminal_area(frame: &mut Frame, area: Rect, app: &App, overlay_active
 
     if let Some(session_id) = active_session_id {
         if let Some(session) = app.pty_mgr.get(session_id) {
+            // Title line at top
             let title_text = format!(" {} ", session.label);
-            let block = Block::default()
-                .title(Span::styled(
-                    title_text,
-                    Style::default().fg(if focused { FOCUS_BORDER_COLOR } else { DIM_TEXT_COLOR }),
-                ))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color));
+            let title_style = if focused { Style::default().fg(FOCUS_BORDER_COLOR).bold() } else { Style::default().fg(DIM_TEXT_COLOR) };
+            let title_area = Rect::new(area.x, area.y, area.width, 1);
+            frame.render_widget(Paragraph::new(Line::from(Span::styled(title_text, title_style))), title_area);
 
-            let inner = block.inner(area);
-            frame.render_widget(block, area);
-
+            // Terminal content below title
+            let term_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
             let term_widget = term_view::TermView::new(session.term());
-            frame.render_widget(term_widget, inner);
+            frame.render_widget(term_widget, term_area);
             return;
         }
     }
@@ -1106,7 +1100,7 @@ fn render_split_node(
         SplitNode::Leaf(session_id) => {
             if let Some(session) = pty_mgr.get(*session_id) {
                 let is_focused = focused_session_id == Some(*session_id);
-                let pane_border = if is_focused && terminal_focused {
+                let _pane_border = if is_focused && terminal_focused {
                     FOCUS_BORDER_COLOR
                 } else {
                     BORDER_COLOR
@@ -1118,17 +1112,15 @@ fn render_split_node(
                 };
 
                 let title_text = format!(" {} ", session.label);
+                let title_area = Rect::new(area.x, area.y, area.width, 1);
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(title_text, Style::default().fg(title_color)))),
+                    title_area,
+                );
 
-                let block = Block::default()
-                    .title(Span::styled(title_text, Style::default().fg(title_color)))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(pane_border));
-
-                let inner = block.inner(area);
-                frame.render_widget(block, area);
-
+                let term_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
                 let term_widget = term_view::TermView::new(session.term());
-                frame.render_widget(term_widget, inner);
+                frame.render_widget(term_widget, term_area);
             }
         }
         SplitNode::Split { direction, children } => {
@@ -1293,13 +1285,9 @@ fn render_section_header(frame: &mut Frame, area: Rect, title: &str, focused: bo
 }
 
 /// Draw the vertical separator between sidebar and terminal area.
-fn render_sidebar_separator(frame: &mut Frame, area: Rect, focused: bool) {
+fn render_sidebar_separator(frame: &mut Frame, area: Rect, _focused: bool) {
     let sep_x = area.x + area.width.saturating_sub(1);
-    let style = if focused {
-        Style::default().fg(FOCUS_BORDER_COLOR)
-    } else {
-        Style::default().fg(BORDER_COLOR)
-    };
+    let style = Style::default().fg(BORDER_COLOR);
     let buf = frame.buffer_mut();
     for y in area.y..area.y + area.height {
         if sep_x < buf.area().width {
