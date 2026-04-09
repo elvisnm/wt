@@ -448,7 +448,7 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
 
     // Session: two lines — name on first, icon+status on second (aligned with name)
     let (indent, prefix, status_indent, status_indent_sel) = if entry.is_group_child {
-        (" ", "└ ", " │ ", " | ")  // │ connector on status line
+        ("└", "│", " │ ", " | ")
     } else {
         (" ", "", " ", " ")
     };
