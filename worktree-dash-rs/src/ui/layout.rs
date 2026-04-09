@@ -47,20 +47,11 @@ impl Layout {
             panels_h -= l.usage_height;
         }
 
-        if opts.tasks_visible {
-            let content = opts.tasks_content.max(1);
-            let mut tasks_h = content + 2;
-            let max_tasks = (panels_h * 40 / 100).max(4);
-            tasks_h = tasks_h.clamp(4, max_tasks);
-            l.tasks_height = tasks_h;
-            panels_h -= l.tasks_height;
-        }
-
-        // Core panels: tabs + worktrees always visible, services + details optional
-        // Distribute equally among visible core panels
+        // Distribute space equally among all visible panels
         let mut core_count = 2u16; // tabs + worktrees always
         if opts.services_visible { core_count += 1; }
         if opts.details_visible { core_count += 1; }
+        if opts.tasks_visible { core_count += 1; }
 
         let per_panel = panels_h / core_count;
 
@@ -73,13 +64,21 @@ impl Layout {
             l.services_height = 0;
         }
 
-        if opts.details_visible {
-            // Details gets the remainder to avoid rounding gaps
-            l.details_height = panels_h - l.tabs_height - l.worktree_height - l.services_height;
+        if opts.tasks_visible {
+            l.tasks_height = per_panel.max(4);
         } else {
-            l.details_height = 0;
-            // Redistribute remainder to worktrees
-            l.worktree_height = panels_h - l.tabs_height - l.services_height;
+            l.tasks_height = 0;
+        }
+
+        // Last visible panel gets the remainder to avoid rounding gaps
+        let used = l.tabs_height + l.worktree_height + l.services_height + l.tasks_height;
+        let remainder = panels_h.saturating_sub(used);
+        if opts.details_visible {
+            l.details_height = remainder;
+        } else if opts.tasks_visible {
+            l.tasks_height += remainder;
+        } else {
+            l.worktree_height += remainder;
         }
 
         // Safety clamp: guarantee total never exceeds terminal height

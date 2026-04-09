@@ -963,13 +963,16 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
 
         lines.push(Line::from(vec![
             Span::styled(format!("P{} ", p), Style::default().fg(priority_color)),
-            Span::styled(format!("{} ", task.task_type), Style::default().fg(FOCUS_BORDER_COLOR)),
             Span::styled(&task.id, Style::default().fg(DIM_TEXT_COLOR)),
         ]));
-        lines.push(Line::from(Span::styled(
-            format!("Status: {}", task.status),
-            Style::default().fg(if task.status == "open" { RUNNING_COLOR } else { DIM_TEXT_COLOR }),
-        )));
+        lines.push(Line::from(vec![
+            Span::styled("Type: ", Style::default().fg(DIM_TEXT_COLOR)),
+            Span::styled(&task.task_type, Style::default().fg(FOCUS_BORDER_COLOR)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(DIM_TEXT_COLOR)),
+            Span::styled(&task.status, Style::default().fg(if task.status == "open" { RUNNING_COLOR } else { DIM_TEXT_COLOR })),
+        ]));
         if !task.description.is_empty() {
             lines.push(Line::from(""));
             for chunk in wrap_text(&task.description, inner_w) {
@@ -997,22 +1000,28 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
     }
 
     // List view
-    if app.tasks_list.is_empty() {
+    let filtered = app.filtered_task_indices();
+
+    if filtered.is_empty() {
+        let msg = if app.tasks_search.is_some() { " No matching tasks" } else { " No open tasks" };
         frame.render_widget(Paragraph::new(Line::from(Span::styled(
-            " No open tasks", Style::default().fg(DIM_TEXT_COLOR),
+            msg, Style::default().fg(DIM_TEXT_COLOR),
         ))), content_area);
         return;
     }
 
     let inner_h = content_area.height as usize;
-    let inner_w = content_area.width.saturating_sub(1) as usize;
-    let total = app.tasks_list.len();
+    let total = filtered.len();
+    let needs_scrollbar = total > inner_h;
+    let scrollbar_w: u16 = if needs_scrollbar { 1 } else { 0 };
+    let inner_w = content_area.width.saturating_sub(1 + scrollbar_w) as usize; // 1 = right padding
     let (start, end) = visible_window(total, app.tasks_cursor, inner_h);
 
-    let lines: Vec<Line> = app.tasks_list[start..end]
+    let lines: Vec<Line> = filtered[start..end]
         .iter()
         .enumerate()
-        .map(|(i, task)| {
+        .map(|(i, &real_idx)| {
+            let task = &app.tasks_list[real_idx];
             let idx = start + i;
             let selected = idx == app.tasks_cursor;
 
@@ -1027,23 +1036,18 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
                 2 => Color::Yellow,
                 _ => DIM_TEXT_COLOR,
             };
-            let type_color = match task.task_type.as_str() {
-                "bug" => STOPPED_COLOR,
-                "feature" | "feat" => FOCUS_BORDER_COLOR,
-                _ => DIM_TEXT_COLOR,
-            };
-
-            let max_title = inner_w.saturating_sub(task.id.len() + task.task_type.len() + 8);
+            // prefix: " P{p} {id} " — 1 + 2 + 1 + id.len + 1
+            let prefix_len = 4 + task.id.len() + 1;
+            let max_title = inner_w.saturating_sub(prefix_len);
 
             if selected && focused {
                 Line::from(Span::styled(
-                    format!(" P{} {} {} {}", p, task.task_type, task.id, truncate(&task.title, max_title)),
+                    format!(" P{} {} {}", p, task.id, truncate(&task.title, max_title)),
                     Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
                 ))
             } else {
                 Line::from(vec![
                     Span::styled(format!(" P{} ", p), Style::default().fg(priority_color)),
-                    Span::styled(format!("{} ", task.task_type), Style::default().fg(type_color)),
                     Span::styled(format!("{} ", task.id), Style::default().fg(DIM_TEXT_COLOR)),
                     Span::styled(truncate(&task.title, max_title), Style::default().fg(if selected { Color::White } else { DIM_TEXT_COLOR })),
                 ])
@@ -1341,26 +1345,70 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
                 ("Tab", "Next"),
                 ("Shift+ Tab", "Back"),
             ],
-            Panel::Tasks => if app.tasks_detail.is_some() {
+            Panel::Tasks => if app.tasks_search_active {
+                // Search input replaces the shortcut bar — handled below
+                vec![]
+            } else if app.tasks_detail.is_some() {
                 vec![
                     ("↑/↓", "Scroll"),
                     ("Esc", "Back to list"),
                 ]
             } else {
-                vec![
+                let mut v = vec![
                     ("↑/↓", "Navigate"),
                     ("Enter", "Detail"),
                     ("c", "Close"),
                     ("d", "Delete"),
-                    ("Tab", "Next"),
-                ("Shift+ Tab", "Back"),
-                ]
+                    ("Ctrl+s", "Search"),
+                ];
+                if app.tasks_search.is_some() {
+                    v.push(("Esc", "Clear filter"));
+                } else {
+                    v.push(("Tab", "Next"));
+                }
+                v
             },
         }
     };
 
+    // Search input mode: replace status bar with search prompt
+    if app.tasks_search_active {
+        let query = app.tasks_search.as_deref().unwrap_or("");
+        let filtered_count = app.filtered_task_indices().len();
+        let total_count = app.tasks_list.len();
+
+        let mut spans: Vec<Span> = Vec::new();
+        spans.push(Span::styled(" /", k));
+        spans.push(Span::styled(query.to_string(), Style::default().fg(Color::White)));
+        spans.push(Span::styled("_", Style::default().fg(HINT_COLOR))); // cursor
+        spans.push(Span::styled(
+            format!("  ({}/{})", filtered_count, total_count),
+            d,
+        ));
+
+        let line = Line::from(spans);
+        let bar = Paragraph::new(line).style(bg);
+        frame.render_widget(bar, area);
+        return;
+    }
+
     let mut spans: Vec<Span> = Vec::new();
-    spans.push(Span::styled(" ", d)); // left padding
+    // Show active filter indicator before shortcuts
+    if app.focus == crate::app::Panel::Tasks && !app.tasks_search_active {
+        if let Some(ref q) = app.tasks_search {
+            let filtered_count = app.filtered_task_indices().len();
+            spans.push(Span::styled(" /", k));
+            spans.push(Span::styled(q.clone(), Style::default().fg(Color::White)));
+            spans.push(Span::styled(
+                format!(" ({}) ", filtered_count),
+                d,
+            ));
+        } else {
+            spans.push(Span::styled(" ", d));
+        }
+    } else {
+        spans.push(Span::styled(" ", d)); // left padding
+    }
     for (i, (key, desc)) in shortcuts.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" ", d));

@@ -136,6 +136,8 @@ pub struct App {
     pub tasks_detail: Option<beads::Task>,
     pub tasks_detail_scroll: usize,
     pub tasks_detail_max_scroll: std::cell::Cell<usize>,
+    pub tasks_search: Option<String>,
+    pub tasks_search_active: bool,
 
     // Fullscreen mode — hides left column, shows only focused session
     pub fullscreen: bool,
@@ -217,6 +219,8 @@ impl App {
             tasks_detail: None,
             tasks_detail_scroll: 0,
             tasks_detail_max_scroll: std::cell::Cell::new(0),
+            tasks_search: None,
+            tasks_search_active: false,
             notify_state: NotifyState::Idle,
             pending_split_dir: None,
             split_target_session_id: None,
@@ -506,6 +510,26 @@ impl App {
             Err(e) => {
                 self.tasks_err = Some(e);
             }
+        }
+    }
+
+    /// Return indices into `tasks_list` that match the current search filter.
+    pub fn filtered_task_indices(&self) -> Vec<usize> {
+        match &self.tasks_search {
+            Some(q) if !q.is_empty() => {
+                let lower = q.to_lowercase();
+                self.tasks_list
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| {
+                        t.title.to_lowercase().contains(&lower)
+                            || t.id.to_lowercase().contains(&lower)
+                            || t.labels.iter().any(|l| l.to_lowercase().contains(&lower))
+                    })
+                    .map(|(i, _)| i)
+                    .collect()
+            }
+            _ => (0..self.tasks_list.len()).collect(),
         }
     }
 
@@ -983,6 +1007,35 @@ impl App {
             return;
         }
 
+        // ── Tasks search mode (capturing keystrokes) ────────────────
+        if self.tasks_search_active {
+            let query = self.tasks_search.get_or_insert_with(String::new);
+            match key.code {
+                KeyCode::Esc => {
+                    self.tasks_search = None;
+                    self.tasks_search_active = false;
+                    self.tasks_cursor = 0;
+                }
+                KeyCode::Enter => {
+                    // Confirm: keep filter, stop capturing
+                    self.tasks_search_active = false;
+                    if self.tasks_search.as_ref().map_or(true, |q| q.is_empty()) {
+                        self.tasks_search = None;
+                    }
+                }
+                KeyCode::Backspace => {
+                    query.pop();
+                    self.tasks_cursor = 0;
+                }
+                KeyCode::Char(c) => {
+                    query.push(c);
+                    self.tasks_cursor = 0;
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // ── Dashboard focused: handle navigation ────────────────────
         match key.code {
             KeyCode::Tab | KeyCode::Right => self.cycle_panel(1),
@@ -1010,6 +1063,8 @@ impl App {
                     self.tasks_detail = None;
                     self.tasks_detail_scroll = 0;
                     self.tasks_err = None;
+                    self.tasks_search = None;
+                    self.tasks_search_active = false;
                     self.focus = Panel::Tasks;
                     self.fetch_tasks();
                 } else if self.focus == Panel::Tasks {
@@ -1018,19 +1073,35 @@ impl App {
                 self.recalc_layout();
             }
 
+            // Tasks panel — Ctrl+S to search
+            KeyCode::Char('s') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.tasks_search_active = true;
+                self.tasks_search = Some(String::new());
+                self.tasks_cursor = 0;
+                self.tasks_detail = None;
+            }
+            // Tasks panel — Esc clears search filter (when not in detail view)
+            KeyCode::Esc if self.focus == Panel::Tasks && self.tasks_search.is_some() && self.tasks_detail.is_none() => {
+                self.tasks_search = None;
+                self.tasks_cursor = 0;
+            }
+
             // Tasks panel — Enter/Esc/c/d
             KeyCode::Enter if self.focus == Panel::Tasks => {
                 if self.tasks_detail.is_some() {
                     // Already in detail — do nothing
-                } else if self.tasks_cursor < self.tasks_list.len() {
-                    let id = self.tasks_list[self.tasks_cursor].id.clone();
-                    match beads::fetch_detail(&id) {
-                        Ok(detail) => {
-                            self.tasks_detail = Some(detail);
-                            self.tasks_detail_scroll = 0;
-                            self.recalc_layout();
+                } else {
+                    let indices = self.filtered_task_indices();
+                    if let Some(&real_idx) = indices.get(self.tasks_cursor) {
+                        let id = self.tasks_list[real_idx].id.clone();
+                        match beads::fetch_detail(&id) {
+                            Ok(detail) => {
+                                self.tasks_detail = Some(detail);
+                                self.tasks_detail_scroll = 0;
+                                self.recalc_layout();
+                            }
+                            Err(e) => { self.tasks_err = Some(e); }
                         }
-                        Err(e) => { self.tasks_err = Some(e); }
                     }
                 }
             }
@@ -1040,18 +1111,29 @@ impl App {
                 self.recalc_layout();
             }
             KeyCode::Char('c') if self.focus == Panel::Tasks && !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.tasks_cursor < self.tasks_list.len() {
-                    let id = self.tasks_list[self.tasks_cursor].id.clone();
+                let indices = self.filtered_task_indices();
+                if let Some(&real_idx) = indices.get(self.tasks_cursor) {
+                    let id = self.tasks_list[real_idx].id.clone();
                     if beads::close_task(&id).is_ok() {
                         self.fetch_tasks();
+                        // Clamp cursor after list change
+                        let new_len = self.filtered_task_indices().len();
+                        if self.tasks_cursor >= new_len && new_len > 0 {
+                            self.tasks_cursor = new_len - 1;
+                        }
                     }
                 }
             }
             KeyCode::Char('d') if self.focus == Panel::Tasks => {
-                if self.tasks_cursor < self.tasks_list.len() {
-                    let id = self.tasks_list[self.tasks_cursor].id.clone();
+                let indices = self.filtered_task_indices();
+                if let Some(&real_idx) = indices.get(self.tasks_cursor) {
+                    let id = self.tasks_list[real_idx].id.clone();
                     let _ = beads::delete_task(&id);
                     self.fetch_tasks();
+                    let new_len = self.filtered_task_indices().len();
+                    if self.tasks_cursor >= new_len && new_len > 0 {
+                        self.tasks_cursor = new_len - 1;
+                    }
                 }
             }
 
@@ -2504,9 +2586,12 @@ impl App {
                 if self.tasks_detail.is_some() {
                     let new = self.tasks_detail_scroll as i32 + delta as i32;
                     self.tasks_detail_scroll = (new.max(0) as usize).min(self.tasks_detail_max_scroll.get());
-                } else if !self.tasks_list.is_empty() {
-                    let new = self.tasks_cursor as i32 + delta as i32;
-                    self.tasks_cursor = new.clamp(0, self.tasks_list.len() as i32 - 1) as usize;
+                } else {
+                    let filtered_len = self.filtered_task_indices().len();
+                    if filtered_len > 0 {
+                        let new = self.tasks_cursor as i32 + delta as i32;
+                        self.tasks_cursor = new.clamp(0, filtered_len as i32 - 1) as usize;
+                    }
                 }
             }
             _ => {}

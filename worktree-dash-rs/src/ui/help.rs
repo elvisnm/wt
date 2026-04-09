@@ -81,6 +81,7 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
         vec![box_line(col_w, b, vec![s("  ", d), s("Enter", k), s("       task detail", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("c", k), s("           close task", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("d", k), s("           delete task", d)])],
+        vec![box_line(col_w, b, vec![s("  ", d), s("Ctrl+s", k), s("      search/filter", d)])],
         vec![box_bottom(col_w, b)],
         vec![box_top("Operations", col_w, b, t)],
         vec![vec![]],

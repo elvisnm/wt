@@ -5,6 +5,7 @@ mod tests {
     fn minimal_config() -> Config {
         Config {
             name: "test-app".to_string(),
+            stack: None,
             repo: RepoConfig::default(),
             docker: DockerConfig::default(),
             services: ServicesConfig::default(),
