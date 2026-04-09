@@ -895,14 +895,21 @@ impl App {
                     match state.current_field() {
                         SettingsField::Save => {
                             let new_settings = state.settings.clone();
-                            let _ = new_settings.save();
-                            self.details_visible = new_settings.default_panels.details;
-                            self.usage_visible = new_settings.default_panels.usage;
-                            self.tasks_visible = new_settings.default_panels.tasks;
-                            self.services_visible = new_settings.default_panels.services;
-                            self.settings = new_settings;
-                            self.settings_state = None;
-                            self.recalc_layout();
+                            match new_settings.save() {
+                                Ok(()) => {
+                                    self.details_visible = new_settings.default_panels.details;
+                                    self.usage_visible = new_settings.default_panels.usage;
+                                    self.tasks_visible = new_settings.default_panels.tasks;
+                                    self.services_visible = new_settings.default_panels.services;
+                                    self.settings = new_settings;
+                                    self.settings_state = None;
+                                    self.recalc_layout();
+                                    self.push_toast("Success", "Settings saved", ui::overlay::ToastKind::Success);
+                                }
+                                Err(e) => {
+                                    self.push_toast("Error", &format!("Failed to save settings: {}", e), ui::overlay::ToastKind::Error);
+                                }
+                            }
                         }
                         SettingsField::Cancel => {
                             self.settings_state = None;
@@ -925,20 +932,22 @@ impl App {
             match key.code {
                 // Save
                 KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let is_new = editor.is_new;
                     match editor.save() {
                         Ok(()) => {
                             self.task_editor = None;
                             self.fetch_tasks();
-                            // Refresh detail if open
                             if let Some(ref detail) = self.tasks_detail {
                                 let id = detail.id.clone();
                                 if let Ok(updated) = beads::fetch_detail(&id) {
                                     self.tasks_detail = Some(updated);
                                 }
                             }
+                            let msg = if is_new { "Task created" } else { "Task updated" };
+                            self.push_toast("Success", msg, ui::overlay::ToastKind::Success);
                         }
                         Err(e) => {
-                            self.tasks_err = Some(e);
+                            self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
                             self.task_editor = None;
                         }
                     }
@@ -1201,12 +1210,17 @@ impl App {
                 let indices = self.filtered_task_indices();
                 if let Some(&real_idx) = indices.get(self.tasks_cursor) {
                     let id = self.tasks_list[real_idx].id.clone();
-                    if beads::close_task(&id).is_ok() {
-                        self.fetch_tasks();
-                        // Clamp cursor after list change
-                        let new_len = self.filtered_task_indices().len();
-                        if self.tasks_cursor >= new_len && new_len > 0 {
-                            self.tasks_cursor = new_len - 1;
+                    match beads::close_task(&id) {
+                        Ok(()) => {
+                            self.push_toast("Success", &format!("Closed task {}", id), ui::overlay::ToastKind::Success);
+                            self.fetch_tasks();
+                            let new_len = self.filtered_task_indices().len();
+                            if self.tasks_cursor >= new_len && new_len > 0 {
+                                self.tasks_cursor = new_len - 1;
+                            }
+                        }
+                        Err(e) => {
+                            self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
                         }
                     }
                 }
@@ -1215,11 +1229,18 @@ impl App {
                 let indices = self.filtered_task_indices();
                 if let Some(&real_idx) = indices.get(self.tasks_cursor) {
                     let id = self.tasks_list[real_idx].id.clone();
-                    let _ = beads::delete_task(&id);
-                    self.fetch_tasks();
-                    let new_len = self.filtered_task_indices().len();
-                    if self.tasks_cursor >= new_len && new_len > 0 {
-                        self.tasks_cursor = new_len - 1;
+                    match beads::delete_task(&id) {
+                        Ok(()) => {
+                            self.push_toast("Success", &format!("Deleted task {}", id), ui::overlay::ToastKind::Success);
+                            self.fetch_tasks();
+                            let new_len = self.filtered_task_indices().len();
+                            if self.tasks_cursor >= new_len && new_len > 0 {
+                                self.tasks_cursor = new_len - 1;
+                            }
+                        }
+                        Err(e) => {
+                            self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
+                        }
                     }
                 }
             }
@@ -2429,9 +2450,18 @@ impl App {
             return;
         }
         let container = self.worktrees[self.cursor].container.clone();
-        let svc_name = self.services[self.service_cursor].name.clone();
+        let svc = &self.services[self.service_cursor];
+        let svc_name = svc.name.clone();
+        let display = svc.display_name.clone();
         if !container.is_empty() {
-            let _ = crate::cmd::run_cmd("docker", &["exec", &container, "pm2", "restart", &svc_name]);
+            match crate::cmd::run_cmd("docker", &["exec", &container, "pm2", "restart", &svc_name]) {
+                Ok(_) => {
+                    self.push_toast("Success", &format!("Restarted {}", display), ui::overlay::ToastKind::Success);
+                }
+                Err(e) => {
+                    self.push_toast("Error", &format!("Failed to restart {}: {}", display, e), ui::overlay::ToastKind::Error);
+                }
+            }
         }
     }
 
