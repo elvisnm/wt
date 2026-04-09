@@ -448,9 +448,9 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
 
     // Session: two lines — name on first, icon+status on second (aligned with name)
     let (indent, prefix, status_indent) = if entry.is_group_child {
-        ("  ", "└ ", "    ")  // 2 + 2 = 4 chars before name, 4 chars before status
+        (" ", "└ ", "   ")  // 1 + 2 = 3 chars before name, 3 chars before status
     } else {
-        (" ", "", " ")       // 1 char before name, 1 char before status
+        (" ", "", " ")
     };
 
     if is_cursor && panel_focused {
