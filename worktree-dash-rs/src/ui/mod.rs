@@ -474,9 +474,22 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     let pad1 = width.saturating_sub(prefix_chars + name_chars);
     let pad2 = width.saturating_sub(status_prefix_chars + status_chars);
 
-    if is_cursor && panel_focused {
-        let sel = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold();
-        let sel_dim = Style::default().fg(Color::White).bg(SELECTED_BG_COLOR);
+    // Highlight: full selection when cursor+focused, subtle when active session in terminal mode
+    let highlight = if is_cursor && panel_focused {
+        Some((
+            Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
+            Style::default().fg(Color::White).bg(SELECTED_BG_COLOR),
+        ))
+    } else if entry.is_focused {
+        Some((
+            Style::default().fg(Color::White).bg(SELECTED_BG_COLOR),
+            Style::default().fg(DIM_TEXT_COLOR).bg(SELECTED_BG_COLOR),
+        ))
+    } else {
+        None
+    };
+
+    if let Some((sel, sel_dim)) = highlight {
         return vec![
             Line::from(vec![
                 Span::styled(indent, sel),
