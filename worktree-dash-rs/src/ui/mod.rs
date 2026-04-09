@@ -1072,6 +1072,16 @@ fn render_terminal_area(frame: &mut Frame, area: Rect, app: &App, overlay_active
             let title_area = Rect::new(area.x, area.y, area.width, 1);
             frame.render_widget(Paragraph::new(Line::from(Span::styled(title_text, title_style))), title_area);
 
+            // Focus indicator: ◥ on top-right corner
+            if focused && area.width > 0 {
+                let indicator_x = area.x + area.width - 1;
+                let buf = frame.buffer_mut();
+                if indicator_x < buf.area().width && area.y < buf.area().height {
+                    buf[(indicator_x, area.y)].set_symbol("◥");
+                    buf[(indicator_x, area.y)].set_style(Style::default().fg(FOCUS_BORDER_COLOR));
+                }
+            }
+
             // Terminal content below title with 1-char padding on all sides
             let term_area = pad_rect(Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1)));
             let term_widget = term_view::TermView::new(session.term());
@@ -1117,6 +1127,16 @@ fn render_split_node(
                     Paragraph::new(Line::from(Span::styled(title_text, Style::default().fg(title_color)))),
                     title_area,
                 );
+
+                // Focus indicator: ◥ on top-right corner
+                if is_focused && terminal_focused && area.width > 0 {
+                    let indicator_x = area.x + area.width - 1;
+                    let buf = frame.buffer_mut();
+                    if indicator_x < buf.area().width && area.y < buf.area().height {
+                        buf[(indicator_x, area.y)].set_symbol("◥");
+                        buf[(indicator_x, area.y)].set_style(Style::default().fg(FOCUS_BORDER_COLOR));
+                    }
+                }
 
                 let term_area = pad_rect(Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1)));
                 let term_widget = term_view::TermView::new(session.term());
