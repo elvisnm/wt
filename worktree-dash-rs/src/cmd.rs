@@ -2,13 +2,7 @@ use std::process::Command;
 
 /// Execute a command and return trimmed stdout.
 pub fn run_cmd(name: &str, args: &[&str]) -> Result<String, std::io::Error> {
-    let output = Command::new(name).args(args).output().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            std::io::Error::new(e.kind(), friendly_cmd_error(name, &e))
-        } else {
-            e
-        }
-    })?;
+    let output = Command::new(name).args(args).output()?;
     if !output.status.success() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -29,13 +23,7 @@ pub fn run_cmd_env(extra_env: &[(&str, &str)], name: &str, args: &[&str]) -> Res
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
-    let output = cmd.output().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            std::io::Error::new(e.kind(), friendly_cmd_error(name, &e))
-        } else {
-            e
-        }
-    })?;
+    let output = cmd.output()?;
     if !output.status.success() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
