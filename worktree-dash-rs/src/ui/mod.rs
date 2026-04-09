@@ -158,6 +158,13 @@ pub fn render(frame: &mut Frame, app: &App) {
 fn render_left_column(frame: &mut Frame, area: Rect, app: &App, overlay_active: bool) {
     let layout = &app.layout;
 
+    // Draw vertical separator on the right edge
+    let has_focus = !overlay_active && matches!(app.focus, Panel::Worktrees | Panel::Services | Panel::Details | Panel::Terminal);
+    render_sidebar_separator(frame, area, has_focus && !app.terminal_focused);
+
+    // Content area: full width minus 1 for separator
+    let content_area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+
     // Build constraints dynamically based on visible panels
     let mut constraints: Vec<Constraint> = Vec::new();
     let mut panel_ids: Vec<&str> = Vec::new();
@@ -205,7 +212,7 @@ fn render_left_column(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
     let chunks = ratatui::layout::Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
-        .split(area);
+        .split(content_area);
 
     for (i, &id) in panel_ids.iter().enumerate() {
         let chunk = chunks[i];
@@ -236,21 +243,24 @@ fn render_notify_panel(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: bool) {
     let focused = app.focus == Panel::Terminal && !app.terminal_focused && !overlay_active;
-    let title = panel_title(" a - Active Tabs ", focused);
-    let block = panel_block(focused).title(title);
+    render_section_header(frame, area, "tabs", focused);
 
     if app.tabs.is_empty() {
-        let content = Paragraph::new(Line::from(Span::styled(
-            "No sessions open",
-            Style::default().fg(DIM_TEXT_COLOR),
-        )))
-        .block(block);
-        frame.render_widget(content, area);
+        if area.height > 1 {
+            let content_area = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    " No sessions open",
+                    Style::default().fg(DIM_TEXT_COLOR),
+                ))),
+                content_area,
+            );
+        }
         return;
     }
 
-    let inner_w = area.width.saturating_sub(4) as usize;
-    let inner_h = area.height.saturating_sub(2) as usize;
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let inner_h = area.height.saturating_sub(1) as usize;
 
     // Build flat list of tab entries with sequential numbering (1-9)
     // Group headers have no number — only sessions get numbers
@@ -358,8 +368,9 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
         }
     }
 
-    let content = Paragraph::new(lines).block(block);
-    frame.render_widget(content, area);
+    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+    let content = Paragraph::new(lines);
+    frame.render_widget(content, content_area);
 }
 
 struct TabEntry {
@@ -436,21 +447,19 @@ fn truncate_pad(s: &str, width: usize) -> String {
 
 fn render_worktrees_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: bool) {
     let focused = app.focus == Panel::Worktrees && !overlay_active;
-    let title = panel_title(" w - Worktrees ", focused);
-    let block = panel_block(focused).title(title);
+    render_section_header(frame, area, "worktrees", focused);
 
+    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
     if app.worktrees.is_empty() {
-        let content = Paragraph::new(Line::from(Span::styled(
-            "No worktrees discovered",
-            Style::default().fg(DIM_TEXT_COLOR),
-        )))
-        .block(block);
-        frame.render_widget(content, area);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(" No worktrees discovered", Style::default().fg(DIM_TEXT_COLOR)))),
+            content_area,
+        );
         return;
     }
 
-    let inner_w = area.width.saturating_sub(4) as usize;
-    let inner_h = area.height.saturating_sub(2) as usize;
+    let inner_w = content_area.width.saturating_sub(1) as usize;
+    let inner_h = content_area.height as usize;
     let total = app.worktrees.len();
     let (start, end) = visible_window(total, app.cursor, inner_h);
 
@@ -465,8 +474,7 @@ fn render_worktrees_panel(frame: &mut Frame, area: Rect, app: &App, overlay_acti
         })
         .collect();
 
-    let content = Paragraph::new(lines).block(block);
-    frame.render_widget(content, area);
+    frame.render_widget(Paragraph::new(lines), content_area);
 }
 
 fn format_worktree_line(wt: &crate::worktree::Worktree, width: usize, selected: bool, panel_focused: bool, is_build_project: bool) -> Line<'static> {
@@ -573,21 +581,19 @@ fn format_worktree_line(wt: &crate::worktree::Worktree, width: usize, selected: 
 
 fn render_services_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: bool) {
     let focused = app.focus == Panel::Services && !overlay_active;
-    let title = panel_title(" s - Services ", focused);
-    let block = panel_block(focused).title(title);
+    render_section_header(frame, area, "services", focused);
 
+    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
     if app.services.is_empty() {
-        let content = Paragraph::new(Line::from(Span::styled(
-            "No services",
-            Style::default().fg(DIM_TEXT_COLOR),
-        )))
-        .block(block);
-        frame.render_widget(content, area);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(" No services", Style::default().fg(DIM_TEXT_COLOR)))),
+            content_area,
+        );
         return;
     }
 
-    let inner_w = area.width.saturating_sub(4) as usize;
-    let inner_h = area.height.saturating_sub(2) as usize;
+    let inner_w = content_area.width.saturating_sub(1) as usize;
+    let inner_h = content_area.height as usize;
     let total = app.services.len();
     let (start, end) = visible_window(total, app.service_cursor, inner_h);
 
@@ -601,8 +607,7 @@ fn render_services_panel(frame: &mut Frame, area: Rect, app: &App, overlay_activ
         })
         .collect();
 
-    let content = Paragraph::new(lines).block(block);
-    frame.render_widget(content, area);
+    frame.render_widget(Paragraph::new(lines), content_area);
 }
 
 fn format_service_line(svc: &crate::worktree::Service, width: usize, selected: bool, panel_focused: bool) -> Line<'static> {
@@ -649,20 +654,19 @@ fn format_service_line(svc: &crate::worktree::Service, width: usize, selected: b
 
 fn render_details_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: bool) {
     let focused = app.focus == Panel::Details && !overlay_active;
-    let title = panel_title(" D - Details ", focused);
-    let block = panel_block(focused).title(title);
+    render_section_header(frame, area, "details", focused);
 
+    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
     let text = if app.cursor < app.worktrees.len() {
         build_detail_lines(&app.worktrees[app.cursor], app.spin_frame, app.cfg.as_ref())
     } else {
         vec![Line::from(Span::styled(
-            "No worktree selected",
+            " No worktree selected",
             Style::default().fg(DIM_TEXT_COLOR),
         ))]
     };
 
-    let content = Paragraph::new(text).block(block);
-    frame.render_widget(content, area);
+    frame.render_widget(Paragraph::new(text), content_area);
 }
 
 fn build_detail_lines(wt: &crate::worktree::Worktree, spin_frame: usize, cfg: Option<&crate::config::Config>) -> Vec<Line<'static>> {
@@ -820,40 +824,42 @@ fn detail_line(label: &str, value: &str, label_style: Style) -> Line<'static> {
 }
 
 fn render_usage_panel(frame: &mut Frame, area: Rect, app: &App) {
-    let block = panel_block(false).title(panel_title(" Usage ", false));
+    render_section_header(frame, area, "usage", false);
 
+    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
     let text = if let Some(ref err) = app.usage_err {
         vec![Line::from(Span::styled(err.clone(), Style::default().fg(STOPPED_COLOR)))]
     } else if let Some(ref data) = app.usage_data {
-        let inner_w = area.width.saturating_sub(4) as usize;
+        let inner_w = content_area.width.saturating_sub(1) as usize;
         vec![
             render_usage_line("5h", data.five_hour.utilization, data.five_hour.resets_at.as_deref(), inner_w),
             render_usage_line("7d", data.seven_day.utilization, data.seven_day.resets_at.as_deref(), inner_w),
         ]
     } else {
-        vec![Line::from(Span::styled("Not loaded", Style::default().fg(DIM_TEXT_COLOR)))]
+        vec![Line::from(Span::styled(" Not loaded", Style::default().fg(DIM_TEXT_COLOR)))]
     };
 
-    let content = Paragraph::new(text).block(block);
-    frame.render_widget(content, area);
+    frame.render_widget(Paragraph::new(text), content_area);
 }
 
 fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: bool) {
     let focused = app.focus == crate::app::Panel::Tasks && !overlay_active;
+    let is_detail = app.tasks_detail.is_some();
+    let header = if is_detail { "task detail" } else { "tasks" };
+    render_section_header(frame, area, header, focused);
+
+    let content_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
 
     if let Some(ref err) = app.tasks_err {
-        let block = panel_block(focused).title(panel_title(" Tasks ", focused));
-        let content = Paragraph::new(Line::from(Span::styled(
+        frame.render_widget(Paragraph::new(Line::from(Span::styled(
             err.clone(), Style::default().fg(STOPPED_COLOR),
-        ))).block(block);
-        frame.render_widget(content, area);
+        ))), content_area);
         return;
     }
 
     // Detail view
     if let Some(ref task) = app.tasks_detail {
-        let block = panel_block(focused).title(panel_title(" Task Detail — Esc to go back ", focused));
-        let inner_h = area.height.saturating_sub(2) as usize;
+        let inner_h = content_area.height as usize;
 
         let p = match &task.priority {
             serde_json::Value::Number(n) => n.as_u64().unwrap_or(9),
@@ -896,24 +902,20 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         let end = (scroll + inner_h).min(total);
         let visible = lines[scroll..end].to_vec();
 
-        let content = Paragraph::new(visible).block(block);
-        frame.render_widget(content, area);
+        frame.render_widget(Paragraph::new(visible), content_area);
         return;
     }
 
     // List view
-    let block = panel_block(focused).title(panel_title(" Tasks ", focused));
-
     if app.tasks_list.is_empty() {
-        let content = Paragraph::new(Line::from(Span::styled(
-            "No open tasks", Style::default().fg(DIM_TEXT_COLOR),
-        ))).block(block);
-        frame.render_widget(content, area);
+        frame.render_widget(Paragraph::new(Line::from(Span::styled(
+            " No open tasks", Style::default().fg(DIM_TEXT_COLOR),
+        ))), content_area);
         return;
     }
 
-    let inner_h = area.height.saturating_sub(2) as usize;
-    let inner_w = area.width.saturating_sub(4) as usize;
+    let inner_h = content_area.height as usize;
+    let inner_w = content_area.width.saturating_sub(1) as usize;
     let total = app.tasks_list.len();
     let (start, end) = visible_window(total, app.tasks_cursor, inner_h);
 
@@ -959,8 +961,7 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         })
         .collect();
 
-    let content = Paragraph::new(lines).block(block);
-    frame.render_widget(content, area);
+    frame.render_widget(Paragraph::new(lines), content_area);
 }
 
 fn render_usage_line<'a>(label: &str, pct: f64, resets_at: Option<&str>, width: usize) -> Line<'a> {
@@ -1257,16 +1258,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(bar, area);
 }
 
-fn panel_block(focused: bool) -> Block<'static> {
-    let border_color = if focused {
-        FOCUS_BORDER_COLOR
-    } else {
-        BORDER_COLOR
-    };
+fn panel_block(_focused: bool) -> Block<'static> {
     Block::default()
-        .borders(Borders::ALL)
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
 }
 
 fn panel_title(title: &str, focused: bool) -> Span<'static> {
@@ -1276,6 +1269,40 @@ fn panel_title(title: &str, focused: bool) -> Span<'static> {
         Style::default().fg(DIM_TEXT_COLOR)
     };
     Span::styled(title.to_string(), style)
+}
+
+/// Render a section header line (replaces bordered panel titles).
+fn render_section_header(frame: &mut Frame, area: Rect, title: &str, focused: bool) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let style = if focused {
+        Style::default().fg(FOCUS_BORDER_COLOR).bold()
+    } else {
+        Style::default().fg(HEADER_COLOR)
+    };
+    let header_area = Rect::new(area.x, area.y, area.width, 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(format!(" {}", title), style))),
+        header_area,
+    );
+}
+
+/// Draw the vertical separator between sidebar and terminal area.
+fn render_sidebar_separator(frame: &mut Frame, area: Rect, focused: bool) {
+    let sep_x = area.x + area.width.saturating_sub(1);
+    let style = if focused {
+        Style::default().fg(FOCUS_BORDER_COLOR)
+    } else {
+        Style::default().fg(BORDER_COLOR)
+    };
+    let buf = frame.buffer_mut();
+    for y in area.y..area.y + area.height {
+        if sep_x < buf.area().width {
+            buf[(sep_x, y)].set_symbol("│");
+            buf[(sep_x, y)].set_style(style);
+        }
+    }
 }
 
 /// Returns (start, end) indices for a scrollable window.
