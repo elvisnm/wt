@@ -269,10 +269,12 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                 agent_state: crate::detect::AgentState::Unknown,
                 is_group_head: true,
                 is_group_child: false,
+                is_last_child: false,
             });
 
             // Each child gets a number
-            for sid in &session_ids {
+            let child_count = session_ids.len();
+            for (ci, sid) in session_ids.iter().enumerate() {
                 let child_label = app.pty_mgr.get(*sid)
                     .map(|s| s.label.clone())
                     .unwrap_or_else(|| format!("session-{}", sid));
@@ -289,6 +291,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                     agent_state: app.agent_states.get(sid).copied().unwrap_or(crate::detect::AgentState::Unknown),
                     is_group_head: false,
                     is_group_child: true,
+                    is_last_child: ci + 1 == child_count,
                 });
                 seq += 1;
             }
@@ -306,6 +309,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                 agent_state: app.agent_states.get(&tab.session_id).copied().unwrap_or(crate::detect::AgentState::Unknown),
                 is_group_head: false,
                 is_group_child: false,
+                is_last_child: false,
             });
             seq += 1;
         }
@@ -381,6 +385,7 @@ struct TabEntry {
     agent_state: crate::detect::AgentState,
     is_group_head: bool,
     is_group_child: bool,
+    is_last_child: bool,
 }
 
 fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focused: bool, spin_frame: usize) -> Vec<Line<'static>> {
@@ -451,7 +456,11 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
     // Session: two lines — name on first, icon+status on second (aligned with name)
     // Two lines: name on first, status on second
     let (indent, prefix, status_prefix) = if entry.is_group_child {
-        (" ", "└ ", " │ ")  // 1+2=3 before name, 1+2=3 before status
+        if entry.is_last_child {
+            (" ", "└ ", "   ")  // last child: no │ on status line
+        } else {
+            (" ", "└ ", " │ ")
+        }
     } else {
         (" ", "", " ")
     };
