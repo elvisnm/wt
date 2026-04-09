@@ -43,11 +43,13 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
         vec![box_line(col_w, b, vec![s("  ", d), s("Ctrl+B", k), s("      toggle sidebar", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("?", k), s("           keybindings help", d)])],
         vec![box_bottom(col_w, b)],
+        vec![vec![]],  // spacer
         vec![box_top("Active Tabs", col_w, b, t)],
         vec![box_line(col_w, b, vec![s("  ", d), s("Enter", k), s("       focus terminal", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("h", k), s(" / ", d), s("l", k), s("       prev / next tab", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("x", k), s("           close tab", d)])],
         vec![box_bottom(col_w, b)],
+        vec![vec![]],  // spacer
         vec![box_top("Worktrees", col_w, b, t)],
         vec![box_line(col_w, b, vec![s("  ", d), s("Enter", k), s("       action menu", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("b", k), s("           bash shell", d)])],
@@ -61,21 +63,23 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
         vec![box_line(col_w, b, vec![s("  ", d), s("u", k), s("           start", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("t", k), s("           stop", d)])],
         vec![box_bottom(col_w, b)],
+    ].concat();
+
+    // Right column: Services, Tasks, Operations, Terminal, Split Panels
+    let right: Vec<Vec<Span>> = [
         vec![box_top("Services", col_w, b, t)],
         vec![box_line(col_w, b, vec![s("  ", d), s("Enter", k), s("       preview logs", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("l", k), s("           pin logs (tab)", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("r", k), s("           restart service", d)])],
         vec![box_bottom(col_w, b)],
-    ].concat();
-
-    // Right column: Tasks, Operations, Terminal, Split Panels
-    let right: Vec<Vec<Span>> = [
+        vec![vec![]],  // empty line
         vec![box_top("Tasks (Shift+T)", col_w, b, t)],
         vec![box_line(col_w, b, vec![s("  ", d), s("j", k), s(" / ", d), s("k", k), s("       navigate tasks", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("Enter", k), s("       task detail", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("c", k), s("           close task", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("d", k), s("           delete task", d)])],
         vec![box_bottom(col_w, b)],
+        vec![vec![]],  // spacer
         vec![box_top("Operations", col_w, b, t)],
         vec![box_line(col_w, b, vec![s("  ", d), s("Shift+D", k), s("     details toggle", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("Shift+K", k), s("     skip-worktree", d)])],
@@ -85,11 +89,13 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
         vec![box_line(col_w, b, vec![s("  ", d), s("Shift+S", k), s("     settings", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("Shift+U", k), s("     Claude usage", d)])],
         vec![box_bottom(col_w, b)],
+        vec![vec![]],  // spacer
         vec![box_top("Terminal  (Ctrl+])", col_w, b, t)],
         vec![box_line(col_w, b, vec![s("  ", d), s("Ctrl+]", k), s("      return to dashboard", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("Ctrl+x", k), s("      close tab & return", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("Ctrl+F", k), s("      fullscreen toggle", d)])],
         vec![box_bottom(col_w, b)],
+        vec![vec![]],  // spacer
         vec![box_top("Split Panels", col_w, b, t)],
         vec![box_line(col_w, b, vec![s("  ", d), s("Shift+\\", k), s(" ", d), s("(|)", b), s("  split side by side", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("Shift+-", k), s(" ", d), s("(_)", b), s("  split below", d)])],

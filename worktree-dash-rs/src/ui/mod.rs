@@ -865,7 +865,7 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
     let header = if is_detail { "task detail" } else { "tasks" };
     render_section_header(frame, area, header, focused);
 
-    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
+    let content_area = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(3));
 
     if let Some(ref err) = app.tasks_err {
         frame.render_widget(Paragraph::new(Line::from(Span::styled(
