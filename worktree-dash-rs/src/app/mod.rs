@@ -135,6 +135,7 @@ pub struct App {
     pub tasks_cursor: usize,
     pub tasks_detail: Option<beads::Task>,
     pub tasks_detail_scroll: usize,
+    pub tasks_detail_max_scroll: std::cell::Cell<usize>,
 
     // Fullscreen mode — hides left column, shows only focused session
     pub fullscreen: bool,
@@ -215,6 +216,7 @@ impl App {
             tasks_cursor: 0,
             tasks_detail: None,
             tasks_detail_scroll: 0,
+            tasks_detail_max_scroll: std::cell::Cell::new(0),
             notify_state: NotifyState::Idle,
             pending_split_dir: None,
             split_target_session_id: None,
@@ -2500,34 +2502,8 @@ impl App {
             }
             Panel::Tasks => {
                 if self.tasks_detail.is_some() {
-                    if delta > 0 {
-                        self.tasks_detail_scroll = self.tasks_detail_scroll.saturating_add(delta as usize);
-                    } else {
-                        self.tasks_detail_scroll = self.tasks_detail_scroll.saturating_sub((-delta) as usize);
-                    }
-                    // Clamp: count wrapped lines to get accurate max
-                    if let Some(ref task) = self.tasks_detail {
-                        let panel_w = self.layout.width.saturating_sub(2) as usize; // padded width
-                        let wrap = |text: &str| -> usize {
-                            if text.is_empty() { return 1; }
-                            let mut count = 0;
-                            for line in text.lines() {
-                                let chars = line.chars().count();
-                                count += if panel_w > 0 && chars > panel_w {
-                                    (chars + panel_w - 1) / panel_w
-                                } else {
-                                    1
-                                };
-                            }
-                            count
-                        };
-                        let total_lines = wrap(&task.title) + 2 // title + priority + status
-                            + if task.description.is_empty() { 0 } else { 1 + wrap(&task.description) }
-                            + if task.labels.is_empty() { 0 } else { 2 };
-                        let visible = self.layout.tasks_height.saturating_sub(3) as usize;
-                        let max_scroll = total_lines.saturating_sub(visible);
-                        self.tasks_detail_scroll = self.tasks_detail_scroll.min(max_scroll);
-                    }
+                    let new = self.tasks_detail_scroll as i32 + delta as i32;
+                    self.tasks_detail_scroll = (new.max(0) as usize).min(self.tasks_detail_max_scroll.get());
                 } else if !self.tasks_list.is_empty() {
                     let new = self.tasks_cursor as i32 + delta as i32;
                     self.tasks_cursor = new.clamp(0, self.tasks_list.len() as i32 - 1) as usize;

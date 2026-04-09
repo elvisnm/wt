@@ -1021,7 +1021,9 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         }
 
         let total = lines.len();
-        let scroll = app.tasks_detail_scroll.min(total.saturating_sub(inner_h));
+        let max_scroll = total.saturating_sub(inner_h);
+        app.tasks_detail_max_scroll.set(max_scroll);
+        let scroll = app.tasks_detail_scroll.min(max_scroll);
         let end = (scroll + inner_h).min(total);
         let visible = lines[scroll..end].to_vec();
 
