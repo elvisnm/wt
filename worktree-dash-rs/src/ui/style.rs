@@ -81,3 +81,4 @@ pub const STOPPED_COLOR: Color = Color::Rgb(251, 73, 52);      // red
 pub const STARTING_COLOR: Color = Color::Rgb(250, 189, 47);    // yellow
 pub const HEADER_COLOR: Color = Color::Rgb(146, 131, 116);     // overlay0
 pub const HINT_COLOR: Color = Color::Rgb(215, 153, 33);        // accent
+pub const HEADER_BG: Color = Color::Indexed(236);               // dark bg for headers/bars

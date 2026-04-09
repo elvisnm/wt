@@ -957,23 +957,8 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         let mut lines: Vec<Line> = Vec::new();
 
         // Title — wrap if longer than width
-        let title = &task.title;
-        let mut remaining = title.as_str();
-        while !remaining.is_empty() {
-            let (chunk, rest) = if remaining.chars().count() > inner_w {
-                let break_at = remaining.char_indices()
-                    .take(inner_w)
-                    .filter(|(_, c)| *c == ' ')
-                    .map(|(i, _)| i)
-                    .last()
-                    .unwrap_or(inner_w);
-                let (a, b) = remaining.split_at(break_at);
-                (a, b.trim_start())
-            } else {
-                (remaining, "")
-            };
-            lines.push(Line::from(Span::styled(chunk.to_string(), Style::default().bold())));
-            remaining = rest;
+        for chunk in wrap_text(&task.title, inner_w) {
+            lines.push(Line::from(Span::styled(chunk, Style::default().bold())));
         }
 
         lines.push(Line::from(vec![
@@ -987,29 +972,8 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         )));
         if !task.description.is_empty() {
             lines.push(Line::from(""));
-            for desc_line in task.description.lines() {
-                // Wrap description lines
-                let mut rem = desc_line;
-                if rem.is_empty() {
-                    lines.push(Line::from(""));
-                    continue;
-                }
-                while !rem.is_empty() {
-                    let (chunk, rest) = if rem.chars().count() > inner_w {
-                        let break_at = rem.char_indices()
-                            .take(inner_w)
-                            .filter(|(_, c)| *c == ' ')
-                            .map(|(i, _)| i)
-                            .last()
-                            .unwrap_or(inner_w);
-                        let (a, b) = rem.split_at(break_at);
-                        (a, b.trim_start())
-                    } else {
-                        (rem, "")
-                    };
-                    lines.push(Line::from(Span::styled(chunk.to_string(), Style::default().fg(DIM_TEXT_COLOR))));
-                    rem = rest;
-                }
+            for chunk in wrap_text(&task.description, inner_w) {
+                lines.push(Line::from(Span::styled(chunk, Style::default().fg(DIM_TEXT_COLOR))));
             }
         }
         if !task.labels.is_empty() {
@@ -1413,10 +1377,6 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(bar, area);
 }
 
-fn panel_block(_focused: bool) -> Block<'static> {
-    Block::default()
-}
-
 fn panel_title(title: &str, focused: bool) -> Span<'static> {
     let style = if focused {
         Style::default().fg(FOCUS_BORDER_COLOR).bold()
@@ -1427,9 +1387,6 @@ fn panel_title(title: &str, focused: bool) -> Span<'static> {
 }
 
 /// Render a section header with trailing line: ─ title ─────────
-/// Takes 2 rows: header line + blank spacer.
-const HEADER_BG: Color = Color::Indexed(236);
-
 fn render_section_header(frame: &mut Frame, area: Rect, title: &str, focused: bool) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -1495,6 +1452,36 @@ pub fn visible_window(total: usize, cursor: usize, max_lines: usize) -> (usize, 
         start = end - max_lines;
     }
     (start, end)
+}
+
+/// Word-wrap text at space boundaries to fit within a given width.
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let mut result = Vec::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            result.push(String::new());
+            continue;
+        }
+        let mut remaining = line;
+        while !remaining.is_empty() {
+            if remaining.chars().count() <= width {
+                result.push(remaining.to_string());
+                break;
+            }
+            let break_at = remaining.char_indices()
+                .take(width)
+                .filter(|(_, c)| *c == ' ')
+                .map(|(i, _)| i)
+                .last()
+                .unwrap_or_else(|| {
+                    remaining.char_indices().nth(width).map(|(i, _)| i).unwrap_or(remaining.len())
+                });
+            let (chunk, rest) = remaining.split_at(break_at);
+            result.push(chunk.to_string());
+            remaining = rest.trim_start();
+        }
+    }
+    result
 }
 
 /// Draw a vertical scrollbar on the right edge of an area.
