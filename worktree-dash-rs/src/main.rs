@@ -136,7 +136,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, debug: bool) 
             // Periodic checks (every draw = ~30fps)
             tick += 1;
             app.spin_frame = (tick / 5) as usize;
-            app.check_notify_dismiss(tick);
+            app.dismiss_expired_toasts(tick);
             app.check_pending_remove();
             app.check_pending_create();
             app.check_pending_build();

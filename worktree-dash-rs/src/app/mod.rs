@@ -13,7 +13,7 @@ use crate::docker;
 use crate::pm2;
 use crate::pty::PtyManager;
 use crate::settings::Settings;
-use crate::ui::{self, Layout, NotifyKind, NotifyState, PickerAction, ResizeOpts};
+use crate::ui::{self, Layout, NotifyState, PickerAction, ResizeOpts};
 use crate::ui::overlay;
 use crate::worktree::{self, Service, Worktree, WorktreeType};
 
@@ -94,7 +94,6 @@ pub struct App {
     pub heihei_active: bool,
 
     // Notification auto-dismiss timer (tick count when notification should close)
-    notify_dismiss_at: Option<u64>,
 
     // Spinner frame counter (incremented every tick)
     pub spin_frame: usize,
@@ -110,6 +109,9 @@ pub struct App {
 
     // Rename input state
     rename_session_id: Option<usize>,
+
+    // Toast notifications (floating top-right)
+    pub toasts: Vec<ui::overlay::Toast>,
 
     // Notification / overlay state
     pub notify_state: NotifyState,
@@ -155,7 +157,6 @@ pub struct App {
     // Debug mode
     pub debug: bool,
     pub should_quit: bool,
-    pub confirm_quit: bool,
 
     // Init wizard (shown when no wt.config.js found)
     pub init_wizard: Option<InitWizard>,
@@ -204,7 +205,6 @@ impl App {
             tab_cursor: 0,
             focused_session_id: None,
             heihei_active: false,
-            notify_dismiss_at: None,
             spin_frame: 0,
             pending_remove: None,
             pending_create_tab: false,
@@ -223,6 +223,7 @@ impl App {
             tasks_search: None,
             tasks_search_active: false,
             task_editor: None,
+            toasts: Vec::new(),
             notify_state: NotifyState::Idle,
             pending_split_dir: None,
             split_target_session_id: None,
@@ -235,7 +236,6 @@ impl App {
             preview_svc_name: String::new(),
             debug: false,
             should_quit: false,
-            confirm_quit: false,
             init_wizard: None,
             flow_scripts_dir,
             repo_root,
@@ -410,12 +410,7 @@ impl App {
         let config_path = std::path::Path::new(&wizard.project_root).join("wt.config.js");
 
         if let Err(e) = std::fs::write(&config_path, &content) {
-            self.notify_state = NotifyState::Message {
-                title: "Error".to_string(),
-                message: format!("Failed to write wt.config.js: {}", e),
-                kind: NotifyKind::Error,
-            };
-            self.recalc_layout();
+            self.push_toast("Error", &format!("Failed to write wt.config.js: {}", e), ui::overlay::ToastKind::Error);
             return;
         }
 
@@ -431,12 +426,7 @@ impl App {
         self.run_discovery();
         self.refresh_status();
 
-        self.notify_state = NotifyState::Message {
-            title: "Success".to_string(),
-            message: "Created wt.config.js".to_string(),
-            kind: NotifyKind::Success,
-        };
-        self.recalc_layout();
+        self.push_toast("Success", "Created wt.config.js", ui::overlay::ToastKind::Success);
     }
 
     /// Refresh running status for all worktrees.
@@ -754,36 +744,33 @@ impl App {
             return;
         }
 
-        // ── Global: Ctrl+Q to quit (works everywhere) ──────
-        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.confirm_quit = true;
-            self.terminal_focused = false; // defocus terminal so confirm catches keys
-            self.recalc_layout();
-            return;
-        }
-
-        // ── Confirm quit — must be before terminal focused ───────
-        if self.confirm_quit {
-            match key.code {
-                KeyCode::Enter | KeyCode::Char('y') => {
-                    self.should_quit = true;
+        // ── Toasts: Ctrl+A confirms, Esc dismisses ──
+        if !self.toasts.is_empty() {
+            if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if let Some(i) = self.find_priority_toast(true) {
+                    let toast = self.toasts.remove(i);
+                    self.handle_toast_action(&toast);
+                    return;
                 }
-                KeyCode::Esc | KeyCode::Char('n') => {
-                    self.confirm_quit = false;
-                    self.recalc_layout();
-                }
-                _ => {}
             }
-            return;
-        }
-
-        // ── Notification bar — Esc to dismiss (before terminal captures it) ──
-        if let NotifyState::Message { .. } = &self.notify_state {
             if key.code == KeyCode::Esc {
-                self.notify_state = NotifyState::Idle;
-                self.recalc_layout();
+                let i = self.find_priority_toast(false).unwrap_or(0);
+                self.toasts.remove(i);
                 return;
             }
+        }
+
+        // ── Global: Ctrl+Q to quit (shows confirm toast) ──────
+        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Don't push duplicate confirm toasts
+            let already_confirming = self.toasts.iter().any(|t| {
+                matches!(&t.action, Some(ui::overlay::ToastAction::Confirm))
+            });
+            if !already_confirming {
+                self.push_confirm_toast("Exit", "Quit wt dashboard?");
+                self.terminal_focused = false;
+            }
+            return;
         }
 
         // ── Terminal focused: route input to active PTY ──────────────
@@ -886,7 +873,6 @@ impl App {
 
         // (notification Esc handled above, before terminal focused)
 
-        // (confirm_quit handled above, before terminal focused)
 
         // ── Help page (shown in right panel) ─────────────────────
         if self.help_open {
@@ -2073,20 +2059,10 @@ impl App {
                         }
                     }
                     self.refresh_services();
-                    self.notify_state = NotifyState::Message {
-                        title: "Start".to_string(),
-                        message: format!("Started {} (pid {})", alias, pid),
-                        kind: NotifyKind::Success,
-                    };
-                    self.recalc_layout();
+                    self.push_toast("Start", &format!("Started {} (pid {})", alias, pid), ui::overlay::ToastKind::Success);
                 }
                 Err(e) => {
-                    self.notify_state = NotifyState::Message {
-                        title: "Start".to_string(),
-                        message: format!("Failed to start {}: {}", alias, e),
-                        kind: NotifyKind::Error,
-                    };
-                    self.recalc_layout();
+                    self.push_toast("Start", &format!("Failed to start {}: {}", alias, e), ui::overlay::ToastKind::Error);
                 }
             }
             return;
@@ -2131,12 +2107,7 @@ impl App {
                 }
             }
             self.refresh_services();
-            self.notify_state = NotifyState::Message {
-                title: "Stop".to_string(),
-                message: format!("Stopped {}", alias),
-                kind: NotifyKind::Success,
-            };
-            self.recalc_layout();
+            self.push_toast("Stop", &format!("Stopped {}", alias), ui::overlay::ToastKind::Success);
             return;
         }
 
@@ -2170,12 +2141,7 @@ impl App {
                         }
                     }
                 }
-                self.notify_state = NotifyState::Message {
-                    title: "Stop".to_string(),
-                    message: format!("Stopped {}", alias),
-                    kind: NotifyKind::Success,
-                };
-                self.recalc_layout();
+                self.push_toast("Stop", &format!("Stopped {}", alias), ui::overlay::ToastKind::Success);
             }
         }
         self.refresh_status();
@@ -2300,12 +2266,7 @@ impl App {
             .collect();
 
         if actions.is_empty() {
-            self.notify_state = NotifyState::Message {
-                title: "Start Service".to_string(),
-                message: "All services are already running".to_string(),
-                kind: NotifyKind::Info,
-            };
-            self.recalc_layout();
+            self.push_toast("Start Service", "All services are already running", ui::overlay::ToastKind::Info);
             return;
         }
         self.open_picker("Start Service", actions);
@@ -2323,12 +2284,7 @@ impl App {
             .collect();
 
         if actions.is_empty() {
-            self.notify_state = NotifyState::Message {
-                title: "Stop Service".to_string(),
-                message: "No services are running".to_string(),
-                kind: NotifyKind::Info,
-            };
-            self.recalc_layout();
+            self.push_toast("Stop Service", "No services are running", ui::overlay::ToastKind::Info);
             return;
         }
         self.open_picker("Stop Service", actions);
@@ -2490,12 +2446,7 @@ impl App {
         let current_size = tab.split.as_ref().map(|s| s.leaf_count()).unwrap_or(1);
         let max_panes = self.settings.max_panes_per_group as usize;
         if current_size >= max_panes {
-            self.notify_state = NotifyState::Message {
-                title: "Info".to_string(),
-                message: format!("Max {} sessions per group reached", max_panes),
-                kind: NotifyKind::Info,
-            };
-            self.recalc_layout();
+            self.push_toast("Info", &format!("Max {} sessions per group reached", max_panes), ui::overlay::ToastKind::Info);
             return;
         }
 
@@ -2750,21 +2701,42 @@ impl App {
         pos
     }
 
-    /// Show a notification that auto-dismisses after ~5 seconds.
-    pub fn show_notification(&mut self, title: &str, message: &str, kind: NotifyKind, tick: u64) {
-        self.notify_state = NotifyState::Message {
+    /// Push a floating toast notification (top-right corner).
+    /// All notifications auto-dismiss after 5s and can be dismissed with Esc.
+    pub fn push_toast(&mut self, title: &str, message: &str, kind: ui::overlay::ToastKind) {
+        use ui::overlay::Toast;
+        // Limit to 3 toasts — dismiss oldest non-confirm toast when full
+        while self.toasts.iter().filter(|t| !matches!(&t.action, Some(ui::overlay::ToastAction::Confirm))).count() >= 3 {
+            if let Some(idx) = self.toasts.iter().position(|t| !matches!(&t.action, Some(ui::overlay::ToastAction::Confirm))) {
+                self.toasts.remove(idx);
+            } else {
+                break;
+            }
+        }
+        let duration = Some(std::time::Duration::from_secs(5));
+        self.toasts.push(Toast {
             title: title.to_string(),
             message: message.to_string(),
-            kind: kind.clone(),
-        };
-        // Success auto-dismisses after 3s, errors require user action
-        if kind == NotifyKind::Error {
-            self.notify_dismiss_at = None;
-        } else {
-            self.notify_dismiss_at = Some(tick + 150); // ~5s at 30fps
-        }
-        self.recalc_layout();
+            kind,
+            created_at: std::time::Instant::now(),
+            duration,
+            action: None,
+        });
     }
+
+    /// Push a confirmation toast that requires Ctrl+A to confirm or Esc to cancel.
+    pub fn push_confirm_toast(&mut self, title: &str, message: &str) {
+        use ui::overlay::{Toast, ToastAction, ToastKind};
+        self.toasts.push(Toast {
+            title: title.to_string(),
+            message: message.to_string(),
+            kind: ToastKind::Info,
+            created_at: std::time::Instant::now(),
+            duration: None,
+            action: Some(ToastAction::Confirm),
+        });
+    }
+
 
     /// Check if a pending remove operation completed.
     pub fn check_pending_remove(&mut self) {
@@ -2815,30 +2787,26 @@ impl App {
         }
         self.tab_cursor = self.flat_index_for_tab(self.active_tab);
         self.terminal_focused = false;
+        self.focus = Panel::Worktrees;
 
         self.run_discovery();
 
         let success = exit_code == Some(0);
 
         if success {
-            self.notify_state = NotifyState::Message {
-                title: "Success".to_string(),
-                message: format!("Removed worktree: {}", alias),
-                kind: NotifyKind::Success,
-            };
+            self.push_toast("Success", &format!("Removed worktree: {}", alias), ui::overlay::ToastKind::Success);
         } else {
             let err_msg = if output_text.is_empty() {
                 format!("Failed to remove: {}", alias)
             } else {
                 output_text
             };
-            self.notify_state = NotifyState::Message {
-                title: "Error".to_string(),
-                message: err_msg,
-                kind: NotifyKind::Error,
-            };
+            self.push_toast("Error", &err_msg, ui::overlay::ToastKind::Error);
         }
-        self.recalc_layout();
+        // Clamp cursor to valid range
+        if self.cursor >= self.worktrees.len() && !self.worktrees.is_empty() {
+            self.cursor = self.worktrees.len() - 1;
+        }
     }
 
     /// Check if a pending create operation completed.
@@ -2873,12 +2841,7 @@ impl App {
             self.pending_create_tab = false;
             self.activity = None;
             self.refresh_status();
-            self.notify_state = NotifyState::Message {
-                title: "Success".to_string(),
-                message: "Worktree created successfully".to_string(),
-                kind: NotifyKind::Success,
-            };
-            self.recalc_layout();
+            self.push_toast("Success", "Worktree created successfully", ui::overlay::ToastKind::Success);
             return;
         }
 
@@ -2909,30 +2872,22 @@ impl App {
         }
         self.tab_cursor = self.flat_index_for_tab(self.active_tab);
         self.terminal_focused = false;
+        self.focus = Panel::Worktrees;
 
         // Detect cancellation: exit 0 but no new worktree = user cancelled
         let cancelled = exit_code == Some(0) && !new_worktree_found;
         let failed = exit_code.map_or(true, |c| c != 0);
 
         if cancelled {
-            self.notify_state = NotifyState::Message {
-                title: "Info".to_string(),
-                message: "Worktree creation cancelled".to_string(),
-                kind: NotifyKind::Info,
-            };
+            self.push_toast("Info", "Worktree creation cancelled", ui::overlay::ToastKind::Info);
         } else if failed {
             let err_msg = if output_text.is_empty() {
                 "Worktree creation failed".to_string()
             } else {
                 output_text
             };
-            self.notify_state = NotifyState::Message {
-                title: "Error".to_string(),
-                message: err_msg,
-                kind: NotifyKind::Error,
-            };
+            self.push_toast("Error", &err_msg, ui::overlay::ToastKind::Error);
         }
-        self.recalc_layout();
     }
 
     pub fn check_pending_build(&mut self) {
@@ -2978,24 +2933,16 @@ impl App {
             self.active_tab = self.tabs.len() - 1;
         }
         self.tab_cursor = self.flat_index_for_tab(self.active_tab);
-        if self.tabs.is_empty() {
-            self.terminal_focused = false;
-        }
+        self.terminal_focused = false;
+        self.focus = Panel::Worktrees;
 
         if exit_code == Some(0) {
-            self.notify_state = NotifyState::Message {
-                title: "Build".to_string(),
-                message: if output_text.is_empty() { "Build succeeded".into() } else { output_text },
-                kind: NotifyKind::Success,
-            };
+            let msg = if output_text.is_empty() { "Build succeeded".into() } else { output_text };
+            self.push_toast("Build", &msg, ui::overlay::ToastKind::Success);
         } else {
-            self.notify_state = NotifyState::Message {
-                title: "Build".to_string(),
-                message: if output_text.is_empty() { "Build failed".into() } else { output_text },
-                kind: NotifyKind::Error,
-            };
+            let msg = if output_text.is_empty() { "Build failed".into() } else { output_text };
+            self.push_toast("Build", &msg, ui::overlay::ToastKind::Error);
         }
-        self.recalc_layout();
     }
 
     pub fn check_pending_start(&mut self) {
@@ -3045,9 +2992,8 @@ impl App {
             self.active_tab = self.tabs.len() - 1;
         }
         self.tab_cursor = self.flat_index_for_tab(self.active_tab);
-        if self.tabs.is_empty() {
-            self.terminal_focused = false;
-        }
+        self.terminal_focused = false;
+        self.focus = Panel::Worktrees;
 
         self.refresh_status();
 
@@ -3061,19 +3007,12 @@ impl App {
         }
 
         if exit_code == Some(0) {
-            self.notify_state = NotifyState::Message {
-                title: "Start".to_string(),
-                message: if output_text.is_empty() { "Started successfully".into() } else { output_text },
-                kind: NotifyKind::Success,
-            };
+            let msg = if output_text.is_empty() { "Started successfully".into() } else { output_text };
+            self.push_toast("Start", &msg, ui::overlay::ToastKind::Success);
         } else {
-            self.notify_state = NotifyState::Message {
-                title: "Start".to_string(),
-                message: if output_text.is_empty() { "Start failed".into() } else { output_text },
-                kind: NotifyKind::Error,
-            };
+            let msg = if output_text.is_empty() { "Start failed".into() } else { output_text };
+            self.push_toast("Start", &msg, ui::overlay::ToastKind::Error);
         }
-        self.recalc_layout();
     }
 
     /// Check if notification should auto-dismiss.
@@ -3101,14 +3040,50 @@ impl App {
         }
     }
 
-    pub fn check_notify_dismiss(&mut self, tick: u64) {
-        if let Some(dismiss_at) = self.notify_dismiss_at {
-            if tick >= dismiss_at {
-                self.notify_state = NotifyState::Idle;
-                self.notify_dismiss_at = None;
-                self.recalc_layout();
+
+    /// Find the highest-priority toast to act on.
+    /// Priority: quit confirm > other Confirm > Acknowledge > oldest.
+    /// `confirm_only`: if true, only return Confirm toasts (for Ctrl+A).
+    fn find_priority_toast(&self, confirm_only: bool) -> Option<usize> {
+        use ui::overlay::ToastAction;
+        // 1. Quit confirm
+        let idx = self.toasts.iter().position(|t| {
+            matches!(&t.action, Some(ToastAction::Confirm))
+                && (t.title.contains("Quit") || t.title.contains("Exit"))
+        });
+        if idx.is_some() { return idx; }
+        // 2. Other Confirm toasts
+        let idx = self.toasts.iter().position(|t| {
+            matches!(&t.action, Some(ToastAction::Confirm))
+        });
+        if idx.is_some() { return idx; }
+        if confirm_only { return None; }
+        // 3. Acknowledge toasts
+        let idx = self.toasts.iter().position(|t| {
+            matches!(&t.action, Some(ToastAction::Acknowledge))
+        });
+        if idx.is_some() { return idx; }
+        // 4. Any toast (oldest)
+        Some(0)
+    }
+
+    /// Handle a confirmed toast action (Ctrl+A was pressed).
+    fn handle_toast_action(&mut self, toast: &ui::overlay::Toast) {
+        use ui::overlay::ToastAction;
+        match &toast.action {
+            Some(ToastAction::Confirm) => {
+                // Currently only quit uses Confirm
+                if toast.title.contains("Quit") || toast.title.contains("Exit") {
+                    self.should_quit = true;
+                }
             }
+            _ => {} // Acknowledge just dismisses (already removed)
         }
+    }
+
+    /// Remove toasts whose duration has elapsed.
+    pub fn dismiss_expired_toasts(&mut self, _tick: u64) {
+        self.toasts.retain(|t| !t.is_expired());
     }
 
     fn recalc_layout(&mut self) {
