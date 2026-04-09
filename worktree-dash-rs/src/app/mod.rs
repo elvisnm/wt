@@ -2722,14 +2722,17 @@ impl App {
         self.tab_cursor = self.flat_index_for_tab(self.active_tab);
         self.terminal_focused = false;
 
-        let success = exit_code == Some(0);
-        if success {
+        // Detect cancellation: exit 0 but no new worktree = user cancelled
+        let cancelled = exit_code == Some(0) && !new_worktree_found;
+        let failed = exit_code.map_or(true, |c| c != 0);
+
+        if cancelled {
             self.notify_state = NotifyState::Message {
-                title: "Success".to_string(),
-                message: "Worktree created successfully".to_string(),
-                kind: NotifyKind::Success,
+                title: "Info".to_string(),
+                message: "Worktree creation cancelled".to_string(),
+                kind: NotifyKind::Info,
             };
-        } else {
+        } else if failed {
             let err_msg = if output_text.is_empty() {
                 "Worktree creation failed".to_string()
             } else {
