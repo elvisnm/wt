@@ -809,6 +809,17 @@ impl App {
                 return;
             }
 
+            // Ctrl+> to switch to next session in split group
+            if key.code == KeyCode::Char('>') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.cycle_focused_session(1);
+                return;
+            }
+            // Ctrl+< to switch to previous session in split group
+            if key.code == KeyCode::Char('<') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.cycle_focused_session(-1);
+                return;
+            }
+
             // Shift+Up/Down or PgUp/PgDn to scroll terminal history
             // Shift+Up/PgUp = scroll up, Shift+Down/PgDn = scroll down
             let is_scroll_up = (key.code == KeyCode::Up && key.modifiers.contains(KeyModifiers::SHIFT))
@@ -2385,6 +2396,36 @@ impl App {
         let cols = self.width.saturating_sub(self.width * left_pct / 100).saturating_sub(2); // 1 padding each side
         let rows = self.height.saturating_sub(3); // status bar + title row + bottom padding
         (cols.max(10), rows.max(5))
+    }
+
+    /// Cycle focus between sessions in the active tab's split group (or between tabs if no split).
+    fn cycle_focused_session(&mut self, direction: i32) {
+        if self.tabs.is_empty() || self.active_tab >= self.tabs.len() {
+            return;
+        }
+
+        let tab = &self.tabs[self.active_tab];
+        if let Some(ref split) = tab.split {
+            // Split group: cycle through leaf sessions
+            let ids = split.session_ids();
+            if ids.len() <= 1 {
+                return;
+            }
+            let current = self.focused_session_id.unwrap_or(0);
+            let pos = ids.iter().position(|&id| id == current).unwrap_or(0);
+            let next = ((pos as i32 + direction).rem_euclid(ids.len() as i32)) as usize;
+            self.focused_session_id = Some(ids[next]);
+        } else {
+            // No split: cycle between tabs
+            let n = self.tabs.len();
+            if n <= 1 {
+                return;
+            }
+            let next = ((self.active_tab as i32 + direction).rem_euclid(n as i32)) as usize;
+            self.active_tab = next;
+            self.tab_cursor = self.flat_index_for_tab(self.active_tab);
+            self.focused_session_id = Some(self.tabs[next].session_id);
+        }
     }
 
     fn cycle_panel(&mut self, direction: i8) {
