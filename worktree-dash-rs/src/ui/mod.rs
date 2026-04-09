@@ -264,17 +264,16 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
     // Group headers have no number — only sessions get numbers
     let mut entries: Vec<TabEntry> = Vec::new();
     let mut seq = 1usize;
+    let mut group_num = 0usize;
     for (tab_idx, tab) in app.tabs.iter().enumerate() {
         let is_active = tab_idx == app.active_tab;
 
         if let Some(ref split) = tab.split {
             let session_ids = split.session_ids();
-            let group_size = session_ids.len();
+            group_num += 1;
 
-            // Group header — no number
-            let base_label = tab.label.split(" [").next().unwrap_or(&tab.label);
             entries.push(TabEntry {
-                label: format!("{} ({} panes)", base_label, group_size),
+                label: format!("Group {}", group_num),
                 session_id: tab.session_id,
                 num: 0,
                 is_active,
@@ -398,71 +397,42 @@ struct TabEntry {
 }
 
 fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focused: bool, spin_frame: usize) -> Line<'static> {
-    // Number prefix in gray parentheses
-    let prefix = if entry.is_group_child {
-        if entry.num > 0 && entry.num <= 9 {
-            format!("  ({}) ", entry.num)
-        } else {
-            "      ".to_string()
-        }
-    } else if entry.is_group_head {
-        " ".to_string()
-    } else if entry.num > 0 && entry.num <= 9 {
-        format!(" ({}) ", entry.num)
-    } else {
-        "     ".to_string()
-    };
+    use crate::detect::AgentState;
 
     // Icon based on state
-    use crate::detect::AgentState;
     let (icon, icon_color) = if entry.is_group_head {
-        ("☰", HINT_COLOR) // sandwich for group
+        ("☰", BORDER_COLOR) // sandwich for group, subtle color
     } else if !entry.alive {
         if entry.exit_code == Some(0) {
-            ("●", RUNNING_COLOR) // green dot = done success
+            ("●", RUNNING_COLOR)
         } else if entry.exit_code.is_some() {
-            ("●", STOPPED_COLOR) // red dot = failed
+            ("●", STOPPED_COLOR)
         } else {
-            ("○", DIM_TEXT_COLOR) // empty = dead
+            ("○", DIM_TEXT_COLOR)
         }
     } else {
         match entry.agent_state {
             AgentState::Working => {
                 let frame = SPIN_FRAMES[spin_frame % SPIN_FRAMES.len()];
-                (frame, HINT_COLOR) // spinner = actively working
+                (frame, HINT_COLOR)
             }
-            AgentState::Blocked => {
-                ("!", STOPPED_COLOR) // needs attention
-            }
-            AgentState::Idle => {
-                ("●", RUNNING_COLOR) // idle = green dot (ready)
-            }
-            AgentState::Unknown => {
-                // Plain shell or unrecognized
-                ("■", if entry.is_active { HIGHLIGHT_COLOR } else { DIM_TEXT_COLOR })
-            }
+            AgentState::Blocked => ("!", STOPPED_COLOR),
+            AgentState::Idle => ("●", RUNNING_COLOR),
+            AgentState::Unknown => ("■", if entry.is_active { HIGHLIGHT_COLOR } else { DIM_TEXT_COLOR }),
         }
     };
 
-    let prefix_style = Style::default().fg(HEADER_COLOR);
+    // Number suffix: thin gray (N)
+    let num_suffix = if entry.num > 0 && entry.num <= 9 {
+        format!(" ({})", entry.num)
+    } else {
+        String::new()
+    };
 
-    if is_cursor && panel_focused {
-        let line = format!("{}{}  {}", prefix, icon, entry.label);
-        return Line::from(Span::styled(
-            truncate_pad(&line, width),
-            Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
-        ));
-    }
-
-    if is_cursor {
-        let line = format!("{}{}  {}", prefix, icon, entry.label);
-        return Line::from(Span::styled(
-            truncate_pad(&line, width),
-            Style::default().bold(),
-        ));
-    }
-
-    let label_style = if entry.is_group_child {
+    let num_style = Style::default().fg(HEADER_COLOR);
+    let label_style = if entry.is_group_head {
+        Style::default().fg(DIM_TEXT_COLOR)
+    } else if entry.is_group_child {
         Style::default().fg(DIM_TEXT_COLOR)
     } else if entry.is_active {
         Style::default().fg(HIGHLIGHT_COLOR)
@@ -470,11 +440,48 @@ fn format_tab_entry(entry: &TabEntry, width: usize, is_cursor: bool, panel_focus
         Style::default()
     };
 
+    // Build the line
+    if entry.is_group_head {
+        // ☰ Group N
+        let line_text = format!(" {} {}", icon, entry.label);
+        if is_cursor && panel_focused {
+            return Line::from(Span::styled(
+                truncate_pad(&line_text, width),
+                Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
+            ));
+        }
+        return Line::from(vec![
+            Span::raw(" "),
+            Span::styled(icon.to_string(), Style::default().fg(icon_color)),
+            Span::raw(" "),
+            Span::styled(entry.label.clone(), label_style),
+        ]);
+    }
+
+    // → icon label (N)
+    let arrow = if entry.is_group_child { "  → " } else { " " };
+
+    if is_cursor && panel_focused {
+        let line = format!("{}{} {}{}", arrow, icon, entry.label, num_suffix);
+        return Line::from(Span::styled(
+            truncate_pad(&line, width),
+            Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
+        ));
+    }
+    if is_cursor {
+        let line = format!("{}{} {}{}", arrow, icon, entry.label, num_suffix);
+        return Line::from(Span::styled(
+            truncate_pad(&line, width),
+            Style::default().bold(),
+        ));
+    }
+
     Line::from(vec![
-        Span::styled(prefix, prefix_style),
+        Span::styled(arrow.to_string(), Style::default().fg(HEADER_COLOR)),
         Span::styled(icon.to_string(), Style::default().fg(icon_color)),
-        Span::raw("  "),
+        Span::raw(" "),
         Span::styled(entry.label.clone(), label_style),
+        Span::styled(num_suffix, num_style),
     ])
 }
 
@@ -1218,8 +1225,10 @@ fn render_split_node(
                     let buf = frame.buffer_mut();
                     match direction {
                         SplitDir::Horizontal => {
-                            // Vertical line │
-                            for y in sep_rect.y..sep_rect.y + sep_rect.height {
+                            // Vertical line │ (skip first and last row)
+                            let y_start = sep_rect.y + 1;
+                            let y_end = (sep_rect.y + sep_rect.height).saturating_sub(1);
+                            for y in y_start..y_end {
                                 if sep_rect.x < buf.area().width {
                                     buf[(sep_rect.x, y)].set_symbol("│");
                                     buf[(sep_rect.x, y)].set_style(sep_style);
@@ -1227,8 +1236,10 @@ fn render_split_node(
                             }
                         }
                         SplitDir::Vertical => {
-                            // Horizontal line ─
-                            for x in sep_rect.x..sep_rect.x + sep_rect.width {
+                            // Horizontal line ─ (skip first and last col)
+                            let x_start = sep_rect.x + 1;
+                            let x_end = (sep_rect.x + sep_rect.width).saturating_sub(1);
+                            for x in x_start..x_end {
                                 if sep_rect.y < buf.area().height {
                                     buf[(x, sep_rect.y)].set_symbol("─");
                                     buf[(x, sep_rect.y)].set_style(sep_style);
