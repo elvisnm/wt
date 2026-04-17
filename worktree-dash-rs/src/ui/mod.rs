@@ -1432,13 +1432,19 @@ fn render_task_editor(frame: &mut Frame, area: Rect, editor: &crate::beads::Task
         } else if value.is_empty() {
             lines.push(Line::from(Span::styled("  -", dim)));
         } else {
-            // Render with newlines preserved
+            // Inactive fields render their value for context. This runs on
+            // EVERY frame, so use two spans (indent + chunk) instead of a
+            // `format!` that would allocate a fresh String per chunk.
+            let wrap_w = inner_w.saturating_sub(2);
             for text_line in value.split('\n') {
                 if text_line.is_empty() {
                     lines.push(Line::from(Span::styled("  ", dim)));
                 } else {
-                    for chunk in wrap_text(text_line, inner_w.saturating_sub(2)) {
-                        lines.push(Line::from(Span::styled(format!("  {}", chunk), dim)));
+                    for chunk in wrap_text(text_line, wrap_w) {
+                        lines.push(Line::from(vec![
+                            Span::styled("  ", dim),
+                            Span::styled(chunk, dim),
+                        ]));
                     }
                 }
             }

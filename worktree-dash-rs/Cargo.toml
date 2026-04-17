@@ -43,3 +43,15 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 strip = true
 lto = true
 codegen-units = 1
+
+# Dev builds (wt-dev) get light optimization so the TUI stays responsive
+# while typing and rendering. Opt-level 1 keeps compile times fast but
+# avoids the 10-50x slowdown of fully unoptimised debug code. Dependencies
+# are compiled at opt-level 3 since their rebuild cost is amortised across
+# sessions and their hot paths (ratatui, alacritty_terminal) dominate frame
+# time.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

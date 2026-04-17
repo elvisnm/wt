@@ -573,10 +573,11 @@ impl App {
         }
     }
 
-    /// Refresh both the tasks list and (if open) the DAG graph. The DAG refresh
-    /// runs on a background thread so subsequent refreshes never block the UI.
+    /// Refresh both the tasks list and (if open) the DAG graph. Everything
+    /// runs on a background thread — `poll_dag_fetch` handles `ListLoaded`
+    /// to update `tasks_list`, and `Complete` to swap in the laid-out graph.
+    /// No bd subprocess call blocks the UI.
     pub fn refresh_tasks_and_graph(&mut self) {
-        self.fetch_tasks();
         self.refresh_dag();
     }
 
@@ -658,32 +659,43 @@ impl App {
 
         let mut finished = false;
         for event in events {
-            if let Some(state) = self.tabs[dag_idx].dag_state_mut() {
-                match event {
-                    TaskFetchEvent::ListLoaded(_) => {}
-                    TaskFetchEvent::DepsProgress { done, total } => {
+            match event {
+                // Populate the tasks list panel as soon as `bd list` returns,
+                // without waiting for the N+1 dep fetches.
+                TaskFetchEvent::ListLoaded(tasks) => {
+                    self.tasks_list = tasks;
+                    self.tasks_err = None;
+                }
+                TaskFetchEvent::DepsProgress { done, total } => {
+                    if let Some(state) = self.tabs[dag_idx].dag_state_mut() {
                         state.load_progress = Some((done, total));
                     }
-                    TaskFetchEvent::Complete { tasks, deps: _ } => {
-                        let layout = crate::ui::dag_graph::layout::compute_layout(&tasks);
-                        state.status_by_id = layout
-                            .cards
-                            .iter()
-                            .map(|c| (c.id.clone(), c.status))
-                            .collect();
+                }
+                TaskFetchEvent::Complete { tasks, deps: _ } => {
+                    let layout = crate::ui::dag_graph::layout::compute_layout(&tasks);
+                    let status_by_id: std::collections::HashMap<_, _> = layout
+                        .cards
+                        .iter()
+                        .map(|c| (c.id.clone(), c.status))
+                        .collect();
+                    if let Some(state) = self.tabs[dag_idx].dag_state_mut() {
+                        state.status_by_id = status_by_id;
                         state.layout = Some(layout);
                         state.tasks = tasks;
                         state.loading = false;
                         state.load_progress = None;
                         state.load_error = None;
-                        finished = true;
                     }
-                    TaskFetchEvent::Error(msg) => {
-                        state.load_error = Some(msg);
+                    finished = true;
+                }
+                TaskFetchEvent::Error(msg) => {
+                    if let Some(state) = self.tabs[dag_idx].dag_state_mut() {
+                        state.load_error = Some(msg.clone());
                         state.loading = false;
                         state.load_progress = None;
-                        finished = true;
                     }
+                    self.tasks_err = Some(msg);
+                    finished = true;
                 }
             }
         }
@@ -1472,17 +1484,11 @@ impl App {
                     self.tasks_search = None;
                     self.tasks_search_active = false;
                     self.focus = Panel::Tasks;
-                    self.refresh_tasks_and_graph();
+                    // open_dag_tab kicks the async fetch that populates both
+                    // tasks_list (via ListLoaded) and the DAG (via Complete).
+                    // No sync bd call on the main thread.
                     self.open_dag_tab();
-                    // Sync selection immediately so the first task is
-                    // highlighted (with tooltip + DAG highlight) as soon as
-                    // the layout lands — not a tick later when poll_dag_fetch
-                    // first runs.
                     self.sync_dag_selection();
-                    // Bring focus back to the tasks list; open_dag_tab set
-                    // active_tab to the graph tab which is what we want, but
-                    // the keyboard focus stays on the list until the user
-                    // attaches.
                     self.focus = Panel::Tasks;
                 } else {
                     self.close_dag_tab();
