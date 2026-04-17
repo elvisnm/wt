@@ -31,15 +31,16 @@ pub struct Task {
     pub dependencies: Vec<String>,
 }
 
-/// Fetch open beads tasks for the tasks list panel.
-/// Uses --status=open to keep the list focused on actionable work.
+/// Fetch all beads tasks (every status, unlimited). Shared by the tasks
+/// list panel and the DAG graph tab so both reflect the same data.
 pub fn fetch_tasks() -> Result<Vec<Task>, String> {
-    run_list(&["list", "--json", "--status=open", "--limit", "50"])
+    run_list(&["list", "--json", "--all", "--limit", "0"])
 }
 
-/// Fetch all beads tasks (any status, unlimited) for the DAG graph.
-pub fn fetch_all_tasks() -> Result<Vec<Task>, String> {
-    run_list(&["list", "--json", "--all", "--limit", "0"])
+/// Return the short suffix of a beads id (everything after the last '-').
+/// `_interview-prep-ypz` -> `ypz`, `wt-qx3` -> `qx3`, `abc` -> `abc`.
+pub fn short_id(id: &str) -> &str {
+    id.rsplit('-').next().unwrap_or(id)
 }
 
 fn run_list(args: &[&str]) -> Result<Vec<Task>, String> {
@@ -103,7 +104,7 @@ pub enum TaskFetchEvent {
 pub fn spawn_fetch_with_deps() -> mpsc::Receiver<TaskFetchEvent> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let tasks = match fetch_all_tasks() {
+        let tasks = match fetch_tasks() {
             Ok(t) => t,
             Err(e) => {
                 let _ = tx.send(TaskFetchEvent::Error(e));

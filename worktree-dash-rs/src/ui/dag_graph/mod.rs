@@ -20,6 +20,9 @@ use ratatui::layout::Rect;
 pub struct DagGraphState {
     /// Final laid-out graph. `None` until the first fetch completes.
     pub layout: Option<GraphLayout>,
+    /// Full task data cached alongside the layout; the tooltip looks up
+    /// description, labels, and dependency titles from here.
+    pub tasks: Vec<crate::beads::Task>,
     /// True while a fetch is in flight. Drives the loading spinner.
     pub loading: bool,
     /// (done, total) pairs for dep fetch progress.
@@ -29,6 +32,11 @@ pub struct DagGraphState {
     /// Id of the task currently highlighted (double-border). Driven by the
     /// tasks list panel's cursor.
     pub selected_id: Option<String>,
+    /// When true, the tooltip for the selected task shows expanded detail
+    /// (full description, timestamps, all labels). Reset automatically on
+    /// selection change so navigating tasks always starts from the normal
+    /// tooltip view.
+    pub tooltip_expanded: bool,
     /// Pan offset into graph-space in cells (`(x, y)`). `(0, 0)` shows rank 0.
     pub viewport: (i32, i32),
     /// Rects populated each render so a future mouse handler can hit-test cards.

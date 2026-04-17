@@ -205,6 +205,9 @@ pub struct App {
     pub tasks_search_active: bool,
     pub task_editor: Option<beads::TaskEditor>,
 
+    // DAG graph tab — background fetch receiver. None when no fetch in flight.
+    pub dag_fetch_rx: Option<std::sync::mpsc::Receiver<beads::TaskFetchEvent>>,
+
     // Fullscreen mode — hides left column, shows only focused session
     pub fullscreen: bool,
     // Sidebar hidden — Ctrl+B toggles left column visibility
@@ -286,6 +289,7 @@ impl App {
             tasks_search: None,
             tasks_search_active: false,
             task_editor: None,
+            dag_fetch_rx: None,
             toasts: Vec::new(),
             notify_state: NotifyState::Idle,
             pending_split_dir: None,
@@ -567,6 +571,208 @@ impl App {
                 self.tasks_err = Some(e);
             }
         }
+    }
+
+    /// Refresh both the tasks list and (if open) the DAG graph. The DAG refresh
+    /// runs on a background thread so subsequent refreshes never block the UI.
+    pub fn refresh_tasks_and_graph(&mut self) {
+        self.fetch_tasks();
+        self.refresh_dag();
+    }
+
+    // ── DAG graph tab ──────────────────────────────────────────────
+
+    fn find_dag_tab_idx(&self) -> Option<usize> {
+        self.tabs.iter().position(|t| t.dag_state().is_some())
+    }
+
+    /// Open the DAG graph tab (focus if already present, otherwise spawn a
+    /// new tab and kick off the background fetch).
+    pub fn open_dag_tab(&mut self) {
+        use crate::ui::dag_graph::DagGraphState;
+        if let Some(idx) = self.find_dag_tab_idx() {
+            self.active_tab = idx;
+            self.tab_cursor = self.flat_index_for_tab(idx);
+            return;
+        }
+        self.tabs
+            .push(Tab::new_dag_graph("Graph".to_string(), DagGraphState::new_loading()));
+        self.active_tab = self.tabs.len() - 1;
+        self.tab_cursor = self.flat_index_for_tab(self.active_tab);
+        self.kick_dag_fetch();
+    }
+
+    pub fn close_dag_tab(&mut self) {
+        if let Some(idx) = self.find_dag_tab_idx() {
+            self.tabs.remove(idx);
+            self.dag_fetch_rx = None;
+            if !self.tabs.is_empty() && self.active_tab >= self.tabs.len() {
+                self.active_tab = self.tabs.len() - 1;
+            }
+            self.tab_cursor = if self.tabs.is_empty() {
+                0
+            } else {
+                self.flat_index_for_tab(self.active_tab)
+            };
+        }
+    }
+
+    /// Spawn (or re-spawn) the background fetcher. Keeps the existing layout
+    /// visible so refreshes don't blank the graph; only the first load with
+    /// no cached layout shows the big spinner.
+    fn kick_dag_fetch(&mut self) {
+        self.dag_fetch_rx = Some(beads::spawn_fetch_with_deps());
+        if let Some(idx) = self.find_dag_tab_idx() {
+            if let Some(state) = self.tabs[idx].dag_state_mut() {
+                state.loading = true;
+                state.load_error = None;
+                state.load_progress = None;
+            }
+        }
+    }
+
+    /// Re-kick the DAG fetch if the tab is open. Cheap no-op otherwise.
+    pub fn refresh_dag(&mut self) {
+        if self.find_dag_tab_idx().is_some() {
+            self.kick_dag_fetch();
+        }
+    }
+
+    /// Drain the DAG fetch channel once per tick and fold events into state.
+    pub fn poll_dag_fetch(&mut self) {
+        use beads::TaskFetchEvent;
+        let events: Vec<TaskFetchEvent> = self
+            .dag_fetch_rx
+            .as_ref()
+            .map(|rx| rx.try_iter().collect())
+            .unwrap_or_default();
+        if events.is_empty() {
+            self.sync_dag_selection();
+            return;
+        }
+
+        let Some(dag_idx) = self.find_dag_tab_idx() else {
+            self.dag_fetch_rx = None;
+            return;
+        };
+
+        let mut finished = false;
+        for event in events {
+            if let Some(state) = self.tabs[dag_idx].dag_state_mut() {
+                match event {
+                    TaskFetchEvent::ListLoaded(_) => {}
+                    TaskFetchEvent::DepsProgress { done, total } => {
+                        state.load_progress = Some((done, total));
+                    }
+                    TaskFetchEvent::Complete { tasks, deps: _ } => {
+                        let layout = crate::ui::dag_graph::layout::compute_layout(&tasks);
+                        state.layout = Some(layout);
+                        state.tasks = tasks;
+                        state.loading = false;
+                        state.load_progress = None;
+                        state.load_error = None;
+                        finished = true;
+                    }
+                    TaskFetchEvent::Error(msg) => {
+                        state.load_error = Some(msg);
+                        state.loading = false;
+                        state.load_progress = None;
+                        finished = true;
+                    }
+                }
+            }
+        }
+        if finished {
+            self.dag_fetch_rx = None;
+        }
+        self.sync_dag_selection();
+        // Once layout lands (Complete), centre the viewport on the selected
+        // card so the first task is visible with its tooltip on open — even
+        // when the selection didn't "change" (it was pre-set by Shift+T).
+        if finished {
+            self.pan_to_selected();
+        }
+    }
+
+    /// Mirror the tasks list cursor into the DAG graph's selected_id so the
+    /// highlighted card follows the list selection. When the selection
+    /// changes, also pan the viewport so the selected card and its tooltip
+    /// are visible.
+    pub fn sync_dag_selection(&mut self) {
+        let Some(dag_idx) = self.find_dag_tab_idx() else {
+            return;
+        };
+        let selected_id = self
+            .filtered_task_indices()
+            .get(self.tasks_cursor)
+            .and_then(|&i| self.tasks_list.get(i))
+            .map(|t| t.id.clone());
+
+        let changed = {
+            let state = match self.tabs[dag_idx].dag_state_mut() {
+                Some(s) => s,
+                None => return,
+            };
+            let c = state.selected_id != selected_id;
+            state.selected_id = selected_id;
+            if c {
+                // Any selection change resets the tooltip to the normal view —
+                // expanded state is ephemeral and tied to the current selection.
+                state.tooltip_expanded = false;
+            }
+            c
+        };
+
+        if changed {
+            self.pan_to_selected();
+        }
+    }
+
+    /// Shift the DAG viewport so the selected card (and its tooltip) is
+    /// visible. Approximates the graph area from `last_frame_*` since the
+    /// render pass owns the real area size; good enough for keeping
+    /// navigation smooth.
+    fn pan_to_selected(&mut self) {
+        use crate::ui::dag_graph::layout::{CARD_W, RANK_GAP};
+
+        if self.last_frame_width == 0 || self.last_frame_height == 0 {
+            return;
+        }
+        let graph_w = ((self.last_frame_width as i32) * 78 / 100).max(20);
+        let graph_h = (self.last_frame_height as i32 - 3).max(10);
+        let tooltip_w = ((graph_w as u32) * 30 / 100).clamp(24, 40) as i32;
+
+        let Some(dag_idx) = self.find_dag_tab_idx() else { return; };
+        let Some(state) = self.tabs[dag_idx].dag_state_mut() else { return; };
+        let Some(id) = state.selected_id.clone() else { return; };
+        let Some(layout) = &state.layout else { return; };
+        let Some(card) = layout.cards.iter().find(|c| c.id == id) else { return; };
+
+        let card_gx = card.rank as i32 * (CARD_W + RANK_GAP);
+        let card_gy = card.y;
+        let card_right = card_gx + CARD_W;
+        let card_bottom = card_gy + card.height as i32;
+
+        let (mut vx, mut vy) = state.viewport;
+
+        // Horizontal: try to fit card + tooltip on the right. If that pushes
+        // the card off the left, just show the card (tooltip will auto-flip).
+        let needed_right = card_right + 1 + tooltip_w;
+        if needed_right > vx + graph_w {
+            vx = (needed_right - graph_w).min(card_gx);
+        }
+        if card_gx < vx {
+            vx = card_gx;
+        }
+
+        // Vertical
+        if card_gy < vy {
+            vy = card_gy;
+        } else if card_bottom > vy + graph_h {
+            vy = card_bottom - graph_h;
+        }
+
+        state.viewport = (vx, vy);
     }
 
     /// Return indices into `tasks_list` that match the current search filter.
@@ -922,6 +1128,35 @@ impl App {
                 return;
             }
 
+            // Widget tab: h/j/k/l pan the viewport instead of forwarding to a PTY.
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                if let Some(state) = tab.dag_state_mut() {
+                    const PAN_STEP: i32 = 4;
+                    let handled = match key.code {
+                        KeyCode::Char('h') if key.modifiers.is_empty() => {
+                            state.viewport.0 -= PAN_STEP;
+                            true
+                        }
+                        KeyCode::Char('l') if key.modifiers.is_empty() => {
+                            state.viewport.0 += PAN_STEP;
+                            true
+                        }
+                        KeyCode::Char('k') if key.modifiers.is_empty() => {
+                            state.viewport.1 -= PAN_STEP;
+                            true
+                        }
+                        KeyCode::Char('j') if key.modifiers.is_empty() => {
+                            state.viewport.1 += PAN_STEP;
+                            true
+                        }
+                        _ => false,
+                    };
+                    if handled {
+                        return;
+                    }
+                }
+            }
+
             // Forward key to the focused session (specific pane in split)
             let target_sid = self.focused_session_id
                 .or_else(|| self.tabs.get(self.active_tab).and_then(|t| t.pty_session_id()));
@@ -1000,7 +1235,7 @@ impl App {
                     match editor.save() {
                         Ok(()) => {
                             self.task_editor = None;
-                            self.fetch_tasks();
+                            self.refresh_tasks_and_graph();
                             if let Some(ref detail) = self.tasks_detail {
                                 let id = detail.id.clone();
                                 if let Ok(updated) = beads::fetch_detail(&id) {
@@ -1206,9 +1441,23 @@ impl App {
                     self.tasks_search = None;
                     self.tasks_search_active = false;
                     self.focus = Panel::Tasks;
-                    self.fetch_tasks();
-                } else if self.focus == Panel::Tasks {
-                    self.focus = Panel::Worktrees;
+                    self.refresh_tasks_and_graph();
+                    self.open_dag_tab();
+                    // Sync selection immediately so the first task is
+                    // highlighted (with tooltip + DAG highlight) as soon as
+                    // the layout lands — not a tick later when poll_dag_fetch
+                    // first runs.
+                    self.sync_dag_selection();
+                    // Bring focus back to the tasks list; open_dag_tab set
+                    // active_tab to the graph tab which is what we want, but
+                    // the keyboard focus stays on the list until the user
+                    // attaches.
+                    self.focus = Panel::Tasks;
+                } else {
+                    self.close_dag_tab();
+                    if self.focus == Panel::Tasks {
+                        self.focus = Panel::Worktrees;
+                    }
                 }
                 self.recalc_layout();
             }
@@ -1246,29 +1495,32 @@ impl App {
                 self.tasks_cursor = 0;
             }
 
-            // Tasks panel — Enter/Esc/c/d
+            // Tasks panel — Enter expands the DAG tooltip for the selected task.
             KeyCode::Enter if self.focus == Panel::Tasks => {
-                if self.tasks_detail.is_some() {
-                    // Already in detail — do nothing
-                } else {
-                    let indices = self.filtered_task_indices();
-                    if let Some(&real_idx) = indices.get(self.tasks_cursor) {
-                        let id = self.tasks_list[real_idx].id.clone();
-                        match beads::fetch_detail(&id) {
-                            Ok(detail) => {
-                                self.tasks_detail = Some(detail);
-                                self.tasks_detail_scroll = 0;
-                                self.recalc_layout();
-                            }
-                            Err(e) => { self.tasks_err = Some(e); }
+                if let Some(idx) = self.find_dag_tab_idx() {
+                    if let Some(state) = self.tabs[idx].dag_state_mut() {
+                        if state.selected_id.is_some() {
+                            state.tooltip_expanded = true;
                         }
                     }
                 }
             }
-            KeyCode::Esc if self.focus == Panel::Tasks && self.tasks_detail.is_some() => {
-                self.tasks_detail = None;
-                self.tasks_detail_scroll = 0;
-                self.recalc_layout();
+            // Tasks panel — Esc collapses the expanded tooltip, then falls
+            // through to close any lingering task detail pane.
+            KeyCode::Esc if self.focus == Panel::Tasks => {
+                if let Some(idx) = self.find_dag_tab_idx() {
+                    if let Some(state) = self.tabs[idx].dag_state_mut() {
+                        if state.tooltip_expanded {
+                            state.tooltip_expanded = false;
+                            return;
+                        }
+                    }
+                }
+                if self.tasks_detail.is_some() {
+                    self.tasks_detail = None;
+                    self.tasks_detail_scroll = 0;
+                    self.recalc_layout();
+                }
             }
             KeyCode::Char('c') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let indices = self.filtered_task_indices();
@@ -1277,7 +1529,7 @@ impl App {
                     match beads::close_task(&id) {
                         Ok(()) => {
                             self.push_toast("Success", &format!("Closed task {}", id), ui::overlay::ToastKind::Success);
-                            self.fetch_tasks();
+                            self.refresh_tasks_and_graph();
                             let new_len = self.filtered_task_indices().len();
                             if self.tasks_cursor >= new_len && new_len > 0 {
                                 self.tasks_cursor = new_len - 1;
@@ -1296,7 +1548,7 @@ impl App {
                     match beads::delete_task(&id) {
                         Ok(()) => {
                             self.push_toast("Success", &format!("Deleted task {}", id), ui::overlay::ToastKind::Success);
-                            self.fetch_tasks();
+                            self.refresh_tasks_and_graph();
                             let new_len = self.filtered_task_indices().len();
                             if self.tasks_cursor >= new_len && new_len > 0 {
                                 self.tasks_cursor = new_len - 1;

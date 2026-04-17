@@ -963,7 +963,7 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
 
         lines.push(Line::from(vec![
             Span::styled(format!("P{} ", p), Style::default().fg(priority_color)),
-            Span::styled(&task.id, Style::default().fg(DIM_TEXT_COLOR)),
+            Span::styled(crate::beads::short_id(&task.id).to_string(), Style::default().fg(DIM_TEXT_COLOR)),
         ]));
         lines.push(Line::from(vec![
             Span::styled("Type: ", Style::default().fg(DIM_TEXT_COLOR)),
@@ -1036,19 +1036,43 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
                 2 => Color::Yellow,
                 _ => DIM_TEXT_COLOR,
             };
+            let short = crate::beads::short_id(&task.id);
+            // Match the id color to the DAG card status color when we have
+            // layout info (it knows about ready-vs-open); otherwise fall
+            // back to mapping the raw bd status directly.
+            let id_color = app
+                .tabs
+                .iter()
+                .find_map(|t| t.dag_state())
+                .and_then(|s| s.layout.as_ref())
+                .and_then(|l| l.cards.iter().find(|c| c.id == task.id))
+                .map(|c| c.status.color())
+                .unwrap_or_else(|| {
+                    crate::ui::dag_graph::layout::status_from_raw(&task.status).color()
+                });
             // prefix: " P{p} {id} " — 1 + 2 + 1 + id.len + 1
-            let prefix_len = 4 + task.id.len() + 1;
+            let prefix_len = 4 + short.len() + 1;
             let max_title = inner_w.saturating_sub(prefix_len);
 
             if selected && focused {
-                Line::from(Span::styled(
-                    format!(" P{} {} {}", p, task.id, truncate(&task.title, max_title)),
-                    Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
-                ))
+                Line::from(vec![
+                    Span::styled(
+                        format!(" P{} ", p),
+                        Style::default().fg(priority_color).bg(SELECTED_BG_COLOR).bold(),
+                    ),
+                    Span::styled(
+                        format!("{} ", short),
+                        Style::default().fg(id_color).bg(SELECTED_BG_COLOR).bold(),
+                    ),
+                    Span::styled(
+                        truncate(&task.title, max_title),
+                        Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
+                    ),
+                ])
             } else {
                 Line::from(vec![
                     Span::styled(format!(" P{} ", p), Style::default().fg(priority_color)),
-                    Span::styled(format!("{} ", task.id), Style::default().fg(DIM_TEXT_COLOR)),
+                    Span::styled(format!("{} ", short), Style::default().fg(id_color)),
                     Span::styled(truncate(&task.title, max_title), Style::default().fg(if selected { Color::White } else { DIM_TEXT_COLOR })),
                 ])
             }
@@ -1657,7 +1681,7 @@ pub fn visible_window(total: usize, cursor: usize, max_lines: usize) -> (usize, 
 }
 
 /// Word-wrap text at space boundaries to fit within a given width.
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut result = Vec::new();
     for line in text.lines() {
         if line.is_empty() {

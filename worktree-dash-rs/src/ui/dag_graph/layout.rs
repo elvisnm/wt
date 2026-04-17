@@ -2,9 +2,19 @@
 //!
 //! Assigns each task a (rank, row) in the graph based on longest-path
 //! topological depth + within-rank ordering by priority, status, and id.
+//! Also computes each card's graph-space y position and height so card
+//! contents (`{glyph} ({id}) [{STATUS}] title`) can wrap across as many
+//! lines as the title needs without breaking edge routing.
 
-use crate::beads::Task;
+use crate::beads::{short_id, Task};
 use std::collections::HashMap;
+
+/// Card width in cells (fixed). Content area = `CARD_W - 2`.
+pub const CARD_W: i32 = 22;
+/// Horizontal gap between ranks.
+pub const RANK_GAP: i32 = 4;
+/// Vertical gap between cards within a rank.
+pub const ROW_GAP: i32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardStatus {
@@ -15,6 +25,52 @@ pub enum CardStatus {
     Open,
 }
 
+impl CardStatus {
+    pub fn glyph(self) -> &'static str {
+        match self {
+            CardStatus::Done => "●",
+            CardStatus::Active => "◐",
+            CardStatus::Ready => "○",
+            CardStatus::Blocked => "⊘",
+            CardStatus::Open => "◌",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CardStatus::Done => "done",
+            CardStatus::Active => "active",
+            CardStatus::Ready => "ready",
+            CardStatus::Blocked => "blocked",
+            CardStatus::Open => "open",
+        }
+    }
+
+    pub fn color(self) -> ratatui::style::Color {
+        use ratatui::style::Color;
+        match self {
+            CardStatus::Done => Color::Green,
+            CardStatus::Active => Color::Yellow,
+            CardStatus::Ready => Color::Cyan,
+            CardStatus::Blocked => Color::Red,
+            CardStatus::Open => Color::Gray,
+        }
+    }
+}
+
+/// Map a raw beads status string to the DAG `CardStatus` that would be used
+/// if dependency info was available. Without blocker data, an `open` task
+/// defaults to `Open` (not `Ready`) — callers that have layout info should
+/// prefer looking up the real `Card::status` instead.
+pub fn status_from_raw(raw: &str) -> CardStatus {
+    match raw {
+        "closed" | "done" => CardStatus::Done,
+        "in_progress" => CardStatus::Active,
+        "blocked" => CardStatus::Blocked,
+        _ => CardStatus::Open,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Card {
     pub id: String,
@@ -23,6 +79,10 @@ pub struct Card {
     pub status: CardStatus,
     pub rank: usize,
     pub row: usize,
+    /// Graph-space y coordinate (top edge).
+    pub y: i32,
+    /// Card height in cells, sized to fit the wrapped content.
+    pub height: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -91,17 +151,24 @@ pub fn compute_layout(tasks: &[Task]) -> GraphLayout {
     let mut cards: Vec<Card> = Vec::with_capacity(tasks.len());
     let mut card_idx_for_task: Vec<usize> = vec![usize::MAX; tasks.len()];
     for (rank, rank_items) in by_rank.iter().enumerate() {
+        let mut rank_y: i32 = 0;
         for (row, &task_idx) in rank_items.iter().enumerate() {
             card_idx_for_task[task_idx] = cards.len();
             let t = &tasks[task_idx];
+            let status = card_status(t, is_ready[task_idx]);
+            let pri = priority_of(t);
+            let height = card_height(&t.id, &t.title, status);
             cards.push(Card {
                 id: t.id.clone(),
                 title: t.title.clone(),
-                priority: priority_of(t),
-                status: card_status(t, is_ready[task_idx]),
+                priority: pri,
+                status,
                 rank,
                 row,
+                y: rank_y,
+                height,
             });
+            rank_y += height as i32 + ROW_GAP;
         }
     }
 
@@ -181,6 +248,71 @@ fn status_sort_key(task: &Task) -> u8 {
         "deferred" => 3,
         _ => 4,
     }
+}
+
+/// Combined card content as it will be rendered: `{glyph} ({id}) [{STATUS}] {title}`.
+/// Used for sizing and for the rendered text.
+pub fn card_text(id: &str, title: &str, status: CardStatus) -> String {
+    format!(
+        "{} ({}) [{}] {}",
+        status.glyph(),
+        short_id(id),
+        status.label().to_uppercase(),
+        title,
+    )
+}
+
+/// Content width inside a card after the internal left/right padding columns.
+pub const CARD_CONTENT_W: i32 = CARD_W - 4;
+
+/// Compute a card's height in cells so the wrapped content fits with a 1-line
+/// top/bottom padding. Horizontal padding is 2 cols on each side.
+pub fn card_height(id: &str, title: &str, status: CardStatus) -> u16 {
+    let text = card_text(id, title, status);
+    let content_w = CARD_CONTENT_W.max(1) as usize;
+    let lines = wrap_count(&text, content_w).max(1);
+    (lines + 2).max(3) as u16
+}
+
+/// Word-wrap a single-line text at given cell width. Returns each wrapped
+/// line. The render pass uses the same function so rendered heights match
+/// what `card_height` pre-computed.
+pub fn wrap_text_cells(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        if remaining.chars().count() <= width {
+            out.push(remaining.to_string());
+            break;
+        }
+        let break_at = remaining
+            .char_indices()
+            .take(width)
+            .filter(|(_, c)| *c == ' ')
+            .map(|(i, _)| i)
+            .last()
+            .unwrap_or_else(|| {
+                remaining
+                    .char_indices()
+                    .nth(width)
+                    .map(|(i, _)| i)
+                    .unwrap_or(remaining.len())
+            });
+        let (chunk, rest) = remaining.split_at(break_at);
+        out.push(chunk.to_string());
+        remaining = rest.trim_start();
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+fn wrap_count(text: &str, width: usize) -> usize {
+    wrap_text_cells(text, width).len()
 }
 
 fn card_status(task: &Task, is_ready: bool) -> CardStatus {

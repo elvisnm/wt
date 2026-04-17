@@ -157,6 +157,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, debug: bool) 
             app.check_pending_create();
             app.check_pending_build();
             app.check_pending_start();
+            app.poll_dag_fetch();
 
             // Update agent states every ~1 second (30 ticks at 30fps)
             if tick % 30 == 0 {
@@ -171,7 +172,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, debug: bool) 
             if tick % 90 == 0 { app.refresh_stats(); }      // 3s
             if tick % 150 == 0 { app.refresh_status(); }     // 5s
             if tick % 150 == 0 { app.run_discovery(); }      // 5s
-            if tick % 150 == 0 && app.tasks_visible && app.tasks_detail.is_none() { app.fetch_tasks(); } // 5s, skip when in detail
+            // Periodic refresh removed: the sync bd subprocess was blocking the
+            // UI every 5s and causing perceptible lag during list navigation.
+            // Task mutations (create / edit / close / delete) trigger explicit
+            // refreshes via refresh_tasks_and_graph() instead.
             if tick % 300 == 0 && app.usage_visible { app.fetch_usage(); } // 10s
         }
 
