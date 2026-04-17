@@ -120,7 +120,7 @@ fn render_graph(
         if let Some(rect) = to_screen_rect(card.x, card.y, CARD_W, card.height as i32, vx, vy, area)
         {
             let selected = state.selected_id.as_deref() == Some(card.id.as_str());
-            draw_card(buf, rect, card, selected);
+            draw_card(area, buf, rect, card, selected, vx, vy);
         }
     }
 
@@ -147,7 +147,7 @@ fn render_graph(
     }
 }
 
-fn draw_card(buf: &mut Buffer, rect: Rect, card: &Card, selected: bool) {
+fn draw_card(area: Rect, buf: &mut Buffer, rect: Rect, card: &Card, selected: bool, vx: i32, vy: i32) {
     let status = status_color(card.status);
     let bg = if selected { SELECTED_BG } else { HEADER_BG };
 
@@ -159,11 +159,14 @@ fn draw_card(buf: &mut Buffer, rect: Rect, card: &Card, selected: bool) {
         return;
     }
 
-    // 2-column left/right internal padding; 1-row top/bottom internal padding.
-    let content_w = rect.width.saturating_sub(4) as usize;
-    let inner_x = rect.x + 2;
-    let inner_y = rect.y + 1;
-    let inner_h = rect.height.saturating_sub(2) as usize;
+    // Text is positioned in graph space and clipped per-cell via paint_text.
+    // Using rect-relative coordinates (rect.x + 2) drifts the header toward
+    // the screen edge when a card is clipped on the left, pushing the
+    // id · STATUS text past the card's visible fill.
+    let content_w = (CARD_W - 4) as usize;
+    let inner_gx = card.x + 2;
+    let inner_gy = card.y + 1;
+    let inner_h = (card.height as i32 - 2).max(0) as usize;
 
     let glyph = card.status.glyph();
     let short = crate::beads::short_id(&card.id);
@@ -173,20 +176,22 @@ fn draw_card(buf: &mut Buffer, rect: Rect, card: &Card, selected: bool) {
     // Row 0 of content: header line `{glyph} {id}·{STATUS}` — always on its
     // own row. Title never shares this line even if it would fit.
     if inner_h >= 1 {
-        let y = inner_y;
-        let mut x = inner_x;
+        let y = inner_gy;
+        let mut x = inner_gx;
 
         let g = format!("{} ", glyph);
-        buf.set_string(x, y, &g, Style::default().fg(status).bg(bg));
-        x += g.chars().count() as u16;
+        paint_text(area, buf, x, y, &g, Style::default().fg(status).bg(bg), vx, vy);
+        x += g.chars().count() as i32;
 
-        buf.set_string(x, y, short, Style::default().fg(Color::Gray).bg(bg));
-        x += short.chars().count() as u16;
+        paint_text(area, buf, x, y, short, Style::default().fg(Color::Gray).bg(bg), vx, vy);
+        x += short.chars().count() as i32;
 
-        buf.set_string(x, y, " · ", Style::default().fg(Color::Gray).bg(bg));
+        paint_text(area, buf, x, y, " · ", Style::default().fg(Color::Gray).bg(bg), vx, vy);
         x += 3;
 
-        buf.set_string(
+        paint_text(
+            area,
+            buf,
             x,
             y,
             &status_up,
@@ -194,6 +199,8 @@ fn draw_card(buf: &mut Buffer, rect: Rect, card: &Card, selected: bool) {
                 .fg(status)
                 .bg(bg)
                 .add_modifier(Modifier::BOLD),
+            vx,
+            vy,
         );
     }
 
@@ -204,8 +211,8 @@ fn draw_card(buf: &mut Buffer, rect: Rect, card: &Card, selected: bool) {
         if row >= inner_h {
             break;
         }
-        let y = inner_y + row as u16;
-        buf.set_string(inner_x, y, line_text, plain_style);
+        let y = inner_gy + row as i32;
+        paint_text(area, buf, inner_gx, y, line_text, plain_style, vx, vy);
     }
 }
 
