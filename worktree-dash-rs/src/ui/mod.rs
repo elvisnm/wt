@@ -216,7 +216,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
 
             entries.push(TabEntry {
                 label: format!("Group {}", group_num),
-                session_id: tab.session_id,
+                session_id: tab.pty_session_id().unwrap_or(0),
                 num: 0,
                 is_active,
                 is_focused: false,
@@ -252,17 +252,23 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                 seq += 1;
             }
         } else {
-            let tab_exit = app.pty_mgr.get(tab.session_id).and_then(|s| s.exit_code);
-            let tab_focused = app.focused_session_id == Some(tab.session_id) && app.terminal_focused && is_active;
+            let pty_sid = tab.pty_session_id();
+            let tab_exit = pty_sid.and_then(|id| app.pty_mgr.get(id)).and_then(|s| s.exit_code);
+            let tab_focused = pty_sid.is_some()
+                && app.focused_session_id == pty_sid
+                && app.terminal_focused
+                && is_active;
             entries.push(TabEntry {
                 label: tab.label.clone(),
-                session_id: tab.session_id,
+                session_id: pty_sid.unwrap_or(0),
                 num: seq,
                 is_active,
                 is_focused: tab_focused,
                 alive: tab.alive,
                 exit_code: tab_exit,
-                agent_state: app.agent_states.get(&tab.session_id).copied().unwrap_or(crate::detect::AgentState::Unknown),
+                agent_state: pty_sid
+                    .and_then(|id| app.agent_states.get(&id).copied())
+                    .unwrap_or(crate::detect::AgentState::Unknown),
                 is_group_head: false,
                 is_group_child: false,
                 is_last_child: false,
@@ -1145,7 +1151,7 @@ fn render_terminal_area(frame: &mut Frame, area: Rect, app: &App, overlay_active
     let active_session_id = if let Some(preview_id) = app.preview_session {
         Some(preview_id)
     } else if !app.tabs.is_empty() && app.active_tab < app.tabs.len() {
-        Some(app.tabs[app.active_tab].session_id)
+        app.tabs[app.active_tab].pty_session_id()
     } else {
         None
     };

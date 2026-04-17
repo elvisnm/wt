@@ -60,13 +60,42 @@ impl InitWizard {
     }
 }
 
+/// Kind of content rendered in a tab.
+/// Widget variants (e.g. DAG graph) are introduced in later commits.
+#[derive(Debug, Clone)]
+pub enum TabKind {
+    Pty(usize),
+}
+
 /// Tab entry — holds a single session or a split group.
 #[derive(Debug, Clone)]
 pub struct Tab {
-    pub session_id: usize,       // primary session ID
+    pub kind: TabKind,
     pub label: String,
     pub alive: bool,
-    pub split: Option<crate::pty::split::SplitNode>, // None = single session, Some = split layout
+    pub split: Option<crate::pty::split::SplitNode>,
+}
+
+impl Tab {
+    pub fn new_pty(session_id: usize, label: String) -> Self {
+        Self {
+            kind: TabKind::Pty(session_id),
+            label,
+            alive: true,
+            split: None,
+        }
+    }
+
+    /// PTY session id for this tab, or `None` for non-PTY tabs.
+    pub fn pty_session_id(&self) -> Option<usize> {
+        match self.kind {
+            TabKind::Pty(id) => Some(id),
+        }
+    }
+
+    pub fn set_pty_session_id(&mut self, id: usize) {
+        self.kind = TabKind::Pty(id);
+    }
 }
 
 pub struct App {
@@ -731,7 +760,7 @@ impl App {
         let (cols, rows) = self.terminal_area_size();
         for tab in &self.tabs {
             if tab.split.is_none() {
-                if let Some(session) = self.pty_mgr.get_mut(tab.session_id) {
+                if let Some(session) = tab.pty_session_id().and_then(|id| self.pty_mgr.get_mut(id)) {
                     let _ = session.resize(cols.saturating_sub(2), rows.saturating_sub(2));
                 }
             }
@@ -861,7 +890,7 @@ impl App {
 
             // Forward key to the focused session (specific pane in split)
             let target_sid = self.focused_session_id
-                .or_else(|| self.tabs.get(self.active_tab).map(|t| t.session_id));
+                .or_else(|| self.tabs.get(self.active_tab).and_then(|t| t.pty_session_id()));
             if let Some(sid) = target_sid {
                 if let Some(session) = self.pty_mgr.get_mut(sid) {
                     if let Some(bytes) = key_to_bytes(&key) {
@@ -1024,7 +1053,7 @@ impl App {
                             }
                             // Update tab label too
                             for tab in &mut self.tabs {
-                                if tab.session_id == sid {
+                                if tab.pty_session_id() == Some(sid) {
                                     tab.label = self.pty_mgr.get(sid).map(|s| s.label.clone()).unwrap_or_default();
                                 }
                             }
@@ -1329,7 +1358,7 @@ impl App {
                     self.focus = Panel::Terminal;
                     self.terminal_focused = true;
                     if self.focused_session_id.is_none() {
-                        self.focused_session_id = Some(self.tabs[self.active_tab].session_id);
+                        self.focused_session_id = self.tabs[self.active_tab].pty_session_id();
                     }
                 } else if !self.sidebar_hidden {
                     // Showing sidebar
@@ -1582,12 +1611,7 @@ impl App {
             rows,
         ) {
             Ok(id) => {
-                self.tabs.push(Tab {
-                    session_id: id,
-                    label,
-                    alive: true,
-                    split: None,
-                });
+                self.tabs.push(Tab::new_pty(id, label));
                 self.active_tab = self.tabs.len() - 1;
                 self.tab_cursor = self.flat_index_for_tab(self.active_tab);
                 self.focus = Panel::Terminal;
@@ -1643,7 +1667,7 @@ impl App {
             } else if split.leaf_count() == 1 {
                 let remaining_id = split.first_leaf();
                 let tab = &mut self.tabs[self.active_tab];
-                tab.session_id = remaining_id;
+                tab.set_pty_session_id(remaining_id);
                 tab.split = None;
                 if let Some(s) = self.pty_mgr.get(remaining_id) {
                     tab.label = s.label.clone();
@@ -1830,9 +1854,9 @@ impl App {
             return;
         }
 
-        let target_sid = self.split_target_session_id.take().unwrap_or(
-            self.tabs[self.active_tab].session_id
-        );
+        let target_sid = self.split_target_session_id.take()
+            .or_else(|| self.tabs[self.active_tab].pty_session_id())
+            .unwrap_or(0);
         let alias = std::mem::take(&mut self.split_target_alias);
         let cwd = std::mem::take(&mut self.split_target_dir);
 
@@ -1885,11 +1909,13 @@ impl App {
                     }
                 } else {
                     // Convert single session to split
-                    tab.split = Some(SplitNode::split(
-                        dir,
-                        SplitNode::leaf(tab.session_id),
-                        SplitNode::leaf(new_id),
-                    ));
+                    if let Some(existing_sid) = tab.pty_session_id() {
+                        tab.split = Some(SplitNode::split(
+                            dir,
+                            SplitNode::leaf(existing_sid),
+                            SplitNode::leaf(new_id),
+                        ));
+                    }
                 }
                 // Focus the new session, enter terminal mode, and resize
                 self.focused_session_id = Some(new_id);
@@ -2482,7 +2508,9 @@ impl App {
         }
 
         // Find session under cursor in flat list
-        let target_sid = self.session_id_at_cursor().unwrap_or(tab.session_id);
+        let target_sid = self.session_id_at_cursor()
+            .or_else(|| tab.pty_session_id())
+            .unwrap_or(0);
 
         // Get worktree info for the target session
         let (alias, dir) = self.pty_mgr.get(target_sid)
@@ -2543,7 +2571,7 @@ impl App {
                 }
             } else {
                 if self.tab_cursor == pos {
-                    return Some(tab.session_id);
+                    return tab.pty_session_id();
                 }
                 pos += 1;
             }
@@ -2593,7 +2621,7 @@ impl App {
             let next = ((self.active_tab as i32 + direction).rem_euclid(n as i32)) as usize;
             self.active_tab = next;
             self.tab_cursor = self.flat_index_for_tab(self.active_tab);
-            self.focused_session_id = Some(self.tabs[next].session_id);
+            self.focused_session_id = self.tabs[next].pty_session_id();
         }
     }
 
@@ -2708,7 +2736,7 @@ impl App {
                 if seq == target {
                     self.tab_cursor = flat_pos;
                     self.active_tab = tab_idx;
-                    self.focused_session_id = Some(tab.session_id);
+                    self.focused_session_id = tab.pty_session_id();
                     return;
                 }
                 flat_pos += 1;
@@ -2794,7 +2822,10 @@ impl App {
             }
         };
 
-        let session_id = self.tabs[tab_idx].session_id;
+        let session_id = match self.tabs[tab_idx].pty_session_id() {
+            Some(id) => id,
+            None => return,
+        };
         let alive = self.pty_mgr.get_mut(session_id)
             .map(|s| s.check_alive())
             .unwrap_or(false);
@@ -2821,7 +2852,7 @@ impl App {
 
         // Close tab
         let tab = self.tabs.remove(tab_idx);
-        self.pty_mgr.remove(tab.session_id);
+        if let Some(id) = tab.pty_session_id() { self.pty_mgr.remove(id); }
         if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
             self.active_tab = self.tabs.len() - 1;
         }
@@ -2865,7 +2896,10 @@ impl App {
             }
         };
 
-        let session_id = self.tabs[tab_idx].session_id;
+        let session_id = match self.tabs[tab_idx].pty_session_id() {
+            Some(id) => id,
+            None => return,
+        };
         let alive = self.pty_mgr.get_mut(session_id)
             .map(|s| s.check_alive())
             .unwrap_or(false);
@@ -2882,7 +2916,7 @@ impl App {
 
             // Close the create tab
             let tab = self.tabs.remove(tab_idx);
-            self.pty_mgr.remove(tab.session_id);
+            if let Some(id) = tab.pty_session_id() { self.pty_mgr.remove(id); }
             if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
                 self.active_tab = self.tabs.len() - 1;
             }
@@ -2916,7 +2950,7 @@ impl App {
 
         // Close failed tab
         let tab = self.tabs.remove(tab_idx);
-        self.pty_mgr.remove(tab.session_id);
+        if let Some(id) = tab.pty_session_id() { self.pty_mgr.remove(id); }
         if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
             self.active_tab = self.tabs.len() - 1;
         }
@@ -2953,7 +2987,10 @@ impl App {
             }
         };
 
-        let session_id = self.tabs[tab_idx].session_id;
+        let session_id = match self.tabs[tab_idx].pty_session_id() {
+            Some(id) => id,
+            None => return,
+        };
         let alive = self.pty_mgr.get_mut(session_id)
             .map(|s| s.check_alive())
             .unwrap_or(false);
@@ -2978,7 +3015,7 @@ impl App {
 
         // Close the build tab
         let tab = self.tabs.remove(tab_idx);
-        self.pty_mgr.remove(tab.session_id);
+        if let Some(id) = tab.pty_session_id() { self.pty_mgr.remove(id); }
         if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
             self.active_tab = self.tabs.len() - 1;
         }
@@ -3034,7 +3071,10 @@ impl App {
             }
         };
 
-        let session_id = self.tabs[tab_idx].session_id;
+        let session_id = match self.tabs[tab_idx].pty_session_id() {
+            Some(id) => id,
+            None => return,
+        };
         let alive = self.pty_mgr.get_mut(session_id)
             .map(|s| s.check_alive())
             .unwrap_or(false);
@@ -3062,7 +3102,7 @@ impl App {
 
         // Close the start tab
         let tab = self.tabs.remove(tab_idx);
-        self.pty_mgr.remove(tab.session_id);
+        if let Some(id) = tab.pty_session_id() { self.pty_mgr.remove(id); }
         if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
             self.active_tab = self.tabs.len() - 1;
         }
@@ -3104,11 +3144,13 @@ impl App {
                         }
                     }
                 }
-            } else if let Some(session) = self.pty_mgr.get(tab.session_id) {
-                if session.alive {
-                    let content = crate::detect::read_screen(&session.term());
-                    let state = crate::detect::detect_state(&content, &session.label);
-                    self.agent_states.insert(tab.session_id, state);
+            } else if let Some(sid) = tab.pty_session_id() {
+                if let Some(session) = self.pty_mgr.get(sid) {
+                    if session.alive {
+                        let content = crate::detect::read_screen(&session.term());
+                        let state = crate::detect::detect_state(&content, &session.label);
+                        self.agent_states.insert(sid, state);
+                    }
                 }
             }
         }
