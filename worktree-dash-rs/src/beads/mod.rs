@@ -524,6 +524,50 @@ impl TaskEditor {
             )
         }
     }
+
+    /// Spawn a background thread that performs the save. The editor can be
+    /// closed immediately after this returns — the UI is not blocked on the
+    /// bd subprocess. Result arrives through the returned receiver.
+    pub fn spawn_save(&self) -> mpsc::Receiver<Result<(), String>> {
+        let is_new = self.is_new;
+        let id = self.task_id.clone();
+        let title = self.title.clone();
+        let priority: u8 = self.priority.parse().unwrap_or(2);
+        let task_type = self.task_type.clone();
+        let description = self.description.clone();
+        let labels: Vec<String> = self
+            .labels
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = if title.trim().is_empty() {
+                Err("Title is required".to_string())
+            } else if is_new {
+                create_task(
+                    &title,
+                    priority,
+                    &task_type,
+                    if description.is_empty() { None } else { Some(&description) },
+                    &labels,
+                )
+            } else {
+                update_task(
+                    &id,
+                    Some(&title),
+                    Some(priority),
+                    Some(&task_type),
+                    Some(&description),
+                    Some(&labels),
+                )
+            };
+            let _ = tx.send(result);
+        });
+        rx
+    }
 }
 
 /// Create a new beads task.
@@ -565,6 +609,25 @@ pub fn create_task(
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("bd create failed: {}", stderr.trim()))
     }
+}
+
+/// Spawn a background thread that closes a task. Returns a receiver that
+/// yields the bd result when the subprocess completes.
+pub fn spawn_close(id: String) -> mpsc::Receiver<Result<(), String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(close_task(&id));
+    });
+    rx
+}
+
+/// Spawn a background thread that deletes a task.
+pub fn spawn_delete(id: String) -> mpsc::Receiver<Result<(), String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(delete_task(&id));
+    });
+    rx
 }
 
 /// Close a beads task.

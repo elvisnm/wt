@@ -158,6 +158,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, debug: bool) 
             app.check_pending_build();
             app.check_pending_start();
             app.poll_dag_fetch();
+            app.poll_mutations();
 
             // Update agent states every ~1 second (30 ticks at 30fps)
             if tick % 30 == 0 {

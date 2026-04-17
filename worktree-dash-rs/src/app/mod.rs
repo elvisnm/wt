@@ -73,6 +73,14 @@ pub enum WidgetTab {
     DagGraph(crate::ui::dag_graph::DagGraphState),
 }
 
+/// An in-flight bd mutation — one per close / delete / editor save. The
+/// main thread never blocks on the bd subprocess; the result arrives on
+/// the receiver and gets dispatched by `App::poll_mutations` on a tick.
+pub struct PendingMutation {
+    pub success_toast: String,
+    pub rx: std::sync::mpsc::Receiver<Result<(), String>>,
+}
+
 /// Tab entry — holds a single session or a split group.
 #[derive(Debug, Clone)]
 pub struct Tab {
@@ -208,6 +216,11 @@ pub struct App {
     // DAG graph tab — background fetch receiver. None when no fetch in flight.
     pub dag_fetch_rx: Option<std::sync::mpsc::Receiver<beads::TaskFetchEvent>>,
 
+    // Background bd mutations (close / delete / editor save). The main thread
+    // polls these each tick; a completed mutation fires a toast and kicks a
+    // task refresh without ever blocking on bd.
+    pub pending_mutations: Vec<PendingMutation>,
+
     // Fullscreen mode — hides left column, shows only focused session
     pub fullscreen: bool,
     // Sidebar hidden — Ctrl+B toggles left column visibility
@@ -290,6 +303,7 @@ impl App {
             tasks_search_active: false,
             task_editor: None,
             dag_fetch_rx: None,
+            pending_mutations: Vec::new(),
             toasts: Vec::new(),
             notify_state: NotifyState::Idle,
             pending_split_dir: None,
@@ -629,6 +643,49 @@ impl App {
                 state.load_error = None;
                 state.load_progress = None;
             }
+        }
+    }
+
+    /// Drain completed bd mutations once per tick. Each success fires a toast
+    /// and triggers a single `refresh_tasks_and_graph` so the list and DAG
+    /// reflect the new state; failures fire an error toast and skip the
+    /// refresh. Never blocks.
+    pub fn poll_mutations(&mut self) {
+        if self.pending_mutations.is_empty() {
+            return;
+        }
+        let mut completed: Vec<(String, Result<(), String>)> = Vec::new();
+        self.pending_mutations.retain_mut(|pm| {
+            match pm.rx.try_recv() {
+                Ok(result) => {
+                    completed.push((std::mem::take(&mut pm.success_toast), result));
+                    false
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    completed.push((
+                        std::mem::take(&mut pm.success_toast),
+                        Err("mutation thread ended unexpectedly".to_string()),
+                    ));
+                    false
+                }
+            }
+        });
+
+        let mut any_success = false;
+        for (success_toast, result) in completed {
+            match result {
+                Ok(()) => {
+                    self.push_toast("Success", &success_toast, ui::overlay::ToastKind::Success);
+                    any_success = true;
+                }
+                Err(e) => {
+                    self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
+                }
+            }
+        }
+        if any_success {
+            self.refresh_tasks_and_graph();
         }
     }
 
@@ -1272,27 +1329,18 @@ impl App {
         // ── Task editor (shown in right panel) ───────────────────
         if let Some(ref mut editor) = self.task_editor {
             match key.code {
-                // Save
+                // Save — spawn the bd write on a background thread and close
+                // the editor immediately. poll_mutations surfaces the result
+                // as a toast + refresh when the subprocess returns.
                 KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let is_new = editor.is_new;
-                    match editor.save() {
-                        Ok(()) => {
-                            self.task_editor = None;
-                            self.refresh_tasks_and_graph();
-                            if let Some(ref detail) = self.tasks_detail {
-                                let id = detail.id.clone();
-                                if let Ok(updated) = beads::fetch_detail(&id) {
-                                    self.tasks_detail = Some(updated);
-                                }
-                            }
-                            let msg = if is_new { "Task created" } else { "Task updated" };
-                            self.push_toast("Success", msg, ui::overlay::ToastKind::Success);
-                        }
-                        Err(e) => {
-                            self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
-                            self.task_editor = None;
-                        }
-                    }
+                    let rx = editor.spawn_save();
+                    self.task_editor = None;
+                    let msg = if is_new { "Task created".to_string() } else { "Task updated".to_string() };
+                    self.pending_mutations.push(PendingMutation {
+                        success_toast: msg,
+                        rx,
+                    });
                 }
                 // Cancel
                 KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1506,20 +1554,15 @@ impl App {
                 self.tasks_cursor = 0;
                 self.tasks_detail = None;
             }
-            // Tasks panel — Ctrl+E to edit task
+            // Tasks panel — Ctrl+E to edit task. Uses the cached task from
+            // tasks_list (populated by the background fetcher) so opening
+            // the editor doesn't block on a sync `bd show`.
             KeyCode::Char('e') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Edit from detail view
                 if let Some(ref task) = self.tasks_detail {
                     self.task_editor = Some(beads::TaskEditor::from_task(task));
-                } else {
-                    // Edit from list view — use selected task
-                    let indices = self.filtered_task_indices();
-                    if let Some(&real_idx) = indices.get(self.tasks_cursor) {
-                        let id = self.tasks_list[real_idx].id.clone();
-                        if let Ok(task) = beads::fetch_detail(&id) {
-                            self.task_editor = Some(beads::TaskEditor::from_task(&task));
-                        }
-                    }
+                } else if let Some(&real_idx) = self.filtered_task_indices().get(self.tasks_cursor) {
+                    let task = self.tasks_list[real_idx].clone();
+                    self.task_editor = Some(beads::TaskEditor::from_task(&task));
                 }
             }
             // Tasks panel — Ctrl+N to create new task
@@ -1560,41 +1603,23 @@ impl App {
                 }
             }
             KeyCode::Char('c') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let indices = self.filtered_task_indices();
-                if let Some(&real_idx) = indices.get(self.tasks_cursor) {
+                if let Some(&real_idx) = self.filtered_task_indices().get(self.tasks_cursor) {
                     let id = self.tasks_list[real_idx].id.clone();
-                    match beads::close_task(&id) {
-                        Ok(()) => {
-                            self.push_toast("Success", &format!("Closed task {}", id), ui::overlay::ToastKind::Success);
-                            self.refresh_tasks_and_graph();
-                            let new_len = self.filtered_task_indices().len();
-                            if self.tasks_cursor >= new_len && new_len > 0 {
-                                self.tasks_cursor = new_len - 1;
-                            }
-                        }
-                        Err(e) => {
-                            self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
-                        }
-                    }
+                    let success_toast = format!("Closed task {}", id);
+                    self.pending_mutations.push(PendingMutation {
+                        success_toast,
+                        rx: beads::spawn_close(id),
+                    });
                 }
             }
             KeyCode::Char('d') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let indices = self.filtered_task_indices();
-                if let Some(&real_idx) = indices.get(self.tasks_cursor) {
+                if let Some(&real_idx) = self.filtered_task_indices().get(self.tasks_cursor) {
                     let id = self.tasks_list[real_idx].id.clone();
-                    match beads::delete_task(&id) {
-                        Ok(()) => {
-                            self.push_toast("Success", &format!("Deleted task {}", id), ui::overlay::ToastKind::Success);
-                            self.refresh_tasks_and_graph();
-                            let new_len = self.filtered_task_indices().len();
-                            if self.tasks_cursor >= new_len && new_len > 0 {
-                                self.tasks_cursor = new_len - 1;
-                            }
-                        }
-                        Err(e) => {
-                            self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
-                        }
-                    }
+                    let success_toast = format!("Deleted task {}", id);
+                    self.pending_mutations.push(PendingMutation {
+                        success_toast,
+                        rx: beads::spawn_delete(id),
+                    });
                 }
             }
 
