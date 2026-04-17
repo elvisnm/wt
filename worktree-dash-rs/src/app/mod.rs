@@ -61,10 +61,16 @@ impl InitWizard {
 }
 
 /// Kind of content rendered in a tab.
-/// Widget variants (e.g. DAG graph) are introduced in later commits.
 #[derive(Debug, Clone)]
 pub enum TabKind {
     Pty(usize),
+    Widget(WidgetTab),
+}
+
+/// Widget tabs render Ratatui content directly instead of a PTY stream.
+#[derive(Debug, Clone)]
+pub enum WidgetTab {
+    DagGraph(crate::ui::dag_graph::DagGraphState),
 }
 
 /// Tab entry — holds a single session or a split group.
@@ -86,15 +92,43 @@ impl Tab {
         }
     }
 
-    /// PTY session id for this tab, or `None` for non-PTY tabs.
+    /// PTY session id for this tab, or `None` for non-PTY (widget) tabs.
     pub fn pty_session_id(&self) -> Option<usize> {
         match self.kind {
             TabKind::Pty(id) => Some(id),
+            TabKind::Widget(_) => None,
         }
     }
 
     pub fn set_pty_session_id(&mut self, id: usize) {
         self.kind = TabKind::Pty(id);
+    }
+
+    pub fn is_widget(&self) -> bool {
+        matches!(self.kind, TabKind::Widget(_))
+    }
+
+    pub fn new_dag_graph(label: String, state: crate::ui::dag_graph::DagGraphState) -> Self {
+        Self {
+            kind: TabKind::Widget(WidgetTab::DagGraph(state)),
+            label,
+            alive: true,
+            split: None,
+        }
+    }
+
+    pub fn dag_state_mut(&mut self) -> Option<&mut crate::ui::dag_graph::DagGraphState> {
+        match &mut self.kind {
+            TabKind::Widget(WidgetTab::DagGraph(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn dag_state(&self) -> Option<&crate::ui::dag_graph::DagGraphState> {
+        match &self.kind {
+            TabKind::Widget(WidgetTab::DagGraph(s)) => Some(s),
+            _ => None,
+        }
     }
 }
 

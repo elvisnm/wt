@@ -1,3 +1,4 @@
+pub mod dag_graph;
 pub mod guide;
 pub mod help;
 mod layout;
@@ -1156,9 +1157,28 @@ fn render_terminal_area(frame: &mut Frame, area: Rect, app: &App, overlay_active
         None
     };
 
-    // Check if active tab has a split layout
+    // Check if active tab is a widget (e.g. DAG graph) or has a split layout.
     if !app.tabs.is_empty() && app.active_tab < app.tabs.len() {
         let tab = &app.tabs[app.active_tab];
+
+        if let Some(dag_state) = tab.dag_state() {
+            if focused && area.width > 0 {
+                let indicator_x = area.x + area.width - 1;
+                let buf = frame.buffer_mut();
+                if area.y < buf.area().height && indicator_x < buf.area().width {
+                    buf[(indicator_x, area.y)].set_symbol("◥");
+                    buf[(indicator_x, area.y)].set_style(Style::default().fg(FOCUS_BORDER_COLOR));
+                }
+            }
+            let widget_area = Rect::new(
+                area.x,
+                area.y + 1,
+                area.width,
+                area.height.saturating_sub(1),
+            );
+            dag_graph::render(widget_area, frame.buffer_mut(), dag_state, app.spin_frame);
+            return;
+        }
 
         if let Some(ref split) = tab.split {
             render_split_node(frame, area, split, &app.pty_mgr, border_color, app.focused_session_id, focused);
