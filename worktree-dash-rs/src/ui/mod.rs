@@ -1044,9 +1044,8 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
                 .tabs
                 .iter()
                 .find_map(|t| t.dag_state())
-                .and_then(|s| s.layout.as_ref())
-                .and_then(|l| l.cards.iter().find(|c| c.id == task.id))
-                .map(|c| c.status.color())
+                .and_then(|s| s.status_by_id.get(&task.id).copied())
+                .map(|s| s.color())
                 .unwrap_or_else(|| {
                     crate::ui::dag_graph::layout::status_from_raw(&task.status).color()
                 });

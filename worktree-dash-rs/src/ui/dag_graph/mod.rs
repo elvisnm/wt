@@ -14,6 +14,7 @@ pub use layout::GraphLayout;
 pub use render::render;
 
 use ratatui::layout::Rect;
+use std::collections::HashMap;
 
 /// Per-tab state for a DAG graph widget tab.
 #[derive(Debug, Clone, Default)]
@@ -41,6 +42,10 @@ pub struct DagGraphState {
     pub viewport: (i32, i32),
     /// Rects populated each render so a future mouse handler can hit-test cards.
     pub card_rects: Vec<(String, Rect)>,
+    /// Fast `id -> CardStatus` lookup so the task list panel can color each
+    /// id without scanning the card list every frame. Rebuilt alongside
+    /// `layout` when a fetch completes.
+    pub status_by_id: HashMap<String, layout::CardStatus>,
 }
 
 impl DagGraphState {

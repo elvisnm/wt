@@ -666,6 +666,11 @@ impl App {
                     }
                     TaskFetchEvent::Complete { tasks, deps: _ } => {
                         let layout = crate::ui::dag_graph::layout::compute_layout(&tasks);
+                        state.status_by_id = layout
+                            .cards
+                            .iter()
+                            .map(|c| (c.id.clone(), c.status))
+                            .collect();
                         state.layout = Some(layout);
                         state.tasks = tasks;
                         state.loading = false;
@@ -703,9 +708,8 @@ impl App {
             return;
         };
         let selected_id = self
-            .filtered_task_indices()
-            .get(self.tasks_cursor)
-            .and_then(|&i| self.tasks_list.get(i))
+            .filtered_task_at(self.tasks_cursor)
+            .and_then(|i| self.tasks_list.get(i))
             .map(|t| t.id.clone());
 
         let changed = {
@@ -773,6 +777,33 @@ impl App {
         }
 
         state.viewport = (vx, vy);
+    }
+
+    /// Resolve the Nth filtered task index without allocating a `Vec<usize>`.
+    /// Hot path — called every tick by the DAG sync.
+    pub fn filtered_task_at(&self, n: usize) -> Option<usize> {
+        match &self.tasks_search {
+            Some(q) if !q.is_empty() => {
+                let lower = q.to_lowercase();
+                self.tasks_list
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| {
+                        t.title.to_lowercase().contains(&lower)
+                            || t.id.to_lowercase().contains(&lower)
+                            || t.labels.iter().any(|l| l.to_lowercase().contains(&lower))
+                    })
+                    .map(|(i, _)| i)
+                    .nth(n)
+            }
+            _ => {
+                if n < self.tasks_list.len() {
+                    Some(n)
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     /// Return indices into `tasks_list` that match the current search filter.
