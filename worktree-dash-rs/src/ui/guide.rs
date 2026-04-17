@@ -73,7 +73,7 @@ pub fn render_guide(frame: &mut Frame, area: Rect) {
             box_line(col_w, b, vec![s("  ", d), s("Shift+L", k), s("  LAN mode   ", d), s("Shift+U", k), s("  usage", d)]),
         ),
         (box_empty(col_w, b),
-            box_line(col_w, b, vec![s("  ", d), s("Shift+T", k), s("  tasks      ", d), s("Shift+M", k), s("  maint.", d)]),
+            box_line(col_w, b, vec![s("  ", d), s("Shift+T", k), s("  tasks+DAG  ", d), s("Shift+M", k), s("  maint.", d)]),
         ),
         (
             box_line(col_w, b, vec![s("    ", d), s("Ctrl+]", k), s("    return to dashboard", d)]),
