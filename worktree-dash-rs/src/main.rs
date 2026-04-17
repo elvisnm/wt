@@ -28,12 +28,28 @@ use std::io::stdout;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub fn version_label() -> String {
-    if VERSION == "0.1.0" {
-        "Version (dev) - by @elvisnm".to_string()
+pub fn is_dev_build() -> bool {
+    std::env::args()
+        .next()
+        .and_then(|a| {
+            std::path::Path::new(&a)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .map(|n| n.contains("wt-dev"))
+        .unwrap_or(false)
+}
+
+pub fn version_string() -> String {
+    if is_dev_build() {
+        format!("{}+dev", VERSION)
     } else {
-        format!("Version {} - by @elvisnm", VERSION)
+        VERSION.to_string()
     }
+}
+
+pub fn version_label() -> String {
+    format!("Version {} - by @elvisnm", version_string())
 }
 
 fn main() -> Result<()> {
@@ -42,7 +58,7 @@ fn main() -> Result<()> {
 
     // Handle --version
     if args.iter().any(|a| a == "--version" || a == "version") {
-        println!("wt {}", VERSION);
+        println!("wt {}", version_string());
         return Ok(());
     }
 
