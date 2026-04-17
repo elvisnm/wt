@@ -1,4 +1,6 @@
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::mpsc;
 
 /// A beads task from `bd list --json`.
 #[derive(Debug, Clone, Deserialize)]
@@ -20,12 +22,29 @@ pub struct Task {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    #[serde(default)]
+    pub dependency_count: u32,
+    #[serde(default)]
+    pub dependent_count: u32,
+    /// Populated out-of-band via `fetch_dependencies`; empty on fresh fetch.
+    #[serde(default, skip_deserializing)]
+    pub dependencies: Vec<String>,
 }
 
-/// Fetch open beads tasks via `bd list --json --status=open`.
+/// Fetch open beads tasks for the tasks list panel.
+/// Uses --status=open to keep the list focused on actionable work.
 pub fn fetch_tasks() -> Result<Vec<Task>, String> {
+    run_list(&["list", "--json", "--status=open", "--limit", "50"])
+}
+
+/// Fetch all beads tasks (any status, unlimited) for the DAG graph.
+pub fn fetch_all_tasks() -> Result<Vec<Task>, String> {
+    run_list(&["list", "--json", "--all", "--limit", "0"])
+}
+
+fn run_list(args: &[&str]) -> Result<Vec<Task>, String> {
     let output = std::process::Command::new("bd")
-        .args(["list", "--json", "--status=open", "--limit", "50"])
+        .args(args)
         .output()
         .map_err(|e| crate::cmd::friendly_cmd_error("bd", &e))?;
 
@@ -36,6 +55,91 @@ pub fn fetch_tasks() -> Result<Vec<Task>, String> {
 
     serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("failed to parse tasks: {}", e))
+}
+
+/// Fetch the direct dependencies of a single task (issues it depends on).
+/// Returns the list of blocker ids via `bd dep list <id> --json`.
+pub fn fetch_dependencies(id: &str) -> Result<Vec<String>, String> {
+    #[derive(Deserialize)]
+    struct DepEntry {
+        id: String,
+    }
+
+    let output = std::process::Command::new("bd")
+        .args(["dep", "list", id, "--json"])
+        .output()
+        .map_err(|e| crate::cmd::friendly_cmd_error("bd", &e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("bd dep list failed: {}", stderr.trim()));
+    }
+
+    let entries: Vec<DepEntry> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("failed to parse deps: {}", e))?;
+    Ok(entries.into_iter().map(|e| e.id).collect())
+}
+
+/// Events emitted by the background task+deps fetcher.
+/// DAG renderers poll the receiver once per tick.
+#[derive(Debug, Clone)]
+pub enum TaskFetchEvent {
+    /// Task list loaded; deps still fetching.
+    ListLoaded(Vec<Task>),
+    /// Dep fetch progress. `total` counts only tasks with dependency_count > 0.
+    DepsProgress { done: usize, total: usize },
+    /// Everything loaded. `tasks` carries the final list with `dependencies` populated.
+    Complete {
+        tasks: Vec<Task>,
+        deps: HashMap<String, Vec<String>>,
+    },
+    /// Fatal error during list or dep fetch.
+    Error(String),
+}
+
+/// Spawn a background thread that fetches the full task list plus each task's
+/// dependencies. Progress is streamed through the returned receiver so the UI
+/// can animate a spinner while the N+1 `bd dep list` calls run.
+pub fn spawn_fetch_with_deps() -> mpsc::Receiver<TaskFetchEvent> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let tasks = match fetch_all_tasks() {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = tx.send(TaskFetchEvent::Error(e));
+                return;
+            }
+        };
+        let _ = tx.send(TaskFetchEvent::ListLoaded(tasks.clone()));
+
+        let needs_deps: Vec<&Task> = tasks.iter().filter(|t| t.dependency_count > 0).collect();
+        let total = needs_deps.len();
+        let mut deps_map: HashMap<String, Vec<String>> = HashMap::new();
+
+        for (i, task) in needs_deps.iter().enumerate() {
+            let deps = fetch_dependencies(&task.id).unwrap_or_default();
+            if !deps.is_empty() {
+                deps_map.insert(task.id.clone(), deps);
+            }
+            let _ = tx.send(TaskFetchEvent::DepsProgress {
+                done: i + 1,
+                total,
+            });
+        }
+
+        let mut tasks = tasks;
+        for t in tasks.iter_mut() {
+            if let Some(d) = deps_map.get(&t.id) {
+                t.dependencies = d.clone();
+            }
+        }
+
+        let _ = tx.send(TaskFetchEvent::Complete {
+            tasks,
+            deps: deps_map,
+        });
+    });
+    rx
 }
 
 /// Fetch task detail.
