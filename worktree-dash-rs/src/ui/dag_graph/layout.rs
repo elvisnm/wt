@@ -1,20 +1,31 @@
 //! DAG layout engine — pure, testable.
 //!
-//! Assigns each task a (rank, row) in the graph based on longest-path
-//! topological depth + within-rank ordering by priority, status, and id.
-//! Also computes each card's graph-space y position and height so card
-//! contents (`{glyph} ({id}) [{STATUS}] title`) can wrap across as many
-//! lines as the title needs without breaking edge routing.
+//! Each priority level gets its own vertical column in the graph. Within a
+//! column, connected components stack vertically and each component lays
+//! out its cards by longest-path rank + within-rank order (priority, list
+//! position, id). Cards store absolute graph-space `(x, y)` so the renderer
+//! never has to re-derive a position from the rank index.
 
-use crate::beads::{short_id, Task};
-use std::collections::HashMap;
+use crate::beads::Task;
+use std::collections::{BTreeMap, HashMap};
 
 /// Card width in cells (fixed). Content area = `CARD_W - 2`.
 pub const CARD_W: i32 = 22;
 /// Horizontal gap between ranks.
-pub const RANK_GAP: i32 = 4;
+pub const RANK_GAP: i32 = 14;
 /// Vertical gap between cards within a rank.
-pub const ROW_GAP: i32 = 1;
+pub const ROW_GAP: i32 = 5;
+/// Empty rows between two components stacked inside the same priority column.
+pub const COMPONENT_GAP: i32 = 4;
+/// Rows reserved above the first card of each priority column for the title:
+///   row 0: empty (breathing room)
+///   row 1: "Tasks group - Priority N ─────" header
+///   row 2: empty (separates header from the first card)
+pub const COMPONENT_TOP_PAD: i32 = 3;
+/// Empty row under a component's last card before the next component starts.
+pub const COMPONENT_BOTTOM_PAD: i32 = 1;
+/// Empty cols between two adjacent priority columns.
+pub const COLUMN_GAP: i32 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardStatus {
@@ -79,10 +90,16 @@ pub struct Card {
     pub status: CardStatus,
     pub rank: usize,
     pub row: usize,
+    /// Graph-space x coordinate (left edge), absolute across priority columns.
+    pub x: i32,
     /// Graph-space y coordinate (top edge).
     pub y: i32,
     /// Card height in cells, sized to fit the wrapped content.
     pub height: u16,
+    /// Original order in the beads list. Used as the secondary sort key
+    /// within a rank so the user's list order controls vertical placement
+    /// for same-priority tasks.
+    pub list_order: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -91,12 +108,24 @@ pub struct Edge {
     pub to: usize,   // card index of dependent (later rank)
 }
 
+/// One vertical column in the graph, dedicated to a single priority level.
+/// The header row (`Tasks group - Priority N ───`) is painted inside the
+/// column's width starting at `x`.
+#[derive(Debug, Clone)]
+pub struct PriorityColumn {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub priority: u8,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GraphLayout {
     pub cards: Vec<Card>,
     pub edges: Vec<Edge>,
     pub rank_count: usize,
     pub rows_per_rank: Vec<usize>,
+    pub priority_columns: Vec<PriorityColumn>,
 }
 
 pub fn compute_layout(tasks: &[Task]) -> GraphLayout {
@@ -117,12 +146,13 @@ pub fn compute_layout(tasks: &[Task]) -> GraphLayout {
     }
     let ranks: Vec<usize> = ranks.into_iter().map(|r| r.unwrap_or(0)).collect();
 
+    // A task is "ready" when every one of its blockers is closed. Applies to
+    // any bd status, not just "open" — if a task is manually marked blocked
+    // but its blockers have since been closed, we surface it as ready
+    // because the dependency graph says it can proceed.
     let is_ready: Vec<bool> = tasks
         .iter()
         .map(|t| {
-            if t.status != "open" {
-                return false;
-            }
             t.dependencies.iter().all(|dep_id| {
                 id_to_idx
                     .get(dep_id.as_str())
@@ -132,67 +162,174 @@ pub fn compute_layout(tasks: &[Task]) -> GraphLayout {
         })
         .collect();
 
-    let rank_count = ranks.iter().max().copied().unwrap_or(0) + 1;
-    let mut by_rank: Vec<Vec<usize>> = vec![Vec::new(); rank_count];
-    for (i, &r) in ranks.iter().enumerate() {
-        by_rank[r].push(i);
+    // Connected components via dependency graph (undirected).
+    let components = compute_components(tasks, &id_to_idx);
+
+    // Group components by the highest-priority (lowest number) task they
+    // contain. Each group shares one vertical column in the graph.
+    let mut by_priority: BTreeMap<u8, Vec<Vec<usize>>> = BTreeMap::new();
+    for comp in components {
+        let pri = comp
+            .iter()
+            .map(|&i| priority_of(&tasks[i]))
+            .min()
+            .unwrap_or(u8::MAX);
+        by_priority.entry(pri).or_default().push(comp);
     }
-    for rank_items in by_rank.iter_mut() {
-        rank_items.sort_by(|&a, &b| {
-            let ta = &tasks[a];
-            let tb = &tasks[b];
-            priority_of(ta)
-                .cmp(&priority_of(tb))
-                .then_with(|| status_sort_key(ta).cmp(&status_sort_key(tb)))
-                .then_with(|| ta.id.cmp(&tb.id))
-        });
+    // Stable component order inside each priority column.
+    for comps in by_priority.values_mut() {
+        comps.sort_by_key(|comp| comp.iter().min().copied().unwrap_or(usize::MAX));
     }
 
     let mut cards: Vec<Card> = Vec::with_capacity(tasks.len());
     let mut card_idx_for_task: Vec<usize> = vec![usize::MAX; tasks.len()];
-    for (rank, rank_items) in by_rank.iter().enumerate() {
-        let mut rank_y: i32 = 0;
-        for (row, &task_idx) in rank_items.iter().enumerate() {
-            card_idx_for_task[task_idx] = cards.len();
-            let t = &tasks[task_idx];
-            let status = card_status(t, is_ready[task_idx]);
-            let pri = priority_of(t);
-            let height = card_height(&t.id, &t.title, status);
-            cards.push(Card {
-                id: t.id.clone(),
-                title: t.title.clone(),
-                priority: pri,
-                status,
-                rank,
-                row,
-                y: rank_y,
-                height,
-            });
-            rank_y += height as i32 + ROW_GAP;
+    let mut priority_columns: Vec<PriorityColumn> = Vec::new();
+    let mut x_offset: i32 = 0;
+    let mut max_rank_count: usize = 0;
+
+    for (priority, comps) in by_priority.iter() {
+        // Column width = widest component in this priority (in ranks).
+        let max_ranks_in_col = comps
+            .iter()
+            .map(|comp| comp.iter().map(|&i| ranks[i]).max().unwrap_or(0) + 1)
+            .max()
+            .unwrap_or(1);
+        let col_width = max_ranks_in_col as i32 * (CARD_W + RANK_GAP) - RANK_GAP;
+        max_rank_count = max_rank_count.max(max_ranks_in_col);
+
+        priority_columns.push(PriorityColumn {
+            x: x_offset,
+            y: 0,
+            width: col_width,
+            priority: *priority,
+        });
+
+        // Components in this column stack downwards starting just below the
+        // column header. Each component uses rank 0 at `x_offset`.
+        let mut y_cursor: i32 = COMPONENT_TOP_PAD;
+        for comp in comps {
+            let comp_rank_count = comp.iter().map(|&i| ranks[i]).max().unwrap_or(0) + 1;
+
+            let mut by_rank: Vec<Vec<usize>> = vec![Vec::new(); comp_rank_count];
+            for &i in comp {
+                by_rank[ranks[i]].push(i);
+            }
+            for rank_items in by_rank.iter_mut() {
+                rank_items.sort_by(|&a, &b| {
+                    priority_of(&tasks[a])
+                        .cmp(&priority_of(&tasks[b]))
+                        .then_with(|| a.cmp(&b))
+                        .then_with(|| tasks[a].id.cmp(&tasks[b].id))
+                });
+            }
+
+            let mut rank_y: Vec<i32> = vec![y_cursor; comp_rank_count];
+            let mut comp_bottom_y: i32 = y_cursor;
+
+            for (rank, rank_items) in by_rank.iter().enumerate() {
+                for (row, &task_idx) in rank_items.iter().enumerate() {
+                    let t = &tasks[task_idx];
+                    let status = card_status(t, is_ready[task_idx]);
+                    let pri = priority_of(t);
+                    let height = card_height(&t.id, &t.title, status);
+
+                    let card_x = x_offset + rank as i32 * (CARD_W + RANK_GAP);
+
+                    card_idx_for_task[task_idx] = cards.len();
+                    cards.push(Card {
+                        id: t.id.clone(),
+                        title: t.title.clone(),
+                        priority: pri,
+                        status,
+                        rank,
+                        row,
+                        x: card_x,
+                        y: rank_y[rank],
+                        height,
+                        list_order: task_idx,
+                    });
+
+                    comp_bottom_y = comp_bottom_y.max(rank_y[rank] + height as i32);
+                    rank_y[rank] += height as i32 + ROW_GAP;
+                }
+            }
+
+            // Next component in this column starts below the bottom pad +
+            // inter-component gap.
+            y_cursor = comp_bottom_y + COMPONENT_BOTTOM_PAD + COMPONENT_GAP;
         }
+
+        x_offset += col_width + COLUMN_GAP;
     }
 
     let mut edges: Vec<Edge> = Vec::new();
     for (i, task) in tasks.iter().enumerate() {
         let dependent_card = card_idx_for_task[i];
+        if dependent_card == usize::MAX {
+            continue;
+        }
         for dep_id in &task.dependencies {
             if let Some(&blocker_task_idx) = id_to_idx.get(dep_id.as_str()) {
                 let blocker_card = card_idx_for_task[blocker_task_idx];
-                edges.push(Edge {
-                    from: blocker_card,
-                    to: dependent_card,
-                });
+                if blocker_card != usize::MAX {
+                    edges.push(Edge {
+                        from: blocker_card,
+                        to: dependent_card,
+                    });
+                }
             }
         }
     }
 
-    let rows_per_rank: Vec<usize> = by_rank.iter().map(|v| v.len()).collect();
     GraphLayout {
         cards,
         edges,
-        rank_count,
-        rows_per_rank,
+        rank_count: max_rank_count,
+        rows_per_rank: vec![0; max_rank_count],
+        priority_columns,
     }
+}
+
+/// Union-find over the dependency graph (treated undirected). Two tasks
+/// belong to the same component when there is a chain of dependencies
+/// connecting them in either direction.
+fn compute_components(tasks: &[Task], id_to_idx: &HashMap<&str, usize>) -> Vec<Vec<usize>> {
+    let n = tasks.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        let mut root = x;
+        while parent[root] != root {
+            root = parent[root];
+        }
+        // Path compression.
+        let mut cur = x;
+        while parent[cur] != root {
+            let next = parent[cur];
+            parent[cur] = root;
+            cur = next;
+        }
+        root
+    }
+
+    for (i, task) in tasks.iter().enumerate() {
+        for dep_id in &task.dependencies {
+            if let Some(&dep_idx) = id_to_idx.get(dep_id.as_str()) {
+                let ri = find(&mut parent, i);
+                let rd = find(&mut parent, dep_idx);
+                if ri != rd {
+                    parent[ri] = rd;
+                }
+            }
+        }
+    }
+
+    let mut components: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..n {
+        let root = find(&mut parent, i);
+        components.entry(root).or_default().push(i);
+    }
+    components.into_values().collect()
 }
 
 fn compute_rank(
@@ -250,28 +387,19 @@ fn status_sort_key(task: &Task) -> u8 {
     }
 }
 
-/// Combined card content as it will be rendered: `{glyph} ({id}) [{STATUS}] {title}`.
-/// Used for sizing and for the rendered text.
-pub fn card_text(id: &str, title: &str, status: CardStatus) -> String {
-    format!(
-        "{} ({}) [{}] {}",
-        status.glyph(),
-        short_id(id),
-        status.label().to_uppercase(),
-        title,
-    )
-}
-
 /// Content width inside a card after the internal left/right padding columns.
 pub const CARD_CONTENT_W: i32 = CARD_W - 4;
 
-/// Compute a card's height in cells so the wrapped content fits with a 1-line
-/// top/bottom padding. Horizontal padding is 2 cols on each side.
-pub fn card_height(id: &str, title: &str, status: CardStatus) -> u16 {
-    let text = card_text(id, title, status);
+/// Compute a card's height in cells. Layout is:
+///   row 0:   empty (top padding)
+///   row 1:   header (`{glyph} {id}·{STATUS}`)
+///   row 2..: wrapped title
+///   last:    empty (bottom padding)
+/// So height = 1 top pad + 1 header + N title lines + 1 bottom pad.
+pub fn card_height(_id: &str, title: &str, _status: CardStatus) -> u16 {
     let content_w = CARD_CONTENT_W.max(1) as usize;
-    let lines = wrap_count(&text, content_w).max(1);
-    (lines + 2).max(3) as u16
+    let title_lines = wrap_count(title, content_w).max(1);
+    (title_lines + 3) as u16
 }
 
 /// Word-wrap a single-line text at given cell width. Returns each wrapped
@@ -316,18 +444,20 @@ fn wrap_count(text: &str, width: usize) -> usize {
 }
 
 fn card_status(task: &Task, is_ready: bool) -> CardStatus {
+    // DAG status is derived from "is any blocker still open?" rather than
+    // from bd's manual status flag. `closed` → Done, `in_progress` → Active,
+    // everything else resolves to Ready (all blockers closed) or Blocked
+    // (at least one blocker still unfinished).
     match task.status.as_str() {
         "closed" | "done" => CardStatus::Done,
         "in_progress" => CardStatus::Active,
-        "blocked" => CardStatus::Blocked,
-        "open" => {
+        _ => {
             if is_ready {
                 CardStatus::Ready
             } else {
-                CardStatus::Open
+                CardStatus::Blocked
             }
         }
-        _ => CardStatus::Open,
     }
 }
 

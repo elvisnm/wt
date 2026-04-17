@@ -788,11 +788,6 @@ impl App {
             };
             let c = state.selected_id != selected_id;
             state.selected_id = selected_id;
-            if c {
-                // Any selection change resets the tooltip to the normal view —
-                // expanded state is ephemeral and tied to the current selection.
-                state.tooltip_expanded = false;
-            }
             c
         };
 
@@ -806,14 +801,19 @@ impl App {
     /// render pass owns the real area size; good enough for keeping
     /// navigation smooth.
     fn pan_to_selected(&mut self) {
-        use crate::ui::dag_graph::layout::{CARD_W, RANK_GAP};
+        use crate::ui::dag_graph::layout::CARD_W;
 
         if self.last_frame_width == 0 || self.last_frame_height == 0 {
             return;
         }
-        let graph_w = ((self.last_frame_width as i32) * 78 / 100).max(20);
+        // Slightly conservative graph width (70% instead of 78%) so the pan
+        // over-shifts a hair if anything, guaranteeing the full tooltip fits.
+        let graph_w = ((self.last_frame_width as i32) * 70 / 100).max(20);
         let graph_h = (self.last_frame_height as i32 - 3).max(10);
-        let tooltip_w = ((graph_w as u32) * 30 / 100).clamp(24, 40) as i32;
+        // Match the renderer's tooltip sizing (45% of graph area, clamped
+        // [30, 60]) — earlier this used the old collapsed-tooltip cap of 40,
+        // which is too small for the always-expanded tooltip we have now.
+        let tooltip_w = ((graph_w as u32) * 45 / 100).clamp(30, 60) as i32;
 
         let Some(dag_idx) = self.find_dag_tab_idx() else { return; };
         let Some(state) = self.tabs[dag_idx].dag_state_mut() else { return; };
@@ -821,16 +821,17 @@ impl App {
         let Some(layout) = &state.layout else { return; };
         let Some(card) = layout.cards.iter().find(|c| c.id == id) else { return; };
 
-        let card_gx = card.rank as i32 * (CARD_W + RANK_GAP);
+        let card_gx = card.x;
         let card_gy = card.y;
         let card_right = card_gx + CARD_W;
         let card_bottom = card_gy + card.height as i32;
 
         let (mut vx, mut vy) = state.viewport;
 
-        // Horizontal: try to fit card + tooltip on the right. If that pushes
-        // the card off the left, just show the card (tooltip will auto-flip).
-        let needed_right = card_right + 1 + tooltip_w;
+        // Horizontal: fit card + 1-col gap + tooltip + 3-col safety buffer on
+        // the right. The buffer covers the tail arrow + any right padding so
+        // the last task's tooltip isn't clipped.
+        let needed_right = card_right + 1 + tooltip_w + 3;
         if needed_right > vx + graph_w {
             vx = (needed_right - graph_w).min(card_gx);
         }
@@ -848,36 +849,22 @@ impl App {
         state.viewport = (vx, vy);
     }
 
-    /// Resolve the Nth filtered task index without allocating a `Vec<usize>`.
-    /// Hot path — called every tick by the DAG sync.
+    /// Resolve the Nth task index in the displayed (sorted + filtered) order.
     pub fn filtered_task_at(&self, n: usize) -> Option<usize> {
-        match &self.tasks_search {
-            Some(q) if !q.is_empty() => {
-                let lower = q.to_lowercase();
-                self.tasks_list
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, t)| {
-                        t.title.to_lowercase().contains(&lower)
-                            || t.id.to_lowercase().contains(&lower)
-                            || t.labels.iter().any(|l| l.to_lowercase().contains(&lower))
-                    })
-                    .map(|(i, _)| i)
-                    .nth(n)
-            }
-            _ => {
-                if n < self.tasks_list.len() {
-                    Some(n)
-                } else {
-                    None
-                }
-            }
-        }
+        self.filtered_task_indices().get(n).copied()
     }
 
-    /// Return indices into `tasks_list` that match the current search filter.
+    /// Return indices into `tasks_list` that match the current search filter,
+    /// sorted into the display order used by the list panel:
+    ///   - Primary: priority (P0 first, then P1, P2, …)
+    ///   - Secondary: status bucket inside that priority
+    ///     (done → active → ready → open → blocked)
+    ///   - Tertiary: DAG reading order (y top-to-bottom, x left-to-right)
+    /// Falls back to bd list order when the DAG layout isn't available yet.
     pub fn filtered_task_indices(&self) -> Vec<usize> {
-        match &self.tasks_search {
+        use crate::ui::dag_graph::layout::CardStatus;
+
+        let mut indices: Vec<usize> = match &self.tasks_search {
             Some(q) if !q.is_empty() => {
                 let lower = q.to_lowercase();
                 self.tasks_list
@@ -892,7 +879,56 @@ impl App {
                     .collect()
             }
             _ => (0..self.tasks_list.len()).collect(),
-        }
+        };
+
+        // Grab the DAG layout's card positions so sort order follows the
+        // reading order of the graph. Without layout info, fall back to bd
+        // list order.
+        let card_info: std::collections::HashMap<&str, (i32, i32, CardStatus)> = self
+            .tabs
+            .iter()
+            .find_map(|t| t.dag_state())
+            .and_then(|s| s.layout.as_ref())
+            .map(|l| {
+                l.cards
+                    .iter()
+                    .map(|c| (c.id.as_str(), (c.x, c.y, c.status)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        indices.sort_by_key(|&i| {
+            let task = &self.tasks_list[i];
+            let task_pri: u8 = match &task.priority {
+                serde_json::Value::Number(n) => n.as_u64().unwrap_or(9) as u8,
+                serde_json::Value::String(s) => s.trim_start_matches('P').parse().unwrap_or(9),
+                _ => 9,
+            };
+            let info = card_info.get(task.id.as_str()).copied();
+            match info {
+                Some((x, y, card_status)) => {
+                    let bucket: u8 = match card_status {
+                        CardStatus::Done => 0,
+                        CardStatus::Active => 1,
+                        CardStatus::Ready => 2,
+                        CardStatus::Blocked | CardStatus::Open => {
+                            // Subdivide the "pending" DAG bucket by the raw
+                            // bd status so explicitly-blocked tasks sort after
+                            // plain open-waiting tasks.
+                            if task.status == "blocked" {
+                                4
+                            } else {
+                                3
+                            }
+                        }
+                    };
+                    (task_pri, bucket, y, x, i)
+                }
+                None => (task_pri, 5u8, i32::MAX, i32::MAX, i),
+            }
+        });
+
+        indices
     }
 
     /// Refresh services for the currently selected worktree.
@@ -1575,32 +1611,11 @@ impl App {
                 self.tasks_cursor = 0;
             }
 
-            // Tasks panel — Enter expands the DAG tooltip for the selected task.
-            KeyCode::Enter if self.focus == Panel::Tasks => {
-                if let Some(idx) = self.find_dag_tab_idx() {
-                    if let Some(state) = self.tabs[idx].dag_state_mut() {
-                        if state.selected_id.is_some() {
-                            state.tooltip_expanded = true;
-                        }
-                    }
-                }
-            }
-            // Tasks panel — Esc collapses the expanded tooltip, then falls
-            // through to close any lingering task detail pane.
-            KeyCode::Esc if self.focus == Panel::Tasks => {
-                if let Some(idx) = self.find_dag_tab_idx() {
-                    if let Some(state) = self.tabs[idx].dag_state_mut() {
-                        if state.tooltip_expanded {
-                            state.tooltip_expanded = false;
-                            return;
-                        }
-                    }
-                }
-                if self.tasks_detail.is_some() {
-                    self.tasks_detail = None;
-                    self.tasks_detail_scroll = 0;
-                    self.recalc_layout();
-                }
+            // Tasks panel — Esc closes any lingering task detail pane.
+            KeyCode::Esc if self.focus == Panel::Tasks && self.tasks_detail.is_some() => {
+                self.tasks_detail = None;
+                self.tasks_detail_scroll = 0;
+                self.recalc_layout();
             }
             KeyCode::Char('c') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(&real_idx) = self.filtered_task_indices().get(self.tasks_cursor) {

@@ -1193,11 +1193,13 @@ fn render_terminal_area(frame: &mut Frame, area: Rect, app: &App, overlay_active
                     buf[(indicator_x, area.y)].set_style(Style::default().fg(FOCUS_BORDER_COLOR));
                 }
             }
+            // 1-col left padding + 1-row top padding (on top of the focus
+            // indicator row) so the DAG content doesn't hug the pane edges.
             let widget_area = Rect::new(
-                area.x,
-                area.y + 1,
-                area.width,
-                area.height.saturating_sub(1),
+                area.x + 2,
+                area.y + 2,
+                area.width.saturating_sub(2),
+                area.height.saturating_sub(2),
             );
             dag_graph::render(widget_area, frame.buffer_mut(), dag_state, app.spin_frame);
             return;
@@ -1537,7 +1539,6 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 let mut v = vec![
                     ("↑/↓", "Navigate"),
-                    ("Enter", "Detail"),
                     ("Ctrl+n", "New"),
                     ("Ctrl+e", "Edit"),
                     ("Ctrl+c", "Close"),
