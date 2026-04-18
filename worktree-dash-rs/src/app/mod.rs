@@ -743,6 +743,19 @@ impl App {
 
     /// Drain the DAG fetch channel once per tick and fold events into state.
     pub fn poll_dag_fetch(&mut self) {
+        // Re-clamp the DAG viewport every tick so the displayed origin
+        // is always a valid pan position. Without this, the user's
+        // first drag would snap the content by the halo size — the
+        // initial viewport (0, 0) may be outside the clamp range on
+        // large screens where the whole graph fits vertically.
+        if let Some(state) = self
+            .tabs
+            .iter_mut()
+            .find_map(|t| t.dag_state_mut())
+        {
+            state.clamp_viewport();
+        }
+
         use beads::TaskFetchEvent;
         let events: Vec<TaskFetchEvent> = self
             .dag_fetch_rx
@@ -1124,29 +1137,22 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(id) = hit_id {
                     self.select_dag_card(&id);
-                } else {
-                    if let Some(state) = self
-                        .tabs
-                        .get_mut(self.active_tab)
-                        .and_then(|t| t.dag_state_mut())
-                    {
-                        // Click on empty area deselects so the user can
-                        // see the whole graph without any tooltip, and
-                        // arms a pan-drag anchor. A static click clears
-                        // the tooltip; a drag also pans.
-                        state.selected_id = None;
-                        state.pan_drag = Some(PanDrag {
-                            start_col: mouse.column,
-                            start_row: mouse.row,
-                            vx0: viewport.0,
-                            vy0: viewport.1,
-                        });
-                    }
-                    // Drop the task list's highlight too so the view is
-                    // genuinely "nothing selected" everywhere. The next
-                    // arrow keypress re-enables the highlight at the
-                    // preserved tasks_cursor position.
-                    self.tasks_selected = false;
+                } else if let Some(state) = self
+                    .tabs
+                    .get_mut(self.active_tab)
+                    .and_then(|t| t.dag_state_mut())
+                {
+                    // Press on empty area arms pan-drag but does NOT
+                    // yet deselect. Whether this ends as "click to
+                    // dismiss" or "drag to pan" depends on what comes
+                    // next; we decide in the Up handler.
+                    state.pan_drag = Some(PanDrag {
+                        start_col: mouse.column,
+                        start_row: mouse.row,
+                        vx0: viewport.0,
+                        vy0: viewport.1,
+                        moved: false,
+                    });
                 }
                 true
             }
@@ -1156,29 +1162,46 @@ impl App {
                     .get_mut(self.active_tab)
                     .and_then(|t| t.dag_state_mut())
                 {
-                    if let Some(p) = state.pan_drag {
+                    if let Some(p) = state.pan_drag.as_mut() {
                         let dx = mouse.column as i32 - p.start_col as i32;
                         let dy = mouse.row as i32 - p.start_row as i32;
                         // Moving the mouse right "pulls" the canvas, so
                         // the viewport shifts left (negative vx).
                         state.viewport = (p.vx0 - dx, p.vy0 - dy);
+                        p.moved = true;
+                        state.clamp_viewport();
                         return true;
                     }
                 }
                 false
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if let Some(state) = self
+                let clicked_without_drag = if let Some(state) = self
                     .tabs
                     .get_mut(self.active_tab)
                     .and_then(|t| t.dag_state_mut())
                 {
-                    if state.pan_drag.is_some() {
-                        state.pan_drag = None;
-                        return true;
+                    if let Some(p) = state.pan_drag.take() {
+                        if !p.moved {
+                            // A press-release on empty area with no
+                            // movement: dismiss the current selection.
+                            state.selected_id = None;
+                            true
+                        } else {
+                            // Drag completed: canvas has already been
+                            // panned; keep the selection as it was.
+                            false
+                        }
+                    } else {
+                        false
                     }
+                } else {
+                    false
+                };
+                if clicked_without_drag {
+                    self.tasks_selected = false;
                 }
-                false
+                true
             }
             _ => false,
         }
@@ -1492,6 +1515,7 @@ impl App {
                         _ => false,
                     };
                     if handled {
+                        state.clamp_viewport();
                         return;
                     }
                 }
