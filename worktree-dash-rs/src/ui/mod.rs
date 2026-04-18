@@ -1023,7 +1023,7 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
         .map(|(i, &real_idx)| {
             let task = &app.tasks_list[real_idx];
             let idx = start + i;
-            let selected = idx == app.tasks_cursor;
+            let selected = app.tasks_selected && idx == app.tasks_cursor;
 
             let p = match &task.priority {
                 serde_json::Value::Number(n) => n.as_u64().unwrap_or(9),

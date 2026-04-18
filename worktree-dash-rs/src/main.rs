@@ -214,11 +214,15 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, debug: bool) 
             }
         }
 
-        // Toggle mouse capture
-        if app.terminal_focused && !mouse_enabled {
+        // Toggle mouse capture. Captures for focused PTYs (selection /
+        // scroll) and for Widget tabs like the DAG graph (click to select
+        // cards, click-drag to pan). Without this, Widget tabs would
+        // never see Drag / Up events once the cursor leaves a PTY.
+        let want_capture = app.terminal_focused || app.active_tab_is_widget();
+        if want_capture && !mouse_enabled {
             let _ = stdout().execute(crossterm::event::EnableMouseCapture);
             mouse_enabled = true;
-        } else if !app.terminal_focused && mouse_enabled {
+        } else if !want_capture && mouse_enabled {
             let _ = stdout().execute(crossterm::event::DisableMouseCapture);
             mouse_enabled = false;
         }
