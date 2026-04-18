@@ -14,6 +14,7 @@ pub use layout::GraphLayout;
 pub use render::render;
 
 use ratatui::layout::Rect;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 /// Per-tab state for a DAG graph widget tab.
@@ -35,12 +36,35 @@ pub struct DagGraphState {
     pub selected_id: Option<String>,
     /// Pan offset into graph-space in cells (`(x, y)`). `(0, 0)` shows rank 0.
     pub viewport: (i32, i32),
-    /// Rects populated each render so a future mouse handler can hit-test cards.
-    pub card_rects: Vec<(String, Rect)>,
+    /// Screen rect the DAG tab last rendered into. Read by the mouse
+    /// handler to decide whether a click lands on the graph at all.
+    /// Written inside render(); uses `Cell` so the renderer can keep its
+    /// `&DagGraphState` signature.
+    pub dag_area: Cell<Option<Rect>>,
+    /// Unclipped screen rect of each card from the last frame, paired
+    /// with its task id. Used by the mouse handler to hit-test clicks.
+    /// Stored unclipped so a card that's partially off-screen still
+    /// picks up clicks in its visible portion.
+    pub card_rects: RefCell<Vec<(String, Rect)>>,
+    /// Click-and-drag pan state. `Some` only while the left button is
+    /// held after pressing empty graph area. `(start_col, start_row,
+    /// vx0, vy0)` captures the mouse anchor and the viewport at the
+    /// moment the drag started, so each Drag event can recompute the
+    /// viewport as an absolute offset from the anchor.
+    pub pan_drag: Option<PanDrag>,
     /// Fast `id -> CardStatus` lookup so the task list panel can color each
     /// id without scanning the card list every frame. Rebuilt alongside
     /// `layout` when a fetch completes.
     pub status_by_id: HashMap<String, layout::CardStatus>,
+}
+
+/// Anchor for an in-flight click-drag pan.
+#[derive(Debug, Clone, Copy)]
+pub struct PanDrag {
+    pub start_col: u16,
+    pub start_row: u16,
+    pub vx0: i32,
+    pub vy0: i32,
 }
 
 impl DagGraphState {

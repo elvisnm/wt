@@ -206,6 +206,11 @@ pub struct App {
     pub tasks_list: Vec<beads::Task>,
     pub tasks_err: Option<String>,
     pub tasks_cursor: usize,
+    /// Whether the task list's cursor row should render as selected.
+    /// Decoupled from `tasks_cursor` so a "click away" in the DAG can
+    /// drop the list highlight while preserving the cursor position for
+    /// the next arrow press.
+    pub tasks_selected: bool,
     pub tasks_detail: Option<beads::Task>,
     pub tasks_detail_scroll: usize,
     pub tasks_detail_max_scroll: std::cell::Cell<usize>,
@@ -296,6 +301,7 @@ impl App {
             tasks_list: Vec::new(),
             tasks_err: None,
             tasks_cursor: 0,
+            tasks_selected: true,
             tasks_detail: None,
             tasks_detail_scroll: 0,
             tasks_detail_max_scroll: std::cell::Cell::new(0),
@@ -744,7 +750,11 @@ impl App {
             .map(|rx| rx.try_iter().collect())
             .unwrap_or_default();
         if events.is_empty() {
-            self.sync_dag_selection();
+            // No periodic sync from tasks_cursor to selected_id here —
+            // it used to fire every tick and kept overwriting the
+            // user's explicit "click away" deselect. selected_id is
+            // now owned by user actions only (click a card, arrow the
+            // tasks list), not by the list cursor.
             return;
         }
 
@@ -798,19 +808,42 @@ impl App {
         if finished {
             self.dag_fetch_rx = None;
         }
-        self.sync_dag_selection();
-        // Once layout lands (Complete), centre the viewport on the selected
-        // card so the first task is visible with its tooltip on open — even
-        // when the selection didn't "change" (it was pre-set by Shift+T).
+        // After a fetch completes, drop any selection that no longer
+        // points at an existing card. We don't restore selected_id from
+        // the list cursor — the DAG opens unselected by default.
+        self.prune_stale_dag_selection();
         if finished {
             self.pan_to_selected();
         }
     }
 
+    /// After a task refresh, drop `selected_id` when the card it pointed
+    /// to is gone (task closed, deleted, or filtered out). Does not set
+    /// a new selection — the DAG stays unselected until the user picks
+    /// a card explicitly.
+    fn prune_stale_dag_selection(&mut self) {
+        let Some(dag_idx) = self.find_dag_tab_idx() else {
+            return;
+        };
+        let Some(state) = self.tabs[dag_idx].dag_state_mut() else {
+            return;
+        };
+        let Some(id) = state.selected_id.clone() else { return; };
+        let still_exists = state
+            .layout
+            .as_ref()
+            .map(|l| l.cards.iter().any(|c| c.id == id))
+            .unwrap_or(false);
+        if !still_exists {
+            state.selected_id = None;
+        }
+    }
+
     /// Mirror the tasks list cursor into the DAG graph's selected_id so the
-    /// highlighted card follows the list selection. When the selection
-    /// changes, also pan the viewport so the selected card and its tooltip
-    /// are visible.
+    /// highlighted card follows the list selection. Called on user
+    /// navigation in the tasks panel so the tooltip tracks the list cursor.
+    /// No longer runs on every tick — the DAG is "unselected" by default
+    /// and only the user's explicit actions populate `selected_id`.
     pub fn sync_dag_selection(&mut self) {
         let Some(dag_idx) = self.find_dag_tab_idx() else {
             return;
@@ -1032,6 +1065,147 @@ impl App {
         }
     }
 
+    /// True when the active tab renders Ratatui content directly (e.g.
+    /// the DAG graph) instead of a PTY. Drives mouse-capture so click
+    /// and drag events reach Widget tabs too.
+    pub fn active_tab_is_widget(&self) -> bool {
+        self.tabs
+            .get(self.active_tab)
+            .map(|t| t.is_widget())
+            .unwrap_or(false)
+    }
+
+    /// Mouse routing for the DAG graph tab. Returns true when the event
+    /// was consumed so the PTY handler doesn't also react.
+    ///
+    /// - Left click on a card: select that card and pull focus to the
+    ///   tasks panel. Matches the behavior of using the arrow keys on
+    ///   the list.
+    /// - Left press on empty graph area: start a click-drag pan. Each
+    ///   subsequent Drag event recomputes the viewport from the anchor,
+    ///   giving "grab and drag the canvas" feel. Up clears the anchor.
+    /// - A press with zero drag distance leaves the viewport alone.
+    fn handle_dag_mouse(&mut self, mouse: MouseEvent) -> bool {
+        use crossterm::event::MouseButton;
+        use crate::ui::dag_graph::PanDrag;
+
+        if !self.active_tab_is_widget() {
+            return false;
+        }
+
+        // Read-only phase: area, card hits, viewport snapshot. We scope
+        // the borrow so the later &mut self access doesn't trip.
+        let (area, hit_id, viewport) = match self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|t| t.dag_state())
+        {
+            Some(state) => {
+                let Some(area) = state.dag_area.get() else {
+                    return false;
+                };
+                let in_area = rect_contains(area, mouse.column, mouse.row);
+                if !in_area {
+                    return false;
+                }
+                let hit_id = state
+                    .card_rects
+                    .borrow()
+                    .iter()
+                    .find(|(_, r)| rect_contains(*r, mouse.column, mouse.row))
+                    .map(|(id, _)| id.clone());
+                (area, hit_id, state.viewport)
+            }
+            None => return false,
+        };
+        let _ = area;
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(id) = hit_id {
+                    self.select_dag_card(&id);
+                } else {
+                    if let Some(state) = self
+                        .tabs
+                        .get_mut(self.active_tab)
+                        .and_then(|t| t.dag_state_mut())
+                    {
+                        // Click on empty area deselects so the user can
+                        // see the whole graph without any tooltip, and
+                        // arms a pan-drag anchor. A static click clears
+                        // the tooltip; a drag also pans.
+                        state.selected_id = None;
+                        state.pan_drag = Some(PanDrag {
+                            start_col: mouse.column,
+                            start_row: mouse.row,
+                            vx0: viewport.0,
+                            vy0: viewport.1,
+                        });
+                    }
+                    // Drop the task list's highlight too so the view is
+                    // genuinely "nothing selected" everywhere. The next
+                    // arrow keypress re-enables the highlight at the
+                    // preserved tasks_cursor position.
+                    self.tasks_selected = false;
+                }
+                true
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(state) = self
+                    .tabs
+                    .get_mut(self.active_tab)
+                    .and_then(|t| t.dag_state_mut())
+                {
+                    if let Some(p) = state.pan_drag {
+                        let dx = mouse.column as i32 - p.start_col as i32;
+                        let dy = mouse.row as i32 - p.start_row as i32;
+                        // Moving the mouse right "pulls" the canvas, so
+                        // the viewport shifts left (negative vx).
+                        state.viewport = (p.vx0 - dx, p.vy0 - dy);
+                        return true;
+                    }
+                }
+                false
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if let Some(state) = self
+                    .tabs
+                    .get_mut(self.active_tab)
+                    .and_then(|t| t.dag_state_mut())
+                {
+                    if state.pan_drag.is_some() {
+                        state.pan_drag = None;
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Select the card with the given id: update the DAG's selected_id,
+    /// sync tasks_cursor to the same task's filtered index, and move
+    /// keyboard focus to the tasks panel so follow-up arrow keys work.
+    fn select_dag_card(&mut self, id: &str) {
+        if let Some(state) = self
+            .tabs
+            .get_mut(self.active_tab)
+            .and_then(|t| t.dag_state_mut())
+        {
+            state.selected_id = Some(id.to_string());
+        }
+        if let Some(task_idx) = self.tasks_list.iter().position(|t| t.id == id) {
+            let filtered = self.filtered_task_indices();
+            if let Some(pos) = filtered.iter().position(|&i| i == task_idx) {
+                self.tasks_cursor = pos;
+            }
+        }
+        self.tasks_selected = true;
+        self.focus = Panel::Tasks;
+        self.terminal_focused = false;
+    }
+
     pub fn render(&self, frame: &mut Frame) {
         let _t = crate::perf::timed("app.render", 10_000);
         if !self.discovered {
@@ -1042,6 +1216,13 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        // Widget tabs (e.g. the DAG graph) get first crack at mouse
+        // events. If the handler consumes the event we stop here so the
+        // PTY path below doesn't also react to it.
+        if self.handle_dag_mouse(mouse) {
+            return;
+        }
+
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 if self.terminal_focused {
@@ -1594,8 +1775,13 @@ impl App {
                     // open_dag_tab kicks the async fetch that populates both
                     // tasks_list (via ListLoaded) and the DAG (via Complete).
                     // No sync bd call on the main thread.
+                    // The graph opens with no card selected — the tooltip
+                    // only appears after the user clicks a card or starts
+                    // arrow-navigating the task list. Drop the list
+                    // highlight too so the initial view is genuinely
+                    // "nothing selected everywhere".
                     self.open_dag_tab();
-                    self.sync_dag_selection();
+                    self.tasks_selected = false;
                     self.focus = Panel::Tasks;
                 } else {
                     self.close_dag_tab();
@@ -3086,8 +3272,24 @@ impl App {
                 } else {
                     let filtered_len = self.filtered_task_indices().len();
                     if filtered_len > 0 {
-                        let new = self.tasks_cursor as i32 + delta as i32;
-                        self.tasks_cursor = new.rem_euclid(filtered_len as i32) as usize;
+                        let was_selected = self.tasks_selected;
+                        let prev = self.tasks_cursor;
+                        if was_selected {
+                            // Normal step: advance cursor and wrap.
+                            let new = self.tasks_cursor as i32 + delta as i32;
+                            self.tasks_cursor = new.rem_euclid(filtered_len as i32) as usize;
+                        }
+                        // Deselected state: the first arrow re-enables
+                        // the highlight at the preserved cursor position
+                        // without jumping. Subsequent arrows step as usual.
+                        self.tasks_selected = true;
+                        // Arrowing the list carries the selection on the
+                        // DAG graph along with it, so the tooltip follows
+                        // the cursor. A pure keyboard workflow never
+                        // needs to touch the mouse.
+                        if !was_selected || self.tasks_cursor != prev {
+                            self.sync_dag_selection();
+                        }
                     }
                 }
             }
@@ -3613,6 +3815,16 @@ impl App {
 }
 
 /// Convert mouse screen coordinates to terminal grid point.
+/// Half-open rect hit-test. `Rect` uses u16 + width/height, so the
+/// right / bottom edges are exclusive — row == rect.y + rect.height is
+/// the first row *after* the rect.
+fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
+    col >= rect.x
+        && col < rect.x + rect.width
+        && row >= rect.y
+        && row < rect.y + rect.height
+}
+
 fn mouse_to_point(col: u16, row: u16, app: &App) -> alacritty_terminal::index::Point {
     // Subtract the left panel width and terminal border
     let left_w = if app.fullscreen { 0 } else {

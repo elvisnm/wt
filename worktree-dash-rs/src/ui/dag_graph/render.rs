@@ -22,9 +22,15 @@ const SELECTED_BG: Color = Color::Indexed(238);
 const SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
 
 /// Public entry. Called once per frame when the active tab is a DAG widget.
-/// Card rects for mouse hit-testing are a future feature; this render pass
-/// does not populate `DagGraphState::card_rects`.
+/// Caches the panel's screen rect into `state.dag_area` every frame so
+/// the mouse handler can check whether a click lands on the graph.
 pub fn render(area: Rect, buf: &mut Buffer, state: &DagGraphState, spin_frame: usize) {
+    state.dag_area.set(Some(area));
+    // Wipe last frame's hit rects up-front; they'll be repopulated as
+    // cards paint. For loading / error / empty states we leave the
+    // vector empty so the mouse handler can't match stale cards.
+    state.card_rects.borrow_mut().clear();
+
     if let Some(err) = &state.load_error {
         render_error(area, buf, err);
         return;
@@ -116,11 +122,19 @@ fn render_graph(
         draw_trunk(area, buf, layout, trunk, vx, vy);
     }
 
-    for card in &layout.cards {
-        if let Some(rect) = to_screen_rect(card.x, card.y, CARD_W, card.height as i32, vx, vy, area)
-        {
-            let selected = state.selected_id.as_deref() == Some(card.id.as_str());
-            draw_card(area, buf, rect, card, selected, vx, vy);
+    {
+        let mut rects = state.card_rects.borrow_mut();
+        rects.reserve(layout.cards.len());
+        for card in &layout.cards {
+            if let Some(rect) = to_screen_rect(card.x, card.y, CARD_W, card.height as i32, vx, vy, area)
+            {
+                let selected = state.selected_id.as_deref() == Some(card.id.as_str());
+                draw_card(area, buf, rect, card, selected, vx, vy);
+                // Record the *visible* rect — we only want clicks on
+                // actually-painted cells to hit, not on the virtual
+                // area of a card that's scrolled offscreen.
+                rects.push((card.id.clone(), rect));
+            }
         }
     }
 
