@@ -1491,6 +1491,16 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             ("Enter", "Confirm"),
             ("Esc", "Cancel"),
         ]
+    } else if app.active_tab_is_widget() {
+        // Shortcuts for the DAG graph tab. These supplement whatever
+        // the focused panel also offers; the panel-specific shortcuts
+        // are appended below through the normal focus branch.
+        vec![
+            ("h/j/k/l", "Pan"),
+            ("Ctrl+f", "Fullscreen"),
+            ("Ctrl+g", "Minimap/Legend"),
+            ("Ctrl+]", "Detach"),
+        ]
     } else {
         match app.focus {
             Panel::Worktrees => vec![

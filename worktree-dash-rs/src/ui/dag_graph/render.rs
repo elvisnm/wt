@@ -138,13 +138,15 @@ fn render_graph(
         }
     }
 
-    // Fixed legend boxes in the bottom-right. Painted before the tooltip so
-    // the tooltip always wins the z-order when it would overlap.
-    draw_legends(area, buf);
+    if state.overlays_visible {
+        // Fixed legend boxes in the bottom-right. Painted before the tooltip
+        // so the tooltip always wins the z-order when it would overlap.
+        draw_legends(area, buf);
 
-    // Minimap lives in the bottom-left, mirroring the legends on the
-    // right. Painted before the tooltip for the same z-order reason.
-    draw_minimap(area, buf, layout, vx, vy);
+        // Minimap lives in the bottom-left, mirroring the legends on the
+        // right. Painted before the tooltip for the same z-order reason.
+        draw_minimap(area, buf, layout, vx, vy);
+    }
 
     // Tooltip for the selected card, anchored next to it.
     if let Some(id) = &state.selected_id {

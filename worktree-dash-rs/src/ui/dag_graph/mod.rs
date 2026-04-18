@@ -18,7 +18,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 /// Per-tab state for a DAG graph widget tab.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DagGraphState {
     /// Final laid-out graph. `None` until the first fetch completes.
     pub layout: Option<GraphLayout>,
@@ -52,6 +52,11 @@ pub struct DagGraphState {
     /// moment the drag started, so each Drag event can recompute the
     /// viewport as an absolute offset from the anchor.
     pub pan_drag: Option<PanDrag>,
+    /// Overlay visibility. When `false` the renderer skips both the
+    /// minimap and the two legend panels so the graph gets the full
+    /// panel width. Toggled by Ctrl+G. Defaults to `true` so the
+    /// overlays appear on first open.
+    pub overlays_visible: bool,
     /// Fast `id -> CardStatus` lookup so the task list panel can color each
     /// id without scanning the card list every frame. Rebuilt alongside
     /// `layout` when a fetch completes.
@@ -73,6 +78,27 @@ pub struct PanDrag {
     pub moved: bool,
 }
 
+impl Default for DagGraphState {
+    fn default() -> Self {
+        Self {
+            layout: None,
+            tasks: Vec::new(),
+            loading: false,
+            load_progress: None,
+            load_error: None,
+            selected_id: None,
+            viewport: (0, 0),
+            dag_area: Cell::new(None),
+            card_rects: RefCell::new(Vec::new()),
+            pan_drag: None,
+            // Overlays show by default; Ctrl+G toggles them off when
+            // the user wants the graph to use the full panel width.
+            overlays_visible: true,
+            status_by_id: HashMap::new(),
+        }
+    }
+}
+
 impl DagGraphState {
     pub fn new_loading() -> Self {
         Self {
@@ -82,14 +108,20 @@ impl DagGraphState {
     }
 
     /// Clamp `viewport` so the user can't pan into empty space beyond
-    /// a small halo around the graph. Horizontal halo: 16 cells each
-    /// side; vertical halo: 4 rows each side. Past those, the graph
-    /// would scroll off-screen and the user would be staring at a
-    /// blank area — off-limits. Requires `layout` and `dag_area` to
-    /// have been populated at least once.
+    /// a small halo around the graph. Horizontal halo: 16 cells on the
+    /// left, 16 + TOOLTIP_RESERVE on the right so that a card at the
+    /// rightmost position still has room to render its tooltip (the
+    /// tooltip opens on the right side of the selected card and can
+    /// reach up to TOOLTIP_RESERVE columns). Vertical halo: 4 rows
+    /// each side. Requires `layout` and `dag_area` to have been
+    /// populated at least once.
     pub fn clamp_viewport(&mut self) {
         const PAD_X: i32 = 16;
         const PAD_Y: i32 = 4;
+        // Upper bound of the tooltip width computed by draw_tooltip
+        // (max_w_cap = 60). Reserved on the right so the tooltip for
+        // a rightmost card is never cropped.
+        const TOOLTIP_RESERVE: i32 = 60;
 
         let Some(layout) = &self.layout else { return; };
         if layout.cards.is_empty() { return; }
@@ -107,7 +139,7 @@ impl DagGraphState {
         let area_w = area.width as i32;
         let area_h = area.height as i32;
         let min_vx = -PAD_X;
-        let max_vx = (max_gx - area_w + PAD_X).max(min_vx);
+        let max_vx = (max_gx - area_w + PAD_X + TOOLTIP_RESERVE).max(min_vx);
         let min_vy = -PAD_Y;
         let max_vy = (max_gy - area_h + PAD_Y).max(min_vy);
 

@@ -1406,6 +1406,58 @@ impl App {
             return;
         }
 
+        // ── DAG Graph tab active: handle its shortcuts regardless of
+        //    panel focus, so Ctrl+F / Ctrl+G / h-j-k-l work whether
+        //    focus is on the Tasks list or on the graph itself.
+        if self.active_tab_is_widget() && !self.terminal_focused {
+            const PAN_STEP: i32 = 4;
+
+            // Ctrl+F fullscreens the active tab. For widget tabs the
+            // session id is None, which the renderer treats as "show
+            // whatever the active tab is at full width".
+            if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.fullscreen = !self.fullscreen;
+                self.fullscreen_session_id = None;
+                return;
+            }
+
+            // Ctrl+G toggles the minimap and legend overlays together.
+            if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if let Some(state) = self
+                    .tabs
+                    .get_mut(self.active_tab)
+                    .and_then(|t| t.dag_state_mut())
+                {
+                    state.overlays_visible = !state.overlays_visible;
+                }
+                return;
+            }
+
+            // h/j/k/l pan the viewport. Only fires without modifiers so
+            // Ctrl+h etc. don't accidentally trigger it.
+            if key.modifiers.is_empty() {
+                let delta = match key.code {
+                    KeyCode::Char('h') => Some((-PAN_STEP, 0)),
+                    KeyCode::Char('l') => Some((PAN_STEP, 0)),
+                    KeyCode::Char('k') => Some((0, -PAN_STEP)),
+                    KeyCode::Char('j') => Some((0, PAN_STEP)),
+                    _ => None,
+                };
+                if let Some((dx, dy)) = delta {
+                    if let Some(state) = self
+                        .tabs
+                        .get_mut(self.active_tab)
+                        .and_then(|t| t.dag_state_mut())
+                    {
+                        state.viewport.0 += dx;
+                        state.viewport.1 += dy;
+                        state.clamp_viewport();
+                    }
+                    return;
+                }
+            }
+        }
+
         // ── Terminal focused: route input to active PTY ──────────────
         if self.terminal_focused {
             // Ctrl+] to return to dashboard
@@ -1491,35 +1543,9 @@ impl App {
                 return;
             }
 
-            // Widget tab: h/j/k/l pan the viewport instead of forwarding to a PTY.
-            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                if let Some(state) = tab.dag_state_mut() {
-                    const PAN_STEP: i32 = 4;
-                    let handled = match key.code {
-                        KeyCode::Char('h') if key.modifiers.is_empty() => {
-                            state.viewport.0 -= PAN_STEP;
-                            true
-                        }
-                        KeyCode::Char('l') if key.modifiers.is_empty() => {
-                            state.viewport.0 += PAN_STEP;
-                            true
-                        }
-                        KeyCode::Char('k') if key.modifiers.is_empty() => {
-                            state.viewport.1 -= PAN_STEP;
-                            true
-                        }
-                        KeyCode::Char('j') if key.modifiers.is_empty() => {
-                            state.viewport.1 += PAN_STEP;
-                            true
-                        }
-                        _ => false,
-                    };
-                    if handled {
-                        state.clamp_viewport();
-                        return;
-                    }
-                }
-            }
+            // Widget-tab shortcuts (Ctrl+F, Ctrl+G, h/j/k/l pan) are
+            // handled at the top of handle_key so they fire regardless
+            // of terminal-focus state; nothing to do here.
 
             // Forward key to the focused session (specific pane in split)
             let target_sid = self.focused_session_id
