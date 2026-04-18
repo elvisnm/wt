@@ -1,3 +1,4 @@
+pub mod dag_graph;
 pub mod guide;
 pub mod help;
 mod layout;
@@ -216,7 +217,7 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
 
             entries.push(TabEntry {
                 label: format!("Group {}", group_num),
-                session_id: tab.session_id,
+                session_id: tab.pty_session_id().unwrap_or(0),
                 num: 0,
                 is_active,
                 is_focused: false,
@@ -252,17 +253,23 @@ fn render_tabs_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: b
                 seq += 1;
             }
         } else {
-            let tab_exit = app.pty_mgr.get(tab.session_id).and_then(|s| s.exit_code);
-            let tab_focused = app.focused_session_id == Some(tab.session_id) && app.terminal_focused && is_active;
+            let pty_sid = tab.pty_session_id();
+            let tab_exit = pty_sid.and_then(|id| app.pty_mgr.get(id)).and_then(|s| s.exit_code);
+            let tab_focused = pty_sid.is_some()
+                && app.focused_session_id == pty_sid
+                && app.terminal_focused
+                && is_active;
             entries.push(TabEntry {
                 label: tab.label.clone(),
-                session_id: tab.session_id,
+                session_id: pty_sid.unwrap_or(0),
                 num: seq,
                 is_active,
                 is_focused: tab_focused,
                 alive: tab.alive,
                 exit_code: tab_exit,
-                agent_state: app.agent_states.get(&tab.session_id).copied().unwrap_or(crate::detect::AgentState::Unknown),
+                agent_state: pty_sid
+                    .and_then(|id| app.agent_states.get(&id).copied())
+                    .unwrap_or(crate::detect::AgentState::Unknown),
                 is_group_head: false,
                 is_group_child: false,
                 is_last_child: false,
@@ -956,7 +963,7 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
 
         lines.push(Line::from(vec![
             Span::styled(format!("P{} ", p), Style::default().fg(priority_color)),
-            Span::styled(&task.id, Style::default().fg(DIM_TEXT_COLOR)),
+            Span::styled(crate::beads::short_id(&task.id).to_string(), Style::default().fg(DIM_TEXT_COLOR)),
         ]));
         lines.push(Line::from(vec![
             Span::styled("Type: ", Style::default().fg(DIM_TEXT_COLOR)),
@@ -1029,19 +1036,42 @@ fn render_tasks_panel(frame: &mut Frame, area: Rect, app: &App, overlay_active: 
                 2 => Color::Yellow,
                 _ => DIM_TEXT_COLOR,
             };
+            let short = crate::beads::short_id(&task.id);
+            // Match the id color to the DAG card status color when we have
+            // layout info (it knows about ready-vs-open); otherwise fall
+            // back to mapping the raw bd status directly.
+            let id_color = app
+                .tabs
+                .iter()
+                .find_map(|t| t.dag_state())
+                .and_then(|s| s.status_by_id.get(&task.id).copied())
+                .map(|s| s.color())
+                .unwrap_or_else(|| {
+                    crate::ui::dag_graph::layout::status_from_raw(&task.status).color()
+                });
             // prefix: " P{p} {id} " — 1 + 2 + 1 + id.len + 1
-            let prefix_len = 4 + task.id.len() + 1;
+            let prefix_len = 4 + short.len() + 1;
             let max_title = inner_w.saturating_sub(prefix_len);
 
             if selected && focused {
-                Line::from(Span::styled(
-                    format!(" P{} {} {}", p, task.id, truncate(&task.title, max_title)),
-                    Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
-                ))
+                Line::from(vec![
+                    Span::styled(
+                        format!(" P{} ", p),
+                        Style::default().fg(priority_color).bg(SELECTED_BG_COLOR).bold(),
+                    ),
+                    Span::styled(
+                        format!("{} ", short),
+                        Style::default().fg(id_color).bg(SELECTED_BG_COLOR).bold(),
+                    ),
+                    Span::styled(
+                        truncate(&task.title, max_title),
+                        Style::default().fg(Color::White).bg(SELECTED_BG_COLOR).bold(),
+                    ),
+                ])
             } else {
                 Line::from(vec![
                     Span::styled(format!(" P{} ", p), Style::default().fg(priority_color)),
-                    Span::styled(format!("{} ", task.id), Style::default().fg(DIM_TEXT_COLOR)),
+                    Span::styled(format!("{} ", short), Style::default().fg(id_color)),
                     Span::styled(truncate(&task.title, max_title), Style::default().fg(if selected { Color::White } else { DIM_TEXT_COLOR })),
                 ])
             }
@@ -1145,14 +1175,35 @@ fn render_terminal_area(frame: &mut Frame, area: Rect, app: &App, overlay_active
     let active_session_id = if let Some(preview_id) = app.preview_session {
         Some(preview_id)
     } else if !app.tabs.is_empty() && app.active_tab < app.tabs.len() {
-        Some(app.tabs[app.active_tab].session_id)
+        app.tabs[app.active_tab].pty_session_id()
     } else {
         None
     };
 
-    // Check if active tab has a split layout
+    // Check if active tab is a widget (e.g. DAG graph) or has a split layout.
     if !app.tabs.is_empty() && app.active_tab < app.tabs.len() {
         let tab = &app.tabs[app.active_tab];
+
+        if let Some(dag_state) = tab.dag_state() {
+            if focused && area.width > 0 {
+                let indicator_x = area.x + area.width - 1;
+                let buf = frame.buffer_mut();
+                if area.y < buf.area().height && indicator_x < buf.area().width {
+                    buf[(indicator_x, area.y)].set_symbol("◥");
+                    buf[(indicator_x, area.y)].set_style(Style::default().fg(FOCUS_BORDER_COLOR));
+                }
+            }
+            // 1-col left padding + 1-row top padding (on top of the focus
+            // indicator row) so the DAG content doesn't hug the pane edges.
+            let widget_area = Rect::new(
+                area.x + 2,
+                area.y + 2,
+                area.width.saturating_sub(2),
+                area.height.saturating_sub(2),
+            );
+            dag_graph::render(widget_area, frame.buffer_mut(), dag_state, app.spin_frame);
+            return;
+        }
 
         if let Some(ref split) = tab.split {
             render_split_node(frame, area, split, &app.pty_mgr, border_color, app.focused_session_id, focused);
@@ -1383,13 +1434,19 @@ fn render_task_editor(frame: &mut Frame, area: Rect, editor: &crate::beads::Task
         } else if value.is_empty() {
             lines.push(Line::from(Span::styled("  -", dim)));
         } else {
-            // Render with newlines preserved
+            // Inactive fields render their value for context. This runs on
+            // EVERY frame, so use two spans (indent + chunk) instead of a
+            // `format!` that would allocate a fresh String per chunk.
+            let wrap_w = inner_w.saturating_sub(2);
             for text_line in value.split('\n') {
                 if text_line.is_empty() {
                     lines.push(Line::from(Span::styled("  ", dim)));
                 } else {
-                    for chunk in wrap_text(text_line, inner_w.saturating_sub(2)) {
-                        lines.push(Line::from(Span::styled(format!("  {}", chunk), dim)));
+                    for chunk in wrap_text(text_line, wrap_w) {
+                        lines.push(Line::from(vec![
+                            Span::styled("  ", dim),
+                            Span::styled(chunk, dim),
+                        ]));
                     }
                 }
             }
@@ -1482,7 +1539,6 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 let mut v = vec![
                     ("↑/↓", "Navigate"),
-                    ("Enter", "Detail"),
                     ("Ctrl+n", "New"),
                     ("Ctrl+e", "Edit"),
                     ("Ctrl+c", "Close"),
@@ -1631,7 +1687,7 @@ pub fn visible_window(total: usize, cursor: usize, max_lines: usize) -> (usize, 
 }
 
 /// Word-wrap text at space boundaries to fit within a given width.
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut result = Vec::new();
     for line in text.lines() {
         if line.is_empty() {

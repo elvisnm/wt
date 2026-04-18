@@ -135,9 +135,12 @@ mod tests {
     }
 
     #[test]
-    fn service_manager_default() {
+    fn service_manager_default_is_empty() {
+        // The dashboard no longer assumes PM2 when a project doesn't
+        // declare a runtime — an empty manager means shell + tasks only,
+        // no background process probing.
         let cfg = minimal_config();
-        assert_eq!(cfg.service_manager(), "pm2");
+        assert_eq!(cfg.service_manager(), "");
     }
 
     #[test]
@@ -150,8 +153,11 @@ mod tests {
     }
 
     #[test]
-    fn docker_service_manager_fallback() {
+    fn docker_service_manager_falls_back_to_top_level() {
+        // When no docker-specific manager is set, docker_service_manager
+        // falls back to dash.services.manager — which is now empty by
+        // default, matching the explicit-opt-in policy.
         let cfg = minimal_config();
-        assert_eq!(cfg.docker_service_manager(), "pm2");
+        assert_eq!(cfg.docker_service_manager(), "");
     }
 }

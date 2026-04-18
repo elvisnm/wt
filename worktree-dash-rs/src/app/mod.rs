@@ -60,13 +60,84 @@ impl InitWizard {
     }
 }
 
+/// Kind of content rendered in a tab.
+#[derive(Debug, Clone)]
+pub enum TabKind {
+    Pty(usize),
+    Widget(WidgetTab),
+}
+
+/// Widget tabs render Ratatui content directly instead of a PTY stream.
+#[derive(Debug, Clone)]
+pub enum WidgetTab {
+    DagGraph(crate::ui::dag_graph::DagGraphState),
+}
+
+/// An in-flight bd mutation — one per close / delete / editor save. The
+/// main thread never blocks on the bd subprocess; the result arrives on
+/// the receiver and gets dispatched by `App::poll_mutations` on a tick.
+pub struct PendingMutation {
+    pub success_toast: String,
+    pub rx: std::sync::mpsc::Receiver<Result<(), String>>,
+}
+
 /// Tab entry — holds a single session or a split group.
 #[derive(Debug, Clone)]
 pub struct Tab {
-    pub session_id: usize,       // primary session ID
+    pub kind: TabKind,
     pub label: String,
     pub alive: bool,
-    pub split: Option<crate::pty::split::SplitNode>, // None = single session, Some = split layout
+    pub split: Option<crate::pty::split::SplitNode>,
+}
+
+impl Tab {
+    pub fn new_pty(session_id: usize, label: String) -> Self {
+        Self {
+            kind: TabKind::Pty(session_id),
+            label,
+            alive: true,
+            split: None,
+        }
+    }
+
+    /// PTY session id for this tab, or `None` for non-PTY (widget) tabs.
+    pub fn pty_session_id(&self) -> Option<usize> {
+        match self.kind {
+            TabKind::Pty(id) => Some(id),
+            TabKind::Widget(_) => None,
+        }
+    }
+
+    pub fn set_pty_session_id(&mut self, id: usize) {
+        self.kind = TabKind::Pty(id);
+    }
+
+    pub fn is_widget(&self) -> bool {
+        matches!(self.kind, TabKind::Widget(_))
+    }
+
+    pub fn new_dag_graph(label: String, state: crate::ui::dag_graph::DagGraphState) -> Self {
+        Self {
+            kind: TabKind::Widget(WidgetTab::DagGraph(state)),
+            label,
+            alive: true,
+            split: None,
+        }
+    }
+
+    pub fn dag_state_mut(&mut self) -> Option<&mut crate::ui::dag_graph::DagGraphState> {
+        match &mut self.kind {
+            TabKind::Widget(WidgetTab::DagGraph(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn dag_state(&self) -> Option<&crate::ui::dag_graph::DagGraphState> {
+        match &self.kind {
+            TabKind::Widget(WidgetTab::DagGraph(s)) => Some(s),
+            _ => None,
+        }
+    }
 }
 
 pub struct App {
@@ -141,6 +212,14 @@ pub struct App {
     pub tasks_search: Option<String>,
     pub tasks_search_active: bool,
     pub task_editor: Option<beads::TaskEditor>,
+
+    // DAG graph tab — background fetch receiver. None when no fetch in flight.
+    pub dag_fetch_rx: Option<std::sync::mpsc::Receiver<beads::TaskFetchEvent>>,
+
+    // Background bd mutations (close / delete / editor save). The main thread
+    // polls these each tick; a completed mutation fires a toast and kicks a
+    // task refresh without ever blocking on bd.
+    pub pending_mutations: Vec<PendingMutation>,
 
     // Fullscreen mode — hides left column, shows only focused session
     pub fullscreen: bool,
@@ -223,6 +302,8 @@ impl App {
             tasks_search: None,
             tasks_search_active: false,
             task_editor: None,
+            dag_fetch_rx: None,
+            pending_mutations: Vec::new(),
             toasts: Vec::new(),
             notify_state: NotifyState::Idle,
             pending_split_dir: None,
@@ -432,8 +513,12 @@ impl App {
 
     /// Refresh running status for all worktrees.
     pub fn refresh_status(&mut self) {
-        // Docker containers
-        docker::fetch_container_status(&mut self.worktrees, self.cfg.as_ref());
+        // Docker containers — only shell out when the project actually has
+        // a Docker worktree. Pure-local projects (stack: node, etc.) would
+        // otherwise pay 100+ms to `docker ps` for nothing.
+        if self.has_docker_worktrees() {
+            docker::fetch_container_status(&mut self.worktrees, self.cfg.as_ref());
+        }
 
         // Local worktrees: check daemon PID first, then PM2 fallback
         for wt in &mut self.worktrees {
@@ -442,18 +527,22 @@ impl App {
             }
         }
 
-        // PM2 fallback for worktrees without daemon PID
-        let mut pm2_paths: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        for wt in &self.worktrees {
-            if wt.wt_type == WorktreeType::Local && !wt.running {
-                pm2_paths.insert(wt.path.to_string_lossy().to_string(), wt.alias.clone());
-            }
-        }
-        if !pm2_paths.is_empty() {
-            let running = pm2::fetch_running_worktrees(&pm2_paths);
-            for wt in &mut self.worktrees {
+        // PM2 fallback for worktrees without daemon PID — only when the
+        // project opts into PM2. Default configs no longer imply PM2, so a
+        // project that just uses shell + tasks never probes pm2.
+        if self.has_pm2_project() {
+            let mut pm2_paths: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            for wt in &self.worktrees {
                 if wt.wt_type == WorktreeType::Local && !wt.running {
-                    wt.running = running.get(&wt.alias).copied().unwrap_or(false);
+                    pm2_paths.insert(wt.path.to_string_lossy().to_string(), wt.alias.clone());
+                }
+            }
+            if !pm2_paths.is_empty() {
+                let running = pm2::fetch_running_worktrees(&pm2_paths);
+                for wt in &mut self.worktrees {
+                    if wt.wt_type == WorktreeType::Local && !wt.running {
+                        wt.running = running.get(&wt.alias).copied().unwrap_or(false);
+                    }
                 }
             }
         }
@@ -464,22 +553,53 @@ impl App {
 
     /// Refresh CPU/memory stats via docker stats.
     pub fn refresh_stats(&mut self) {
-        docker::fetch_container_stats(&mut self.worktrees, self.cfg.as_ref());
+        // `docker stats --no-stream` does a built-in 1-second CPU sample on
+        // every invocation, so we only run it when the project actually has
+        // Docker worktrees. On pure-local projects this is the single
+        // biggest win — it eliminates a full second of main-thread blocking.
+        if self.has_docker_worktrees() {
+            docker::fetch_container_stats(&mut self.worktrees, self.cfg.as_ref());
+        }
 
-        // Local worktree stats via PM2 or devTab
-        let running_check = self.cfg.as_ref()
-            .map(|c| c.dash.services.running_check.as_str())
-            .unwrap_or("pm2");
+        // Local worktree stats via PM2 — requires explicit opt-in. Empty
+        // running_check (the new default) means no PM2 probe.
+        if self.has_pm2_project() {
+            let running_check = self.cfg.as_ref()
+                .map(|c| c.dash.services.running_check.as_str())
+                .unwrap_or("");
 
-        for wt in &mut self.worktrees {
-            if wt.wt_type == WorktreeType::Local && wt.isolated_pm2 && running_check == "pm2" {
-                let pm2_home = wt.pm2_home().to_string_lossy().to_string();
-                let (running, cpu, mem) = pm2::status_with_home(&pm2_home);
-                wt.running = running;
-                wt.cpu = cpu;
-                wt.mem = mem;
+            for wt in &mut self.worktrees {
+                if wt.wt_type == WorktreeType::Local && wt.isolated_pm2 && running_check == "pm2" {
+                    let pm2_home = wt.pm2_home().to_string_lossy().to_string();
+                    let (running, cpu, mem) = pm2::status_with_home(&pm2_home);
+                    wt.running = running;
+                    wt.cpu = cpu;
+                    wt.mem = mem;
+                }
             }
         }
+    }
+
+    fn has_docker_worktrees(&self) -> bool {
+        self.worktrees.iter().any(|w| w.wt_type == WorktreeType::Docker)
+    }
+
+    /// True when the project has explicitly opted into PM2 as its runtime.
+    /// We never probe `pm2 jlist` unless this returns true — the historical
+    /// behavior of falling back to PM2 for any `Local` worktree turned the
+    /// dashboard into an unwanted pm2 poller on projects (like plain shell
+    /// + tasks) that never installed pm2 in the first place.
+    fn has_pm2_project(&self) -> bool {
+        if self.worktrees.iter().any(|w| w.isolated_pm2) {
+            return true;
+        }
+        self.cfg
+            .as_ref()
+            .map(|c| {
+                c.dash.services.manager == "pm2"
+                    || c.dash.services.running_check == "pm2"
+            })
+            .unwrap_or(false)
     }
 
     pub fn fetch_usage(&mut self) {
@@ -506,9 +626,288 @@ impl App {
         }
     }
 
-    /// Return indices into `tasks_list` that match the current search filter.
+    /// Refresh both the tasks list and (if open) the DAG graph. Everything
+    /// runs on a background thread — `poll_dag_fetch` handles `ListLoaded`
+    /// to update `tasks_list`, and `Complete` to swap in the laid-out graph.
+    /// No bd subprocess call blocks the UI.
+    pub fn refresh_tasks_and_graph(&mut self) {
+        self.refresh_dag();
+    }
+
+    // ── DAG graph tab ──────────────────────────────────────────────
+
+    fn find_dag_tab_idx(&self) -> Option<usize> {
+        self.tabs.iter().position(|t| t.dag_state().is_some())
+    }
+
+    /// Open the DAG graph tab (focus if already present, otherwise spawn a
+    /// new tab and kick off the background fetch).
+    pub fn open_dag_tab(&mut self) {
+        use crate::ui::dag_graph::DagGraphState;
+        if let Some(idx) = self.find_dag_tab_idx() {
+            self.active_tab = idx;
+            self.tab_cursor = self.flat_index_for_tab(idx);
+            return;
+        }
+        self.tabs
+            .push(Tab::new_dag_graph("Graph".to_string(), DagGraphState::new_loading()));
+        self.active_tab = self.tabs.len() - 1;
+        self.tab_cursor = self.flat_index_for_tab(self.active_tab);
+        self.kick_dag_fetch();
+    }
+
+    pub fn close_dag_tab(&mut self) {
+        if let Some(idx) = self.find_dag_tab_idx() {
+            self.tabs.remove(idx);
+            self.dag_fetch_rx = None;
+            if !self.tabs.is_empty() && self.active_tab >= self.tabs.len() {
+                self.active_tab = self.tabs.len() - 1;
+            }
+            self.tab_cursor = if self.tabs.is_empty() {
+                0
+            } else {
+                self.flat_index_for_tab(self.active_tab)
+            };
+        }
+    }
+
+    /// Spawn (or re-spawn) the background fetcher. Keeps the existing layout
+    /// visible so refreshes don't blank the graph; only the first load with
+    /// no cached layout shows the big spinner.
+    fn kick_dag_fetch(&mut self) {
+        self.dag_fetch_rx = Some(beads::spawn_fetch_with_deps());
+        if let Some(idx) = self.find_dag_tab_idx() {
+            if let Some(state) = self.tabs[idx].dag_state_mut() {
+                state.loading = true;
+                state.load_error = None;
+                state.load_progress = None;
+            }
+        }
+    }
+
+    /// Drain completed bd mutations once per tick. Each success fires a toast
+    /// and triggers a single `refresh_tasks_and_graph` so the list and DAG
+    /// reflect the new state; failures fire an error toast and skip the
+    /// refresh. Never blocks.
+    pub fn poll_mutations(&mut self) {
+        if self.pending_mutations.is_empty() {
+            return;
+        }
+        let mut completed: Vec<(String, Result<(), String>)> = Vec::new();
+        self.pending_mutations.retain_mut(|pm| {
+            match pm.rx.try_recv() {
+                Ok(result) => {
+                    completed.push((std::mem::take(&mut pm.success_toast), result));
+                    false
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    completed.push((
+                        std::mem::take(&mut pm.success_toast),
+                        Err("mutation thread ended unexpectedly".to_string()),
+                    ));
+                    false
+                }
+            }
+        });
+
+        let mut any_success = false;
+        for (success_toast, result) in completed {
+            match result {
+                Ok(()) => {
+                    self.push_toast("Success", &success_toast, ui::overlay::ToastKind::Success);
+                    any_success = true;
+                }
+                Err(e) => {
+                    self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
+                }
+            }
+        }
+        if any_success {
+            self.refresh_tasks_and_graph();
+        }
+    }
+
+    /// Re-kick the DAG fetch if the tab is open. Cheap no-op otherwise.
+    pub fn refresh_dag(&mut self) {
+        if self.find_dag_tab_idx().is_some() {
+            self.kick_dag_fetch();
+        }
+    }
+
+    /// Drain the DAG fetch channel once per tick and fold events into state.
+    pub fn poll_dag_fetch(&mut self) {
+        use beads::TaskFetchEvent;
+        let events: Vec<TaskFetchEvent> = self
+            .dag_fetch_rx
+            .as_ref()
+            .map(|rx| rx.try_iter().collect())
+            .unwrap_or_default();
+        if events.is_empty() {
+            self.sync_dag_selection();
+            return;
+        }
+
+        let Some(dag_idx) = self.find_dag_tab_idx() else {
+            self.dag_fetch_rx = None;
+            return;
+        };
+
+        let mut finished = false;
+        for event in events {
+            match event {
+                // Populate the tasks list panel as soon as `bd list` returns,
+                // without waiting for the N+1 dep fetches.
+                TaskFetchEvent::ListLoaded(tasks) => {
+                    self.tasks_list = tasks;
+                    self.tasks_err = None;
+                }
+                TaskFetchEvent::DepsProgress { done, total } => {
+                    if let Some(state) = self.tabs[dag_idx].dag_state_mut() {
+                        state.load_progress = Some((done, total));
+                    }
+                }
+                TaskFetchEvent::Complete { tasks, deps: _ } => {
+                    let layout = crate::ui::dag_graph::layout::compute_layout(&tasks);
+                    let status_by_id: std::collections::HashMap<_, _> = layout
+                        .cards
+                        .iter()
+                        .map(|c| (c.id.clone(), c.status))
+                        .collect();
+                    if let Some(state) = self.tabs[dag_idx].dag_state_mut() {
+                        state.status_by_id = status_by_id;
+                        state.layout = Some(layout);
+                        state.tasks = tasks;
+                        state.loading = false;
+                        state.load_progress = None;
+                        state.load_error = None;
+                    }
+                    finished = true;
+                }
+                TaskFetchEvent::Error(msg) => {
+                    if let Some(state) = self.tabs[dag_idx].dag_state_mut() {
+                        state.load_error = Some(msg.clone());
+                        state.loading = false;
+                        state.load_progress = None;
+                    }
+                    self.tasks_err = Some(msg);
+                    finished = true;
+                }
+            }
+        }
+        if finished {
+            self.dag_fetch_rx = None;
+        }
+        self.sync_dag_selection();
+        // Once layout lands (Complete), centre the viewport on the selected
+        // card so the first task is visible with its tooltip on open — even
+        // when the selection didn't "change" (it was pre-set by Shift+T).
+        if finished {
+            self.pan_to_selected();
+        }
+    }
+
+    /// Mirror the tasks list cursor into the DAG graph's selected_id so the
+    /// highlighted card follows the list selection. When the selection
+    /// changes, also pan the viewport so the selected card and its tooltip
+    /// are visible.
+    pub fn sync_dag_selection(&mut self) {
+        let Some(dag_idx) = self.find_dag_tab_idx() else {
+            return;
+        };
+        let selected_id = self
+            .filtered_task_at(self.tasks_cursor)
+            .and_then(|i| self.tasks_list.get(i))
+            .map(|t| t.id.clone());
+
+        let changed = {
+            let state = match self.tabs[dag_idx].dag_state_mut() {
+                Some(s) => s,
+                None => return,
+            };
+            let c = state.selected_id != selected_id;
+            state.selected_id = selected_id;
+            c
+        };
+
+        if changed {
+            self.pan_to_selected();
+        }
+    }
+
+    /// Shift the DAG viewport so the selected card (and its tooltip) is
+    /// visible. Approximates the graph area from `last_frame_*` since the
+    /// render pass owns the real area size; good enough for keeping
+    /// navigation smooth.
+    fn pan_to_selected(&mut self) {
+        use crate::ui::dag_graph::layout::CARD_W;
+
+        if self.last_frame_width == 0 || self.last_frame_height == 0 {
+            return;
+        }
+        // Slightly conservative graph width (70% instead of 78%) so the pan
+        // over-shifts a hair if anything, guaranteeing the full tooltip fits.
+        let graph_w = ((self.last_frame_width as i32) * 70 / 100).max(20);
+        let graph_h = (self.last_frame_height as i32 - 3).max(10);
+        // Match the renderer's tooltip sizing (45% of graph area, clamped
+        // [30, 60]) — earlier this used the old collapsed-tooltip cap of 40,
+        // which is too small for the always-expanded tooltip we have now.
+        let tooltip_w = ((graph_w as u32) * 45 / 100).clamp(30, 60) as i32;
+
+        let Some(dag_idx) = self.find_dag_tab_idx() else { return; };
+        let Some(state) = self.tabs[dag_idx].dag_state_mut() else { return; };
+        let Some(id) = state.selected_id.clone() else { return; };
+        let Some(layout) = &state.layout else { return; };
+        let Some(card) = layout.cards.iter().find(|c| c.id == id) else { return; };
+
+        let card_gx = card.x;
+        let card_gy = card.y;
+        let card_right = card_gx + CARD_W;
+        let card_bottom = card_gy + card.height as i32;
+
+        let (mut vx, mut vy) = state.viewport;
+
+        // Horizontal: fit card + 1-col gap + tooltip + 3-col safety buffer on
+        // the right. The buffer covers the tail arrow + any right padding so
+        // the last task's tooltip isn't clipped.
+        let needed_right = card_right + 1 + tooltip_w + 3;
+        if needed_right > vx + graph_w {
+            vx = (needed_right - graph_w).min(card_gx);
+        }
+        if card_gx < vx {
+            vx = card_gx;
+        }
+
+        // Vertical
+        if card_gy < vy {
+            vy = card_gy;
+        } else if card_bottom > vy + graph_h {
+            vy = card_bottom - graph_h;
+        }
+
+        state.viewport = (vx, vy);
+    }
+
+    /// Resolve the Nth task index in the displayed (sorted + filtered) order.
+    pub fn filtered_task_at(&self, n: usize) -> Option<usize> {
+        self.filtered_task_indices().get(n).copied()
+    }
+
+    /// Return indices into `tasks_list` that match the current search filter,
+    /// sorted to match the DAG graph's visual reading order.
+    ///
+    /// The layout walks priority columns left-to-right, stacks components
+    /// top-to-bottom inside each column, then fills each component rank-by-rank
+    /// (left-to-right) and row-by-row (top-to-bottom). A task's position in
+    /// `layout.cards` already encodes that full order, so we sort by it
+    /// directly. Tasks whose component sits under another priority's column
+    /// (because it contains a higher-priority task) list with that column,
+    /// matching where the card actually appears on screen.
+    ///
+    /// Falls back to bd list order when the DAG layout isn't available yet.
     pub fn filtered_task_indices(&self) -> Vec<usize> {
-        match &self.tasks_search {
+        let _t = crate::perf::timed("filtered_task_indices", 500);
+        let mut indices: Vec<usize> = match &self.tasks_search {
             Some(q) if !q.is_empty() => {
                 let lower = q.to_lowercase();
                 self.tasks_list
@@ -523,7 +922,31 @@ impl App {
                     .collect()
             }
             _ => (0..self.tasks_list.len()).collect(),
-        }
+        };
+
+        let card_idx_by_id: std::collections::HashMap<&str, usize> = self
+            .tabs
+            .iter()
+            .find_map(|t| t.dag_state())
+            .and_then(|s| s.layout.as_ref())
+            .map(|l| {
+                l.cards
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, c)| (c.id.as_str(), idx))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        indices.sort_by_key(|&i| {
+            let task = &self.tasks_list[i];
+            match card_idx_by_id.get(task.id.as_str()).copied() {
+                Some(card_idx) => (0u8, card_idx, i),
+                None => (1u8, usize::MAX, i),
+            }
+        });
+
+        indices
     }
 
     /// Refresh services for the currently selected worktree.
@@ -536,9 +959,13 @@ impl App {
         let wt = &self.worktrees[self.cursor];
         let manager = self.cfg.as_ref()
             .map(|c| c.service_manager())
-            .unwrap_or("pm2");
+            .unwrap_or("");
+        let pm2_ok = self.has_pm2_project();
 
         self.services = if wt.alias == "Root" {
+            Vec::new()
+        } else if manager.is_empty() {
+            // No runtime configured — shell-only project. Nothing to list.
             Vec::new()
         } else if manager == "static" {
             // Static services from config — check actual port listening
@@ -570,10 +997,10 @@ impl App {
                 .unwrap_or_default()
         } else if wt.wt_type == WorktreeType::Docker && !wt.container.is_empty() {
             docker::fetch_services(&wt.container, &wt.name)
-        } else if wt.wt_type == WorktreeType::Local && wt.isolated_pm2 {
+        } else if pm2_ok && wt.wt_type == WorktreeType::Local && wt.isolated_pm2 {
             let pm2_home = wt.pm2_home().to_string_lossy().to_string();
             pm2::fetch_services_with_home(&pm2_home)
-        } else if wt.wt_type == WorktreeType::Local {
+        } else if pm2_ok && wt.wt_type == WorktreeType::Local {
             let path = wt.path.to_string_lossy().to_string();
             pm2::fetch_services(&path)
         } else {
@@ -606,6 +1033,7 @@ impl App {
     }
 
     pub fn render(&self, frame: &mut Frame) {
+        let _t = crate::perf::timed("app.render", 10_000);
         if !self.discovered {
             ui::splash::render_splash(frame, frame.area(), "Loading worktrees...");
             return;
@@ -731,7 +1159,7 @@ impl App {
         let (cols, rows) = self.terminal_area_size();
         for tab in &self.tabs {
             if tab.split.is_none() {
-                if let Some(session) = self.pty_mgr.get_mut(tab.session_id) {
+                if let Some(session) = tab.pty_session_id().and_then(|id| self.pty_mgr.get_mut(id)) {
                     let _ = session.resize(cols.saturating_sub(2), rows.saturating_sub(2));
                 }
             }
@@ -859,9 +1287,38 @@ impl App {
                 return;
             }
 
+            // Widget tab: h/j/k/l pan the viewport instead of forwarding to a PTY.
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                if let Some(state) = tab.dag_state_mut() {
+                    const PAN_STEP: i32 = 4;
+                    let handled = match key.code {
+                        KeyCode::Char('h') if key.modifiers.is_empty() => {
+                            state.viewport.0 -= PAN_STEP;
+                            true
+                        }
+                        KeyCode::Char('l') if key.modifiers.is_empty() => {
+                            state.viewport.0 += PAN_STEP;
+                            true
+                        }
+                        KeyCode::Char('k') if key.modifiers.is_empty() => {
+                            state.viewport.1 -= PAN_STEP;
+                            true
+                        }
+                        KeyCode::Char('j') if key.modifiers.is_empty() => {
+                            state.viewport.1 += PAN_STEP;
+                            true
+                        }
+                        _ => false,
+                    };
+                    if handled {
+                        return;
+                    }
+                }
+            }
+
             // Forward key to the focused session (specific pane in split)
             let target_sid = self.focused_session_id
-                .or_else(|| self.tabs.get(self.active_tab).map(|t| t.session_id));
+                .or_else(|| self.tabs.get(self.active_tab).and_then(|t| t.pty_session_id()));
             if let Some(sid) = target_sid {
                 if let Some(session) = self.pty_mgr.get_mut(sid) {
                     if let Some(bytes) = key_to_bytes(&key) {
@@ -931,27 +1388,18 @@ impl App {
         // ── Task editor (shown in right panel) ───────────────────
         if let Some(ref mut editor) = self.task_editor {
             match key.code {
-                // Save
+                // Save — spawn the bd write on a background thread and close
+                // the editor immediately. poll_mutations surfaces the result
+                // as a toast + refresh when the subprocess returns.
                 KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let is_new = editor.is_new;
-                    match editor.save() {
-                        Ok(()) => {
-                            self.task_editor = None;
-                            self.fetch_tasks();
-                            if let Some(ref detail) = self.tasks_detail {
-                                let id = detail.id.clone();
-                                if let Ok(updated) = beads::fetch_detail(&id) {
-                                    self.tasks_detail = Some(updated);
-                                }
-                            }
-                            let msg = if is_new { "Task created" } else { "Task updated" };
-                            self.push_toast("Success", msg, ui::overlay::ToastKind::Success);
-                        }
-                        Err(e) => {
-                            self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
-                            self.task_editor = None;
-                        }
-                    }
+                    let rx = editor.spawn_save();
+                    self.task_editor = None;
+                    let msg = if is_new { "Task created".to_string() } else { "Task updated".to_string() };
+                    self.pending_mutations.push(PendingMutation {
+                        success_toast: msg,
+                        rx,
+                    });
                 }
                 // Cancel
                 KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1024,7 +1472,7 @@ impl App {
                             }
                             // Update tab label too
                             for tab in &mut self.tabs {
-                                if tab.session_id == sid {
+                                if tab.pty_session_id() == Some(sid) {
                                     tab.label = self.pty_mgr.get(sid).map(|s| s.label.clone()).unwrap_or_default();
                                 }
                             }
@@ -1143,9 +1591,17 @@ impl App {
                     self.tasks_search = None;
                     self.tasks_search_active = false;
                     self.focus = Panel::Tasks;
-                    self.fetch_tasks();
-                } else if self.focus == Panel::Tasks {
-                    self.focus = Panel::Worktrees;
+                    // open_dag_tab kicks the async fetch that populates both
+                    // tasks_list (via ListLoaded) and the DAG (via Complete).
+                    // No sync bd call on the main thread.
+                    self.open_dag_tab();
+                    self.sync_dag_selection();
+                    self.focus = Panel::Tasks;
+                } else {
+                    self.close_dag_tab();
+                    if self.focus == Panel::Tasks {
+                        self.focus = Panel::Worktrees;
+                    }
                 }
                 self.recalc_layout();
             }
@@ -1157,20 +1613,15 @@ impl App {
                 self.tasks_cursor = 0;
                 self.tasks_detail = None;
             }
-            // Tasks panel — Ctrl+E to edit task
+            // Tasks panel — Ctrl+E to edit task. Uses the cached task from
+            // tasks_list (populated by the background fetcher) so opening
+            // the editor doesn't block on a sync `bd show`.
             KeyCode::Char('e') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Edit from detail view
                 if let Some(ref task) = self.tasks_detail {
                     self.task_editor = Some(beads::TaskEditor::from_task(task));
-                } else {
-                    // Edit from list view — use selected task
-                    let indices = self.filtered_task_indices();
-                    if let Some(&real_idx) = indices.get(self.tasks_cursor) {
-                        let id = self.tasks_list[real_idx].id.clone();
-                        if let Ok(task) = beads::fetch_detail(&id) {
-                            self.task_editor = Some(beads::TaskEditor::from_task(&task));
-                        }
-                    }
+                } else if let Some(&real_idx) = self.filtered_task_indices().get(self.tasks_cursor) {
+                    let task = self.tasks_list[real_idx].clone();
+                    self.task_editor = Some(beads::TaskEditor::from_task(&task));
                 }
             }
             // Tasks panel — Ctrl+N to create new task
@@ -1183,66 +1634,30 @@ impl App {
                 self.tasks_cursor = 0;
             }
 
-            // Tasks panel — Enter/Esc/c/d
-            KeyCode::Enter if self.focus == Panel::Tasks => {
-                if self.tasks_detail.is_some() {
-                    // Already in detail — do nothing
-                } else {
-                    let indices = self.filtered_task_indices();
-                    if let Some(&real_idx) = indices.get(self.tasks_cursor) {
-                        let id = self.tasks_list[real_idx].id.clone();
-                        match beads::fetch_detail(&id) {
-                            Ok(detail) => {
-                                self.tasks_detail = Some(detail);
-                                self.tasks_detail_scroll = 0;
-                                self.recalc_layout();
-                            }
-                            Err(e) => { self.tasks_err = Some(e); }
-                        }
-                    }
-                }
-            }
+            // Tasks panel — Esc closes any lingering task detail pane.
             KeyCode::Esc if self.focus == Panel::Tasks && self.tasks_detail.is_some() => {
                 self.tasks_detail = None;
                 self.tasks_detail_scroll = 0;
                 self.recalc_layout();
             }
             KeyCode::Char('c') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let indices = self.filtered_task_indices();
-                if let Some(&real_idx) = indices.get(self.tasks_cursor) {
+                if let Some(&real_idx) = self.filtered_task_indices().get(self.tasks_cursor) {
                     let id = self.tasks_list[real_idx].id.clone();
-                    match beads::close_task(&id) {
-                        Ok(()) => {
-                            self.push_toast("Success", &format!("Closed task {}", id), ui::overlay::ToastKind::Success);
-                            self.fetch_tasks();
-                            let new_len = self.filtered_task_indices().len();
-                            if self.tasks_cursor >= new_len && new_len > 0 {
-                                self.tasks_cursor = new_len - 1;
-                            }
-                        }
-                        Err(e) => {
-                            self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
-                        }
-                    }
+                    let success_toast = format!("Closed task {}", id);
+                    self.pending_mutations.push(PendingMutation {
+                        success_toast,
+                        rx: beads::spawn_close(id),
+                    });
                 }
             }
             KeyCode::Char('d') if self.focus == Panel::Tasks && key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let indices = self.filtered_task_indices();
-                if let Some(&real_idx) = indices.get(self.tasks_cursor) {
+                if let Some(&real_idx) = self.filtered_task_indices().get(self.tasks_cursor) {
                     let id = self.tasks_list[real_idx].id.clone();
-                    match beads::delete_task(&id) {
-                        Ok(()) => {
-                            self.push_toast("Success", &format!("Deleted task {}", id), ui::overlay::ToastKind::Success);
-                            self.fetch_tasks();
-                            let new_len = self.filtered_task_indices().len();
-                            if self.tasks_cursor >= new_len && new_len > 0 {
-                                self.tasks_cursor = new_len - 1;
-                            }
-                        }
-                        Err(e) => {
-                            self.push_toast("Error", &e, ui::overlay::ToastKind::Error);
-                        }
-                    }
+                    let success_toast = format!("Deleted task {}", id);
+                    self.pending_mutations.push(PendingMutation {
+                        success_toast,
+                        rx: beads::spawn_delete(id),
+                    });
                 }
             }
 
@@ -1329,7 +1744,7 @@ impl App {
                     self.focus = Panel::Terminal;
                     self.terminal_focused = true;
                     if self.focused_session_id.is_none() {
-                        self.focused_session_id = Some(self.tabs[self.active_tab].session_id);
+                        self.focused_session_id = self.tabs[self.active_tab].pty_session_id();
                     }
                 } else if !self.sidebar_hidden {
                     // Showing sidebar
@@ -1582,12 +1997,7 @@ impl App {
             rows,
         ) {
             Ok(id) => {
-                self.tabs.push(Tab {
-                    session_id: id,
-                    label,
-                    alive: true,
-                    split: None,
-                });
+                self.tabs.push(Tab::new_pty(id, label));
                 self.active_tab = self.tabs.len() - 1;
                 self.tab_cursor = self.flat_index_for_tab(self.active_tab);
                 self.focus = Panel::Terminal;
@@ -1643,7 +2053,7 @@ impl App {
             } else if split.leaf_count() == 1 {
                 let remaining_id = split.first_leaf();
                 let tab = &mut self.tabs[self.active_tab];
-                tab.session_id = remaining_id;
+                tab.set_pty_session_id(remaining_id);
                 tab.split = None;
                 if let Some(s) = self.pty_mgr.get(remaining_id) {
                     tab.label = s.label.clone();
@@ -1830,9 +2240,9 @@ impl App {
             return;
         }
 
-        let target_sid = self.split_target_session_id.take().unwrap_or(
-            self.tabs[self.active_tab].session_id
-        );
+        let target_sid = self.split_target_session_id.take()
+            .or_else(|| self.tabs[self.active_tab].pty_session_id())
+            .unwrap_or(0);
         let alias = std::mem::take(&mut self.split_target_alias);
         let cwd = std::mem::take(&mut self.split_target_dir);
 
@@ -1885,11 +2295,13 @@ impl App {
                     }
                 } else {
                     // Convert single session to split
-                    tab.split = Some(SplitNode::split(
-                        dir,
-                        SplitNode::leaf(tab.session_id),
-                        SplitNode::leaf(new_id),
-                    ));
+                    if let Some(existing_sid) = tab.pty_session_id() {
+                        tab.split = Some(SplitNode::split(
+                            dir,
+                            SplitNode::leaf(existing_sid),
+                            SplitNode::leaf(new_id),
+                        ));
+                    }
                 }
                 // Focus the new session, enter terminal mode, and resize
                 self.focused_session_id = Some(new_id);
@@ -2482,7 +2894,9 @@ impl App {
         }
 
         // Find session under cursor in flat list
-        let target_sid = self.session_id_at_cursor().unwrap_or(tab.session_id);
+        let target_sid = self.session_id_at_cursor()
+            .or_else(|| tab.pty_session_id())
+            .unwrap_or(0);
 
         // Get worktree info for the target session
         let (alias, dir) = self.pty_mgr.get(target_sid)
@@ -2543,7 +2957,7 @@ impl App {
                 }
             } else {
                 if self.tab_cursor == pos {
-                    return Some(tab.session_id);
+                    return tab.pty_session_id();
                 }
                 pos += 1;
             }
@@ -2593,7 +3007,7 @@ impl App {
             let next = ((self.active_tab as i32 + direction).rem_euclid(n as i32)) as usize;
             self.active_tab = next;
             self.tab_cursor = self.flat_index_for_tab(self.active_tab);
-            self.focused_session_id = Some(self.tabs[next].session_id);
+            self.focused_session_id = self.tabs[next].pty_session_id();
         }
     }
 
@@ -2673,7 +3087,7 @@ impl App {
                     let filtered_len = self.filtered_task_indices().len();
                     if filtered_len > 0 {
                         let new = self.tasks_cursor as i32 + delta as i32;
-                        self.tasks_cursor = new.clamp(0, filtered_len as i32 - 1) as usize;
+                        self.tasks_cursor = new.rem_euclid(filtered_len as i32) as usize;
                     }
                 }
             }
@@ -2708,7 +3122,7 @@ impl App {
                 if seq == target {
                     self.tab_cursor = flat_pos;
                     self.active_tab = tab_idx;
-                    self.focused_session_id = Some(tab.session_id);
+                    self.focused_session_id = tab.pty_session_id();
                     return;
                 }
                 flat_pos += 1;
@@ -2794,7 +3208,10 @@ impl App {
             }
         };
 
-        let session_id = self.tabs[tab_idx].session_id;
+        let session_id = match self.tabs[tab_idx].pty_session_id() {
+            Some(id) => id,
+            None => return,
+        };
         let alive = self.pty_mgr.get_mut(session_id)
             .map(|s| s.check_alive())
             .unwrap_or(false);
@@ -2821,7 +3238,7 @@ impl App {
 
         // Close tab
         let tab = self.tabs.remove(tab_idx);
-        self.pty_mgr.remove(tab.session_id);
+        if let Some(id) = tab.pty_session_id() { self.pty_mgr.remove(id); }
         if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
             self.active_tab = self.tabs.len() - 1;
         }
@@ -2865,7 +3282,10 @@ impl App {
             }
         };
 
-        let session_id = self.tabs[tab_idx].session_id;
+        let session_id = match self.tabs[tab_idx].pty_session_id() {
+            Some(id) => id,
+            None => return,
+        };
         let alive = self.pty_mgr.get_mut(session_id)
             .map(|s| s.check_alive())
             .unwrap_or(false);
@@ -2882,7 +3302,7 @@ impl App {
 
             // Close the create tab
             let tab = self.tabs.remove(tab_idx);
-            self.pty_mgr.remove(tab.session_id);
+            if let Some(id) = tab.pty_session_id() { self.pty_mgr.remove(id); }
             if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
                 self.active_tab = self.tabs.len() - 1;
             }
@@ -2916,7 +3336,7 @@ impl App {
 
         // Close failed tab
         let tab = self.tabs.remove(tab_idx);
-        self.pty_mgr.remove(tab.session_id);
+        if let Some(id) = tab.pty_session_id() { self.pty_mgr.remove(id); }
         if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
             self.active_tab = self.tabs.len() - 1;
         }
@@ -2953,7 +3373,10 @@ impl App {
             }
         };
 
-        let session_id = self.tabs[tab_idx].session_id;
+        let session_id = match self.tabs[tab_idx].pty_session_id() {
+            Some(id) => id,
+            None => return,
+        };
         let alive = self.pty_mgr.get_mut(session_id)
             .map(|s| s.check_alive())
             .unwrap_or(false);
@@ -2978,7 +3401,7 @@ impl App {
 
         // Close the build tab
         let tab = self.tabs.remove(tab_idx);
-        self.pty_mgr.remove(tab.session_id);
+        if let Some(id) = tab.pty_session_id() { self.pty_mgr.remove(id); }
         if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
             self.active_tab = self.tabs.len() - 1;
         }
@@ -3034,7 +3457,10 @@ impl App {
             }
         };
 
-        let session_id = self.tabs[tab_idx].session_id;
+        let session_id = match self.tabs[tab_idx].pty_session_id() {
+            Some(id) => id,
+            None => return,
+        };
         let alive = self.pty_mgr.get_mut(session_id)
             .map(|s| s.check_alive())
             .unwrap_or(false);
@@ -3062,7 +3488,7 @@ impl App {
 
         // Close the start tab
         let tab = self.tabs.remove(tab_idx);
-        self.pty_mgr.remove(tab.session_id);
+        if let Some(id) = tab.pty_session_id() { self.pty_mgr.remove(id); }
         if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
             self.active_tab = self.tabs.len() - 1;
         }
@@ -3104,11 +3530,13 @@ impl App {
                         }
                     }
                 }
-            } else if let Some(session) = self.pty_mgr.get(tab.session_id) {
-                if session.alive {
-                    let content = crate::detect::read_screen(&session.term());
-                    let state = crate::detect::detect_state(&content, &session.label);
-                    self.agent_states.insert(tab.session_id, state);
+            } else if let Some(sid) = tab.pty_session_id() {
+                if let Some(session) = self.pty_mgr.get(sid) {
+                    if session.alive {
+                        let content = crate::detect::read_screen(&session.term());
+                        let state = crate::detect::detect_state(&content, &session.label);
+                        self.agent_states.insert(sid, state);
+                    }
                 }
             }
         }
