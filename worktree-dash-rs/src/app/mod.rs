@@ -855,15 +855,18 @@ impl App {
     }
 
     /// Return indices into `tasks_list` that match the current search filter,
-    /// sorted into the display order used by the list panel:
-    ///   - Primary: priority (P0 first, then P1, P2, …)
-    ///   - Secondary: status bucket inside that priority
-    ///     (done → active → ready → open → blocked)
-    ///   - Tertiary: DAG reading order (y top-to-bottom, x left-to-right)
+    /// sorted to match the DAG graph's visual reading order.
+    ///
+    /// The layout walks priority columns left-to-right, stacks components
+    /// top-to-bottom inside each column, then fills each component rank-by-rank
+    /// (left-to-right) and row-by-row (top-to-bottom). A task's position in
+    /// `layout.cards` already encodes that full order, so we sort by it
+    /// directly. Tasks whose component sits under another priority's column
+    /// (because it contains a higher-priority task) list with that column,
+    /// matching where the card actually appears on screen.
+    ///
     /// Falls back to bd list order when the DAG layout isn't available yet.
     pub fn filtered_task_indices(&self) -> Vec<usize> {
-        use crate::ui::dag_graph::layout::CardStatus;
-
         let mut indices: Vec<usize> = match &self.tasks_search {
             Some(q) if !q.is_empty() => {
                 let lower = q.to_lowercase();
@@ -881,10 +884,7 @@ impl App {
             _ => (0..self.tasks_list.len()).collect(),
         };
 
-        // Grab the DAG layout's card positions so sort order follows the
-        // reading order of the graph. Without layout info, fall back to bd
-        // list order.
-        let card_info: std::collections::HashMap<&str, (i32, i32, CardStatus)> = self
+        let card_idx_by_id: std::collections::HashMap<&str, usize> = self
             .tabs
             .iter()
             .find_map(|t| t.dag_state())
@@ -892,39 +892,17 @@ impl App {
             .map(|l| {
                 l.cards
                     .iter()
-                    .map(|c| (c.id.as_str(), (c.x, c.y, c.status)))
+                    .enumerate()
+                    .map(|(idx, c)| (c.id.as_str(), idx))
                     .collect()
             })
             .unwrap_or_default();
 
         indices.sort_by_key(|&i| {
             let task = &self.tasks_list[i];
-            let task_pri: u8 = match &task.priority {
-                serde_json::Value::Number(n) => n.as_u64().unwrap_or(9) as u8,
-                serde_json::Value::String(s) => s.trim_start_matches('P').parse().unwrap_or(9),
-                _ => 9,
-            };
-            let info = card_info.get(task.id.as_str()).copied();
-            match info {
-                Some((x, y, card_status)) => {
-                    let bucket: u8 = match card_status {
-                        CardStatus::Done => 0,
-                        CardStatus::Active => 1,
-                        CardStatus::Ready => 2,
-                        CardStatus::Blocked | CardStatus::Open => {
-                            // Subdivide the "pending" DAG bucket by the raw
-                            // bd status so explicitly-blocked tasks sort after
-                            // plain open-waiting tasks.
-                            if task.status == "blocked" {
-                                4
-                            } else {
-                                3
-                            }
-                        }
-                    };
-                    (task_pri, bucket, y, x, i)
-                }
-                None => (task_pri, 5u8, i32::MAX, i32::MAX, i),
+            match card_idx_by_id.get(task.id.as_str()).copied() {
+                Some(card_idx) => (0u8, card_idx, i),
+                None => (1u8, usize::MAX, i),
             }
         });
 
@@ -3064,7 +3042,7 @@ impl App {
                     let filtered_len = self.filtered_task_indices().len();
                     if filtered_len > 0 {
                         let new = self.tasks_cursor as i32 + delta as i32;
-                        self.tasks_cursor = new.clamp(0, filtered_len as i32 - 1) as usize;
+                        self.tasks_cursor = new.rem_euclid(filtered_len as i32) as usize;
                     }
                 }
             }

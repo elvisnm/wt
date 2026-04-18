@@ -576,8 +576,10 @@ fn draw_tooltip(
     let mut lines: Vec<(String, TipStyle)> = Vec::new();
 
     // Header line: "{id} · P{n} · {dag_status}" (+ expanded marker).
-    // title
-    for chunk in wrap(&selected.title, content_w) {
+    // title — prefixed with "P{n} · " so the priority reads at a glance
+    // without having to cross-reference the card itself.
+    let titled = format!("P{} · {}", selected.priority, selected.title);
+    for chunk in wrap(&titled, content_w) {
         lines.push((chunk, TipStyle::Title));
     }
 
