@@ -10,7 +10,7 @@ From your project directory (where `wt.config.js` lives):
 wt
 ```
 
-Debug mode (logs to `/tmp/wt-dash.log`):
+Debug mode (logs to `/tmp/wt.log`):
 
 ```bash
 wt --debug
@@ -191,4 +191,4 @@ Background polling (no manual refresh needed):
 wt --debug
 ```
 
-Logs terminal key events and internal state to `/tmp/wt-dash.log`. Useful for diagnosing keybinding issues across different terminal emulators.
+Logs terminal key events and internal state to `/tmp/wt.log` (or `/tmp/wt-dev.log` when running the dev build). Useful for diagnosing keybinding issues across different terminal emulators.
