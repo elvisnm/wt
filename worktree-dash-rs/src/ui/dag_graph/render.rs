@@ -138,9 +138,15 @@ fn render_graph(
         }
     }
 
-    // Fixed legend boxes in the bottom-right. Painted before the tooltip so
-    // the tooltip always wins the z-order when it would overlap.
-    draw_legends(area, buf);
+    if state.overlays_visible {
+        // Fixed legend boxes in the bottom-right. Painted before the tooltip
+        // so the tooltip always wins the z-order when it would overlap.
+        draw_legends(area, buf);
+
+        // Minimap lives in the bottom-left, mirroring the legends on the
+        // right. Painted before the tooltip for the same z-order reason.
+        draw_minimap(area, buf, layout, vx, vy);
+    }
 
     // Tooltip for the selected card, anchored next to it.
     if let Some(id) = &state.selected_id {
@@ -736,6 +742,189 @@ fn date_only(ts: &str) -> String {
 /// Paint the two fixed reference panels in the bottom-right: the glyph
 /// legend on the left, the bd-to-DAG status translation on the right. Same
 /// HEADER_BG as cards. Skipped if the area is too small to fit them.
+/// Bottom-left minimap: a scaled-down snapshot of the full DAG with a
+/// rectangle overlay showing where the viewport is.
+///
+/// Sizing rule: the panel's height scales with the number of cards so
+/// small graphs get a compact minimap and large graphs get a roomier
+/// one. Height lands in [10, 20] cells; width is 2× height so the panel
+/// renders as a visual square on terminals (cells are ~2x tall as wide).
+///
+/// Each card draws as its DAG status glyph at a position scaled from
+/// its graph-space coordinates, so the minimap reads like a miniature
+/// of the main graph.
+///
+/// The viewport rectangle is sized from the ratio of visible screen
+/// area to total graph extent. As the user pans the DAG, the rectangle
+/// slides around the minimap to indicate which slice is on screen.
+fn draw_minimap(area: Rect, buf: &mut Buffer, layout: &GraphLayout, vx: i32, vy: i32) {
+    const EXT_PAD: u16 = 1;
+
+    if layout.cards.is_empty() {
+        return;
+    }
+
+    // Height grows with task count. The divisor is empirical: divides
+    // by 3 so a 30-task graph lands around 10 (the minimum), and a
+    // 60-task graph lands around 20 (the maximum).
+    let card_count = layout.cards.len() as u16;
+    let minimap_h = (card_count / 3).clamp(10, 20);
+    let minimap_w = minimap_h * 2;
+
+    if area.width < minimap_w + 2 * EXT_PAD || area.height < minimap_h + 2 * EXT_PAD {
+        return;
+    }
+
+    // Bottom-left, mirroring the legend panels on the right.
+    let rect = Rect::new(
+        area.x + EXT_PAD,
+        area.y + area.height - minimap_h - EXT_PAD,
+        minimap_w,
+        minimap_h,
+    );
+    fill_rect(buf, rect, HEADER_BG);
+
+    // Graph bounds anchored at (0, 0) so the priority-column headers
+    // above the first card are included — the viewport covers those too.
+    let mut max_gx = 0_i32;
+    let mut max_gy = 0_i32;
+    for c in &layout.cards {
+        let right = c.x + CARD_W;
+        if right > max_gx { max_gx = right; }
+        let bottom = c.y + c.height as i32;
+        if bottom > max_gy { max_gy = bottom; }
+    }
+    let graph_w = max_gx.max(1);
+    let graph_h = max_gy.max(1);
+
+    // Two nested regions inside the panel:
+    //   - vp_area : where the viewport rectangle is allowed to draw.
+    //   - icon_area: where task glyphs may be placed. Always 1 cell
+    //     inside vp_area so that at max zoom (viewport covers the
+    //     whole graph) the rectangle's edges never cross an icon.
+    //
+    // Outer panel padding: 2 cells horizontally, 1 row vertically.
+    // Border reserve inside that: 1 cell all around so a fully-sized
+    // viewport rectangle has its own track.
+    let pad_x: u16 = 2;
+    let pad_y: u16 = 1;
+    let border_reserve: u16 = 1;
+
+    let vp_area_x = rect.x + pad_x;
+    let vp_area_y = rect.y + pad_y;
+    let vp_area_w = rect.width as i32 - 2 * pad_x as i32;
+    let vp_area_h = rect.height as i32 - 2 * pad_y as i32;
+
+    let inner_x = vp_area_x + border_reserve;
+    let inner_y = vp_area_y + border_reserve;
+    let inner_w = vp_area_w - 2 * border_reserve as i32;
+    let inner_h = vp_area_h - 2 * border_reserve as i32;
+    if inner_w <= 0 || inner_h <= 0 || vp_area_w <= 0 || vp_area_h <= 0 {
+        return;
+    }
+
+    // Viewport rectangle: size derived from the visible-area to
+    // total-graph ratio, position tracks the pan. Size stays fixed as
+    // the user pans — only the position changes.
+    //
+    // Scaled against vp_area (the wider region), not inner. That way
+    // the border at max size sits in its reserved track and never
+    // overlaps the icons.
+    //
+    // Painted BEFORE the card glyphs so the border reads as transparent:
+    // any task on the rectangle's edge keeps its glyph, so the user can
+    // see through the border to the cards the rectangle encloses.
+    let vp_w_cells =
+        ((area.width as i32 * vp_area_w + graph_w - 1) / graph_w).clamp(1, vp_area_w);
+    let vp_h_cells =
+        ((area.height as i32 * vp_area_h + graph_h - 1) / graph_h).clamp(1, vp_area_h);
+
+    let vp_x = {
+        let raw = vx * vp_area_w / graph_w;
+        raw.clamp(0, vp_area_w - vp_w_cells) as u16
+    };
+    let vp_y = {
+        let raw = vy * vp_area_h / graph_h;
+        raw.clamp(0, vp_area_h - vp_h_cells) as u16
+    };
+    let left = vp_area_x + vp_x;
+    let top = vp_area_y + vp_y;
+    let right = left + vp_w_cells as u16 - 1;
+    let bottom = top + vp_h_cells as u16 - 1;
+
+    // Muted gray matches the section header rules (the `── worktrees ──`
+    // separator line), so the viewport indicator reads as structural
+    // chrome rather than competing with the task glyphs.
+    let border_style = Style::default()
+        .fg(crate::ui::style::HEADER_COLOR)
+        .bg(HEADER_BG);
+
+    if left == right && top == bottom {
+        // Viewport collapses to a single minimap cell — mark it.
+        let cell = &mut buf[(left, top)];
+        cell.set_symbol("□");
+        cell.set_style(border_style);
+    } else {
+        // Edges.
+        for x in left..=right {
+            buf[(x, top)].set_symbol("─").set_style(border_style);
+            buf[(x, bottom)].set_symbol("─").set_style(border_style);
+        }
+        for y in top..=bottom {
+            buf[(left, y)].set_symbol("│").set_style(border_style);
+            buf[(right, y)].set_symbol("│").set_style(border_style);
+        }
+        // Corners.
+        buf[(left, top)].set_symbol("┌").set_style(border_style);
+        buf[(right, top)].set_symbol("┐").set_style(border_style);
+        buf[(left, bottom)].set_symbol("└").set_style(border_style);
+        buf[(right, bottom)].set_symbol("┘").set_style(border_style);
+    }
+
+    // Collect the distinct card y-centers and assign each an ordinal
+    // minimap row. Scaling from raw y in graph-space would leave blank
+    // rows between icons whenever adjacent cards sit far apart in the
+    // graph; an ordinal mapping packs every occupied row tight so the
+    // vertical column reads as ●/●/● with no gaps.
+    let mut y_centers: Vec<i32> = layout
+        .cards
+        .iter()
+        .map(|c| c.y + c.height as i32 / 2)
+        .collect();
+    y_centers.sort_unstable();
+    y_centers.dedup();
+    let num_rows = y_centers.len() as i32;
+
+    // Paint cards on top of the rectangle border.
+    //
+    // Horizontal placement snaps to EVEN cells so adjacent tasks land
+    // with a 1-cell gap between them (icons in the same rank would
+    // otherwise paste shoulder-to-shoulder).
+    //
+    // Vertical placement uses the card's y-rank so rows are dense.
+    // When there are more distinct rows than the minimap can show,
+    // rows compress proportionally.
+    for c in &layout.cards {
+        let gx = c.x + CARD_W / 2;
+        let gy_center = c.y + c.height as i32 / 2;
+        let half_w = (inner_w / 2).max(1);
+        let mx = ((gx * half_w / graph_w) * 2).clamp(0, inner_w - 1) as u16;
+
+        let ordinal = y_centers
+            .binary_search(&gy_center)
+            .unwrap_or(0) as i32;
+        let my = if num_rows <= inner_h {
+            ordinal.clamp(0, inner_h - 1) as u16
+        } else {
+            (ordinal * inner_h / num_rows).clamp(0, inner_h - 1) as u16
+        };
+
+        let cell = &mut buf[(inner_x + mx, inner_y + my)];
+        cell.set_symbol(c.status.glyph());
+        cell.set_style(Style::default().fg(status_color(c.status)).bg(HEADER_BG));
+    }
+}
+
 fn draw_legends(area: Rect, buf: &mut Buffer) {
     const ICONS_W: u16 = 16;
     const STATUS_W: u16 = 28;

@@ -92,6 +92,8 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
         vec![vec![]],
         vec![box_line(col_w, b, vec![s("  ", d), s("h", k), s(" / ", d), s("l", k), s("       pan left / right", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("k", k), s(" / ", d), s("j", k), s("       pan up / down", d)])],
+        vec![box_line(col_w, b, vec![s("  ", d), s("Ctrl+G", k), s("      minimap/legend toggle", d)])],
+        vec![box_line(col_w, b, vec![s("  ", d), s("Ctrl+F", k), s("      fullscreen toggle", d)])],
         vec![box_line(col_w, b, vec![s("  ", d), s("Ctrl+]", k), s("      back to dashboard", d)])],
         vec![box_bottom(col_w, b)],
         vec![box_top("Operations", col_w, b, t)],

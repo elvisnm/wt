@@ -743,6 +743,19 @@ impl App {
 
     /// Drain the DAG fetch channel once per tick and fold events into state.
     pub fn poll_dag_fetch(&mut self) {
+        // Re-clamp the DAG viewport every tick so the displayed origin
+        // is always a valid pan position. Without this, the user's
+        // first drag would snap the content by the halo size — the
+        // initial viewport (0, 0) may be outside the clamp range on
+        // large screens where the whole graph fits vertically.
+        if let Some(state) = self
+            .tabs
+            .iter_mut()
+            .find_map(|t| t.dag_state_mut())
+        {
+            state.clamp_viewport();
+        }
+
         use beads::TaskFetchEvent;
         let events: Vec<TaskFetchEvent> = self
             .dag_fetch_rx
@@ -1124,29 +1137,22 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(id) = hit_id {
                     self.select_dag_card(&id);
-                } else {
-                    if let Some(state) = self
-                        .tabs
-                        .get_mut(self.active_tab)
-                        .and_then(|t| t.dag_state_mut())
-                    {
-                        // Click on empty area deselects so the user can
-                        // see the whole graph without any tooltip, and
-                        // arms a pan-drag anchor. A static click clears
-                        // the tooltip; a drag also pans.
-                        state.selected_id = None;
-                        state.pan_drag = Some(PanDrag {
-                            start_col: mouse.column,
-                            start_row: mouse.row,
-                            vx0: viewport.0,
-                            vy0: viewport.1,
-                        });
-                    }
-                    // Drop the task list's highlight too so the view is
-                    // genuinely "nothing selected" everywhere. The next
-                    // arrow keypress re-enables the highlight at the
-                    // preserved tasks_cursor position.
-                    self.tasks_selected = false;
+                } else if let Some(state) = self
+                    .tabs
+                    .get_mut(self.active_tab)
+                    .and_then(|t| t.dag_state_mut())
+                {
+                    // Press on empty area arms pan-drag but does NOT
+                    // yet deselect. Whether this ends as "click to
+                    // dismiss" or "drag to pan" depends on what comes
+                    // next; we decide in the Up handler.
+                    state.pan_drag = Some(PanDrag {
+                        start_col: mouse.column,
+                        start_row: mouse.row,
+                        vx0: viewport.0,
+                        vy0: viewport.1,
+                        moved: false,
+                    });
                 }
                 true
             }
@@ -1156,29 +1162,46 @@ impl App {
                     .get_mut(self.active_tab)
                     .and_then(|t| t.dag_state_mut())
                 {
-                    if let Some(p) = state.pan_drag {
+                    if let Some(p) = state.pan_drag.as_mut() {
                         let dx = mouse.column as i32 - p.start_col as i32;
                         let dy = mouse.row as i32 - p.start_row as i32;
                         // Moving the mouse right "pulls" the canvas, so
                         // the viewport shifts left (negative vx).
                         state.viewport = (p.vx0 - dx, p.vy0 - dy);
+                        p.moved = true;
+                        state.clamp_viewport();
                         return true;
                     }
                 }
                 false
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if let Some(state) = self
+                let clicked_without_drag = if let Some(state) = self
                     .tabs
                     .get_mut(self.active_tab)
                     .and_then(|t| t.dag_state_mut())
                 {
-                    if state.pan_drag.is_some() {
-                        state.pan_drag = None;
-                        return true;
+                    if let Some(p) = state.pan_drag.take() {
+                        if !p.moved {
+                            // A press-release on empty area with no
+                            // movement: dismiss the current selection.
+                            state.selected_id = None;
+                            true
+                        } else {
+                            // Drag completed: canvas has already been
+                            // panned; keep the selection as it was.
+                            false
+                        }
+                    } else {
+                        false
                     }
+                } else {
+                    false
+                };
+                if clicked_without_drag {
+                    self.tasks_selected = false;
                 }
-                false
+                true
             }
             _ => false,
         }
@@ -1383,6 +1406,58 @@ impl App {
             return;
         }
 
+        // ── DAG Graph tab active: handle its shortcuts regardless of
+        //    panel focus, so Ctrl+F / Ctrl+G / h-j-k-l work whether
+        //    focus is on the Tasks list or on the graph itself.
+        if self.active_tab_is_widget() && !self.terminal_focused {
+            const PAN_STEP: i32 = 4;
+
+            // Ctrl+F fullscreens the active tab. For widget tabs the
+            // session id is None, which the renderer treats as "show
+            // whatever the active tab is at full width".
+            if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.fullscreen = !self.fullscreen;
+                self.fullscreen_session_id = None;
+                return;
+            }
+
+            // Ctrl+G toggles the minimap and legend overlays together.
+            if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if let Some(state) = self
+                    .tabs
+                    .get_mut(self.active_tab)
+                    .and_then(|t| t.dag_state_mut())
+                {
+                    state.overlays_visible = !state.overlays_visible;
+                }
+                return;
+            }
+
+            // h/j/k/l pan the viewport. Only fires without modifiers so
+            // Ctrl+h etc. don't accidentally trigger it.
+            if key.modifiers.is_empty() {
+                let delta = match key.code {
+                    KeyCode::Char('h') => Some((-PAN_STEP, 0)),
+                    KeyCode::Char('l') => Some((PAN_STEP, 0)),
+                    KeyCode::Char('k') => Some((0, -PAN_STEP)),
+                    KeyCode::Char('j') => Some((0, PAN_STEP)),
+                    _ => None,
+                };
+                if let Some((dx, dy)) = delta {
+                    if let Some(state) = self
+                        .tabs
+                        .get_mut(self.active_tab)
+                        .and_then(|t| t.dag_state_mut())
+                    {
+                        state.viewport.0 += dx;
+                        state.viewport.1 += dy;
+                        state.clamp_viewport();
+                    }
+                    return;
+                }
+            }
+        }
+
         // ── Terminal focused: route input to active PTY ──────────────
         if self.terminal_focused {
             // Ctrl+] to return to dashboard
@@ -1468,34 +1543,9 @@ impl App {
                 return;
             }
 
-            // Widget tab: h/j/k/l pan the viewport instead of forwarding to a PTY.
-            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                if let Some(state) = tab.dag_state_mut() {
-                    const PAN_STEP: i32 = 4;
-                    let handled = match key.code {
-                        KeyCode::Char('h') if key.modifiers.is_empty() => {
-                            state.viewport.0 -= PAN_STEP;
-                            true
-                        }
-                        KeyCode::Char('l') if key.modifiers.is_empty() => {
-                            state.viewport.0 += PAN_STEP;
-                            true
-                        }
-                        KeyCode::Char('k') if key.modifiers.is_empty() => {
-                            state.viewport.1 -= PAN_STEP;
-                            true
-                        }
-                        KeyCode::Char('j') if key.modifiers.is_empty() => {
-                            state.viewport.1 += PAN_STEP;
-                            true
-                        }
-                        _ => false,
-                    };
-                    if handled {
-                        return;
-                    }
-                }
-            }
+            // Widget-tab shortcuts (Ctrl+F, Ctrl+G, h/j/k/l pan) are
+            // handled at the top of handle_key so they fire regardless
+            // of terminal-focus state; nothing to do here.
 
             // Forward key to the focused session (specific pane in split)
             let target_sid = self.focused_session_id
