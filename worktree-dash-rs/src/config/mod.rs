@@ -329,8 +329,11 @@ pub struct DashServicesConfig {
     pub docker: Option<DashDockerSvc>,
 }
 
-fn default_manager() -> String { "pm2".to_string() }
-fn default_running_check() -> String { "pm2".to_string() }
+// Defaults are intentionally empty. A project only runs PM2 / Docker calls
+// when its wt.config.js opts in explicitly — otherwise the dashboard stays
+// a pure shell + task-management tool with no background probing.
+fn default_manager() -> String { String::new() }
+fn default_running_check() -> String { String::new() }
 
 impl Default for DashServicesConfig {
     fn default() -> Self {
@@ -490,12 +493,11 @@ impl Config {
             }
         }
 
-        if self.dash.services.manager.is_empty() {
-            self.dash.services.manager = "pm2".to_string();
-        }
-        if self.dash.services.running_check.is_empty() {
-            self.dash.services.running_check = "pm2".to_string();
-        }
+        // dash.services.manager / running_check are intentionally *not*
+        // back-filled here. An empty string means "the project didn't opt
+        // into a runtime", which the dashboard reads as "don't probe
+        // PM2 at all". Init wizard writes explicit values for projects
+        // that do use PM2.
 
         if self.docker.proxy.dynamic_dir.is_empty() && self.docker.proxy.proxy_type == "traefik" {
             self.docker.proxy.dynamic_dir = "traefik/dynamic".to_string();

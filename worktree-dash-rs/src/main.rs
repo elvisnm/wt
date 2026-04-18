@@ -10,6 +10,7 @@ mod daemon;
 mod detect;
 mod docker;
 mod init;
+mod perf;
 mod pm2;
 mod pty;
 mod settings;
@@ -138,30 +139,47 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, debug: bool) 
         // Only redraw at ~30fps max, or immediately after events
         let now = std::time::Instant::now();
         if now.duration_since(last_draw) >= std::time::Duration::from_millis(33) {
-            terminal.draw(|frame| {
-                let size = frame.area();
-                app.last_frame_width = size.width;
-                app.last_frame_height = size.height;
-                app.render(frame);
-            })?;
+            let _frame = perf::timed("frame.total", 25_000);
+            {
+                let _t = perf::timed("frame.draw", 15_000);
+                terminal.draw(|frame| {
+                    let size = frame.area();
+                    app.last_frame_width = size.width;
+                    app.last_frame_height = size.height;
+                    app.render(frame);
+                })?;
+            }
             last_draw = now;
 
             // Sync PTY sizes
-            app.resize_split_ptys();
+            {
+                let _t = perf::timed("tick.resize_split_ptys", 2_000);
+                app.resize_split_ptys();
+            }
 
             // Periodic checks (every draw = ~30fps)
             tick += 1;
             app.spin_frame = (tick / 5) as usize;
             app.dismiss_expired_toasts(tick);
-            app.check_pending_remove();
-            app.check_pending_create();
-            app.check_pending_build();
-            app.check_pending_start();
-            app.poll_dag_fetch();
-            app.poll_mutations();
+            {
+                let _t = perf::timed("tick.check_pending", 2_000);
+                app.check_pending_remove();
+                app.check_pending_create();
+                app.check_pending_build();
+                app.check_pending_start();
+            }
+            {
+                let _t = perf::timed("tick.poll_dag_fetch", 5_000);
+                app.poll_dag_fetch();
+            }
+            {
+                let _t = perf::timed("tick.poll_mutations", 5_000);
+                app.poll_mutations();
+            }
 
             // Update agent states every ~1 second (30 ticks at 30fps)
             if tick % 30 == 0 {
+                let _t = perf::timed("tick.update_agent_states", 20_000);
                 app.update_agent_states();
             }
 
@@ -169,15 +187,31 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, debug: bool) 
                 app.heihei_active = false;
             }
 
-            // Background refresh (~every 3-5s)
-            if tick % 90 == 0 { app.refresh_stats(); }      // 3s
-            if tick % 150 == 0 { app.refresh_status(); }     // 5s
-            if tick % 150 == 0 { app.run_discovery(); }      // 5s
+            // Background refresh. Stats and status only hit Docker when the
+            // project has Docker worktrees (gated inside the refresh fns),
+            // so the interval mainly matters for Docker projects. 15s for
+            // stats keeps `docker stats --no-stream`'s built-in 1s CPU
+            // sample from dominating the main thread.
+            if tick % 450 == 0 {
+                let _t = perf::timed("tick.refresh_stats", 10_000);
+                app.refresh_stats();
+            }
+            if tick % 300 == 0 {
+                let _t = perf::timed("tick.refresh_status", 10_000);
+                app.refresh_status();
+            }
+            if tick % 150 == 0 {
+                let _t = perf::timed("tick.run_discovery", 10_000);
+                app.run_discovery();
+            }
             // Periodic refresh removed: the sync bd subprocess was blocking the
             // UI every 5s and causing perceptible lag during list navigation.
             // Task mutations (create / edit / close / delete) trigger explicit
             // refreshes via refresh_tasks_and_graph() instead.
-            if tick % 300 == 0 && app.usage_visible { app.fetch_usage(); } // 10s
+            if tick % 300 == 0 && app.usage_visible {
+                let _t = perf::timed("tick.fetch_usage", 10_000);
+                app.fetch_usage();
+            }
         }
 
         // Toggle mouse capture

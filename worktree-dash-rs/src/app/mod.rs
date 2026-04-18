@@ -513,8 +513,12 @@ impl App {
 
     /// Refresh running status for all worktrees.
     pub fn refresh_status(&mut self) {
-        // Docker containers
-        docker::fetch_container_status(&mut self.worktrees, self.cfg.as_ref());
+        // Docker containers — only shell out when the project actually has
+        // a Docker worktree. Pure-local projects (stack: node, etc.) would
+        // otherwise pay 100+ms to `docker ps` for nothing.
+        if self.has_docker_worktrees() {
+            docker::fetch_container_status(&mut self.worktrees, self.cfg.as_ref());
+        }
 
         // Local worktrees: check daemon PID first, then PM2 fallback
         for wt in &mut self.worktrees {
@@ -523,18 +527,22 @@ impl App {
             }
         }
 
-        // PM2 fallback for worktrees without daemon PID
-        let mut pm2_paths: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        for wt in &self.worktrees {
-            if wt.wt_type == WorktreeType::Local && !wt.running {
-                pm2_paths.insert(wt.path.to_string_lossy().to_string(), wt.alias.clone());
-            }
-        }
-        if !pm2_paths.is_empty() {
-            let running = pm2::fetch_running_worktrees(&pm2_paths);
-            for wt in &mut self.worktrees {
+        // PM2 fallback for worktrees without daemon PID — only when the
+        // project opts into PM2. Default configs no longer imply PM2, so a
+        // project that just uses shell + tasks never probes pm2.
+        if self.has_pm2_project() {
+            let mut pm2_paths: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            for wt in &self.worktrees {
                 if wt.wt_type == WorktreeType::Local && !wt.running {
-                    wt.running = running.get(&wt.alias).copied().unwrap_or(false);
+                    pm2_paths.insert(wt.path.to_string_lossy().to_string(), wt.alias.clone());
+                }
+            }
+            if !pm2_paths.is_empty() {
+                let running = pm2::fetch_running_worktrees(&pm2_paths);
+                for wt in &mut self.worktrees {
+                    if wt.wt_type == WorktreeType::Local && !wt.running {
+                        wt.running = running.get(&wt.alias).copied().unwrap_or(false);
+                    }
                 }
             }
         }
@@ -545,22 +553,53 @@ impl App {
 
     /// Refresh CPU/memory stats via docker stats.
     pub fn refresh_stats(&mut self) {
-        docker::fetch_container_stats(&mut self.worktrees, self.cfg.as_ref());
+        // `docker stats --no-stream` does a built-in 1-second CPU sample on
+        // every invocation, so we only run it when the project actually has
+        // Docker worktrees. On pure-local projects this is the single
+        // biggest win — it eliminates a full second of main-thread blocking.
+        if self.has_docker_worktrees() {
+            docker::fetch_container_stats(&mut self.worktrees, self.cfg.as_ref());
+        }
 
-        // Local worktree stats via PM2 or devTab
-        let running_check = self.cfg.as_ref()
-            .map(|c| c.dash.services.running_check.as_str())
-            .unwrap_or("pm2");
+        // Local worktree stats via PM2 — requires explicit opt-in. Empty
+        // running_check (the new default) means no PM2 probe.
+        if self.has_pm2_project() {
+            let running_check = self.cfg.as_ref()
+                .map(|c| c.dash.services.running_check.as_str())
+                .unwrap_or("");
 
-        for wt in &mut self.worktrees {
-            if wt.wt_type == WorktreeType::Local && wt.isolated_pm2 && running_check == "pm2" {
-                let pm2_home = wt.pm2_home().to_string_lossy().to_string();
-                let (running, cpu, mem) = pm2::status_with_home(&pm2_home);
-                wt.running = running;
-                wt.cpu = cpu;
-                wt.mem = mem;
+            for wt in &mut self.worktrees {
+                if wt.wt_type == WorktreeType::Local && wt.isolated_pm2 && running_check == "pm2" {
+                    let pm2_home = wt.pm2_home().to_string_lossy().to_string();
+                    let (running, cpu, mem) = pm2::status_with_home(&pm2_home);
+                    wt.running = running;
+                    wt.cpu = cpu;
+                    wt.mem = mem;
+                }
             }
         }
+    }
+
+    fn has_docker_worktrees(&self) -> bool {
+        self.worktrees.iter().any(|w| w.wt_type == WorktreeType::Docker)
+    }
+
+    /// True when the project has explicitly opted into PM2 as its runtime.
+    /// We never probe `pm2 jlist` unless this returns true — the historical
+    /// behavior of falling back to PM2 for any `Local` worktree turned the
+    /// dashboard into an unwanted pm2 poller on projects (like plain shell
+    /// + tasks) that never installed pm2 in the first place.
+    fn has_pm2_project(&self) -> bool {
+        if self.worktrees.iter().any(|w| w.isolated_pm2) {
+            return true;
+        }
+        self.cfg
+            .as_ref()
+            .map(|c| {
+                c.dash.services.manager == "pm2"
+                    || c.dash.services.running_check == "pm2"
+            })
+            .unwrap_or(false)
     }
 
     pub fn fetch_usage(&mut self) {
@@ -867,6 +906,7 @@ impl App {
     ///
     /// Falls back to bd list order when the DAG layout isn't available yet.
     pub fn filtered_task_indices(&self) -> Vec<usize> {
+        let _t = crate::perf::timed("filtered_task_indices", 500);
         let mut indices: Vec<usize> = match &self.tasks_search {
             Some(q) if !q.is_empty() => {
                 let lower = q.to_lowercase();
@@ -919,9 +959,13 @@ impl App {
         let wt = &self.worktrees[self.cursor];
         let manager = self.cfg.as_ref()
             .map(|c| c.service_manager())
-            .unwrap_or("pm2");
+            .unwrap_or("");
+        let pm2_ok = self.has_pm2_project();
 
         self.services = if wt.alias == "Root" {
+            Vec::new()
+        } else if manager.is_empty() {
+            // No runtime configured — shell-only project. Nothing to list.
             Vec::new()
         } else if manager == "static" {
             // Static services from config — check actual port listening
@@ -953,10 +997,10 @@ impl App {
                 .unwrap_or_default()
         } else if wt.wt_type == WorktreeType::Docker && !wt.container.is_empty() {
             docker::fetch_services(&wt.container, &wt.name)
-        } else if wt.wt_type == WorktreeType::Local && wt.isolated_pm2 {
+        } else if pm2_ok && wt.wt_type == WorktreeType::Local && wt.isolated_pm2 {
             let pm2_home = wt.pm2_home().to_string_lossy().to_string();
             pm2::fetch_services_with_home(&pm2_home)
-        } else if wt.wt_type == WorktreeType::Local {
+        } else if pm2_ok && wt.wt_type == WorktreeType::Local {
             let path = wt.path.to_string_lossy().to_string();
             pm2::fetch_services(&path)
         } else {
@@ -989,6 +1033,7 @@ impl App {
     }
 
     pub fn render(&self, frame: &mut Frame) {
+        let _t = crate::perf::timed("app.render", 10_000);
         if !self.discovered {
             ui::splash::render_splash(frame, frame.area(), "Loading worktrees...");
             return;
