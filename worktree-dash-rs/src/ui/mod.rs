@@ -1491,16 +1491,6 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             ("Enter", "Confirm"),
             ("Esc", "Cancel"),
         ]
-    } else if app.active_tab_is_widget() {
-        // Shortcuts for the DAG graph tab. These supplement whatever
-        // the focused panel also offers; the panel-specific shortcuts
-        // are appended below through the normal focus branch.
-        vec![
-            ("h/j/k/l", "Pan"),
-            ("Ctrl+f", "Fullscreen"),
-            ("Ctrl+g", "Minimap/Legend"),
-            ("Ctrl+]", "Detach"),
-        ]
     } else {
         match app.focus {
             Panel::Worktrees => vec![
@@ -1563,6 +1553,24 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
                 v
             },
         }
+    };
+
+    // Prepend DAG shortcuts when a widget tab is active so the user
+    // can see pan / fullscreen / minimap hints alongside the focused
+    // panel's own shortcuts (Ctrl+s for search etc.).
+    let shortcuts: Vec<(&str, &str)> = if app.active_tab_is_widget()
+        && !app.terminal_focused
+        && app.task_editor.is_none()
+    {
+        let mut prefixed: Vec<(&str, &str)> = vec![
+            ("h/j/k/l", "Pan"),
+            ("Ctrl+g", "Mini/Legend"),
+            ("Ctrl+f", "Fullscreen"),
+        ];
+        prefixed.extend(shortcuts);
+        prefixed
+    } else {
+        shortcuts
     };
 
     // Search input mode: replace status bar with search prompt

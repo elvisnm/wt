@@ -1766,11 +1766,13 @@ impl App {
         // ── Tasks search mode (capturing keystrokes) ────────────────
         if self.tasks_search_active {
             let query = self.tasks_search.get_or_insert_with(String::new);
+            let mut query_changed = false;
             match key.code {
                 KeyCode::Esc => {
                     self.tasks_search = None;
                     self.tasks_search_active = false;
                     self.tasks_cursor = 0;
+                    query_changed = true;
                 }
                 KeyCode::Enter => {
                     // Confirm: keep filter, stop capturing
@@ -1782,12 +1784,22 @@ impl App {
                 KeyCode::Backspace => {
                     query.pop();
                     self.tasks_cursor = 0;
+                    query_changed = true;
                 }
                 KeyCode::Char(c) => {
                     query.push(c);
                     self.tasks_cursor = 0;
+                    query_changed = true;
                 }
                 _ => {}
+            }
+            // Keep the DAG in step with the filtered list. When the
+            // query shifts the first result, the selected card and its
+            // tooltip should follow so the user can watch the match
+            // slide around the graph while they type.
+            if query_changed {
+                self.tasks_selected = true;
+                self.sync_dag_selection();
             }
             return;
         }
