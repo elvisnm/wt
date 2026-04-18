@@ -275,12 +275,17 @@ module.exports = {
       install: "/usr/local/bin/myapp-{alias}",  // symlink path for system-wide access
     },
 
-    // Service management configuration (how the dashboard discovers and
-    // controls services). Default: pm2 for everything (backward compatible).
+    // Service management configuration. Opt-in only: if this block is
+    // omitted, the dashboard runs as a shell + task-management tool with
+    // no background probing. Populate it to turn on PM2 or static
+    // service tracking. Docker tracking is separate and triggers
+    // automatically when worktrees are created with the docker strategy.
     services: {
       // How to discover and manage services:
-      // "pm2"    — discover via `pm2 jlist`, restart/logs via pm2 commands (default)
-      // "static" — define services explicitly in `list[]`, no per-service lifecycle
+      //   "pm2"    : discover via `pm2 jlist`, restart/logs via pm2 commands
+      //   "static" : define services explicitly in `list[]`, no per-service lifecycle
+      // Leave unset (or omit the whole `services` block) to skip process
+      // management entirely.
       manager: "pm2",
 
       // For "static" manager: explicit service definitions.
@@ -294,8 +299,10 @@ module.exports = {
       ],
 
       // How to detect if a local worktree is running:
-      // "pm2"    — pm2 jlist has online processes for this worktree path (default)
-      // "devTab" — the "Dev — {alias}" terminal tab is alive
+      //   "pm2"    : pm2 jlist has online processes for this worktree path
+      //   "devTab" : the "Dev : {alias}" terminal tab is alive
+      // Leave unset to skip the check (the daemon PID file is still
+      // honored regardless).
       runningCheck: "pm2",
 
       // Override service manager for Docker containers only.

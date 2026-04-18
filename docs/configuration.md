@@ -279,7 +279,9 @@ See [Dashboard — Custom Commands](dashboard.md#custom-commands) for details on
 
 #### dash.services
 
-Controls how the dashboard discovers and manages services. Omit entirely if your project uses PM2 everywhere (the default).
+Opt-in configuration for service discovery and management. If you omit this block, the dashboard runs as a shell + task-management tool and never probes PM2 or runs `docker stats` / `docker ps`. Projects that actually run services through PM2 or expose static port checks must declare it here.
+
+Docker tracking is separate: it triggers automatically when a worktree is created with the docker strategy (`WORKTREE_TYPE=docker` in `.env.worktree`), regardless of this block.
 
 ```js
 dash: {
@@ -298,20 +300,21 @@ dash: {
 
 | Field | Default | Description |
 |---|---|---|
-| `manager` | `'pm2'` | `'pm2'` or `'static'`. Use `'static'` when services don't run under PM2 (e.g. turbo, vite) |
+| `manager` | `''` (unset) | `'pm2'` or `'static'`. Unset means no service manager. `'pm2'` discovers via `pm2 jlist`. `'static'` uses explicit entries from `list[]` with port listening checks |
 | `list` | `[]` | Service entries with `name`, `port`, and optional `processes`. Should mirror `services.ports` |
 | `list[].processes` | `undefined` | Array of PM2 process names when they differ from `name`. Status is online if any listed process is running |
-| `runningCheck` | `'pm2'` | `'pm2'` or `'devTab'`. How the dashboard checks if local services are running |
+| `runningCheck` | `''` (unset) | `'pm2'` or `'devTab'`. Unset means no running check. `'pm2'` asks `pm2 jlist` for this worktree's path. `'devTab'` looks for the `Dev : {alias}` terminal tab |
 | `docker` | `undefined` | Override for Docker containers. Set `{ manager: 'pm2' }` when Docker uses PM2 but local doesn't |
 
 **When to use:**
 
 | Setup | What to set |
 |---|---|
-| PM2 everywhere (generate strategy, monolith container) | Omit `dash.services` entirely |
+| Shell + tasks only, no process management | Omit `dash.services` entirely |
+| PM2 everywhere (generate strategy, monolith container) | `manager: 'pm2'`, `runningCheck: 'pm2'` |
 | Shared compose (separate containers, no PM2) | `manager: 'static'`, `runningCheck: 'devTab'` |
 | Local: turbo/vite, Docker: PM2 inside container | `manager: 'static'`, `runningCheck: 'devTab'`, `docker: { manager: 'pm2' }` |
-| Local PM2 with isolated PM2_HOME | `manager: 'static'` or omit, enable `features.localDev` |
+| Local PM2 with isolated PM2_HOME | `manager: 'pm2'` and enable `features.localDev` |
 
 ### paths
 
