@@ -1421,7 +1421,7 @@ impl App {
                 return;
             }
 
-            // Ctrl+G toggles the minimap and legend overlays together.
+            // Ctrl+G toggles the overlay group (minimap, legends, progress bar).
             if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 if let Some(state) = self
                     .tabs

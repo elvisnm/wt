@@ -1564,7 +1564,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     {
         let mut prefixed: Vec<(&str, &str)> = vec![
             ("h/j/k/l", "Pan"),
-            ("Ctrl+g", "Mini/Legend"),
+            ("Ctrl+g", "Overlays"),
             ("Ctrl+f", "Fullscreen"),
         ];
         prefixed.extend(shortcuts);
