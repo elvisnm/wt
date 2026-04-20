@@ -146,21 +146,14 @@ pub fn compute_layout(tasks: &[Task]) -> GraphLayout {
     }
     let ranks: Vec<usize> = ranks.into_iter().map(|r| r.unwrap_or(0)).collect();
 
-    // A task is "ready" when every one of its blockers is closed. Applies to
-    // any bd status, not just "open" — if a task is manually marked blocked
-    // but its blockers have since been closed, we surface it as ready
+    // Three-way classification of a task's direct blockers. Drives the
+    // DAG status so that a task waiting on normal open work reads
+    // differently from one stuck behind a blocked dep. Applies to any bd
+    // status, not just "open" — if a task is manually marked blocked but
+    // its blockers have since been closed, we surface it as ready
     // because the dependency graph says it can proceed.
-    let is_ready: Vec<bool> = tasks
-        .iter()
-        .map(|t| {
-            t.dependencies.iter().all(|dep_id| {
-                id_to_idx
-                    .get(dep_id.as_str())
-                    .map(|&idx| is_closed(&tasks[idx].status))
-                    .unwrap_or(true)
-            })
-        })
-        .collect();
+    let blocker_states: Vec<BlockerState> =
+        tasks.iter().map(|t| compute_blocker_state(t, tasks, &id_to_idx)).collect();
 
     // Connected components via dependency graph (undirected).
     let components = compute_components(tasks, &id_to_idx);
@@ -229,7 +222,7 @@ pub fn compute_layout(tasks: &[Task]) -> GraphLayout {
             for (rank, rank_items) in by_rank.iter().enumerate() {
                 for (row, &task_idx) in rank_items.iter().enumerate() {
                     let t = &tasks[task_idx];
-                    let status = card_status(t, is_ready[task_idx]);
+                    let status = card_status(t, blocker_states[task_idx]);
                     let pri = priority_of(t);
                     let height = card_height(&t.id, &t.title, status);
 
@@ -443,21 +436,56 @@ fn wrap_count(text: &str, width: usize) -> usize {
     wrap_text_cells(text, width).len()
 }
 
-fn card_status(task: &Task, is_ready: bool) -> CardStatus {
-    // DAG status is derived from "is any blocker still open?" rather than
-    // from bd's manual status flag. `closed` → Done, `in_progress` → Active,
-    // everything else resolves to Ready (all blockers closed) or Blocked
-    // (at least one blocker still unfinished).
+/// Three-way summary of a task's direct blockers. Distinguishes "waiting
+/// on normal open work" (`SomeOpen`) from "stuck behind an explicitly
+/// blocked dep" (`SomeBlocked`), so the DAG can surface the two cases in
+/// different colors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockerState {
+    AllClear,
+    SomeOpen,
+    SomeBlocked,
+}
+
+fn compute_blocker_state(
+    task: &Task,
+    tasks: &[Task],
+    id_to_idx: &HashMap<&str, usize>,
+) -> BlockerState {
+    let mut any_blocked = false;
+    let mut any_open = false;
+    for dep_id in &task.dependencies {
+        let Some(&idx) = id_to_idx.get(dep_id.as_str()) else {
+            continue;
+        };
+        let status = tasks[idx].status.as_str();
+        if is_closed(status) {
+            continue;
+        }
+        if status == "blocked" {
+            any_blocked = true;
+        } else {
+            any_open = true;
+        }
+    }
+    if any_blocked {
+        BlockerState::SomeBlocked
+    } else if any_open {
+        BlockerState::SomeOpen
+    } else {
+        BlockerState::AllClear
+    }
+}
+
+fn card_status(task: &Task, blockers: BlockerState) -> CardStatus {
     match task.status.as_str() {
         "closed" | "done" => CardStatus::Done,
         "in_progress" => CardStatus::Active,
-        _ => {
-            if is_ready {
-                CardStatus::Ready
-            } else {
-                CardStatus::Blocked
-            }
-        }
+        _ => match blockers {
+            BlockerState::AllClear => CardStatus::Ready,
+            BlockerState::SomeOpen => CardStatus::Open,
+            BlockerState::SomeBlocked => CardStatus::Blocked,
+        },
     }
 }
 
@@ -552,6 +580,20 @@ mod tests {
         assert_eq!(card("b").status, CardStatus::Ready);
         assert_eq!(card("d").status, CardStatus::Open);
         assert_eq!(card("a").status, CardStatus::Done);
+    }
+
+    #[test]
+    fn blocked_when_any_dep_is_blocked() {
+        // e has two blockers: x (open) and y (blocked). The "blocked"
+        // dep should dominate — e reads as Blocked, not Open.
+        let tasks = vec![
+            make_task("x", "open", &[]),
+            make_task("y", "blocked", &[]),
+            make_task("e", "open", &["x", "y"]),
+        ];
+        let layout = compute_layout(&tasks);
+        let card = |id: &str| layout.cards.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(card("e").status, CardStatus::Blocked);
     }
 
     #[test]
