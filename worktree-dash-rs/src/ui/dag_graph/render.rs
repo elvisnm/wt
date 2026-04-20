@@ -146,6 +146,11 @@ fn render_graph(
         // Minimap lives in the bottom-left, mirroring the legends on the
         // right. Painted before the tooltip for the same z-order reason.
         draw_minimap(area, buf, layout, vx, vy);
+
+        // Progress bar spans the bottom-middle gap between minimap and
+        // legends. Same z-order as the other overlays — the tooltip
+        // paints afterward so it still wins on top.
+        draw_progress_bar(area, buf, layout);
     }
 
     // Tooltip for the selected card, anchored next to it.
@@ -1121,4 +1126,387 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
         }
     }
     result
+}
+
+/// Bottom-middle progress bar with a color-coded caption row beneath it.
+///
+/// Rows occupied (bottom-up):
+///   `area.height - 1`  empty pad (matches minimap / legend pad row)
+///   `area.height - 2`  caption: "done · ready/open · active · blocked"
+///                      each label painted in its bucket color
+///   `area.height - 3`  the bar itself — 30 cells, proportional segments
+///                      with inline `NN%` labels where space allows
+///
+/// The caption is slightly wider than the bar (36 vs 30 cells) and is
+/// centered on the same axis, so it extends a few cells past each edge
+/// of the bar. Skipped entirely if the area is too small to fit both.
+fn draw_progress_bar(area: Rect, buf: &mut Buffer, layout: &GraphLayout) {
+    const BAR_W: u16 = 30;
+    const EXT_PAD: u16 = 1;
+    const REQUIRED_H: u16 = 3;
+
+    if layout.cards.is_empty() {
+        return;
+    }
+
+    let captions: [(&str, Color); 4] = [
+        ("done", status_color(CardStatus::Done)),
+        ("ready/open", status_color(CardStatus::Ready)),
+        ("active", status_color(CardStatus::Active)),
+        ("blocked", status_color(CardStatus::Blocked)),
+    ];
+    const SEP: &str = " · ";
+    let sep_w = SEP.chars().count();
+    let caption_w: usize = captions.iter().map(|(l, _)| l.chars().count()).sum::<usize>()
+        + sep_w * (captions.len() - 1);
+
+    let needed_w = (BAR_W as usize).max(caption_w) as u16 + 2 * EXT_PAD;
+    if area.width < needed_w || area.height < REQUIRED_H + EXT_PAD {
+        return;
+    }
+
+    let counts = bucket_counts(&layout.cards);
+    let segs = allocate_segments(counts, BAR_W as usize);
+    if segs.iter().all(|s| s.width == 0) {
+        return;
+    }
+
+    let bar_y = area.y + area.height - 3;
+    let caption_y = area.y + area.height - 2;
+    let bar_x = area.x + (area.width - BAR_W) / 2;
+    let caption_x = area.x + (area.width - caption_w as u16) / 2;
+
+    // --- Bar row ---
+    let mut cursor = bar_x;
+    for (i, seg) in segs.iter().enumerate() {
+        if seg.width == 0 {
+            continue;
+        }
+        let fg = captions[i].1;
+        let fill_style = Style::default().fg(fg).bg(HEADER_BG);
+        for dx in 0..seg.width {
+            let cell = &mut buf[(cursor + dx as u16, bar_y)];
+            cell.set_symbol("█");
+            cell.set_style(fill_style);
+        }
+
+        let label = format!("{}%", seg.pct);
+        let label_len = label.chars().count();
+        // `>=` (not `>`) so a 2-cell segment showing "8%" still gets
+        // its label. Tight fit with no side padding, but a visible
+        // percentage beats a silent colored stub.
+        if seg.width >= label_len {
+            let offset = (seg.width - label_len) / 2;
+            let label_x = cursor + offset as u16;
+            // Contrasting text color: dark for light fills, light for
+            // dark fills. Keeps the number legible across the palette.
+            let label_fg = match fg {
+                Color::Green | Color::Yellow | Color::Cyan | Color::LightGreen
+                | Color::LightYellow | Color::LightCyan => Color::Black,
+                _ => Color::White,
+            };
+            let label_style = Style::default()
+                .fg(label_fg)
+                .bg(fg)
+                .add_modifier(Modifier::BOLD);
+            buf.set_string(label_x, bar_y, &label, label_style);
+        }
+
+        cursor += seg.width as u16;
+    }
+
+    // --- Caption row ---
+    let sep_style = Style::default().fg(Color::DarkGray).bg(HEADER_BG);
+    let mut cx = caption_x;
+    for (i, (text, color)) in captions.iter().enumerate() {
+        if i > 0 {
+            buf.set_string(cx, caption_y, SEP, sep_style);
+            cx += sep_w as u16;
+        }
+        let style = Style::default().fg(*color).bg(HEADER_BG);
+        buf.set_string(cx, caption_y, *text, style);
+        cx += text.chars().count() as u16;
+    }
+}
+
+// ─── Progress bar helpers ────────────────────────────────────────────────
+//
+// The progress bar folds the 5 CardStatus variants into 4 display buckets
+// (DONE, READY/OPEN, ACTIVE, BLOCKED) and splits a fixed-width bar into
+// proportional colored segments. Both the percentage and cell-width
+// splits use largest-remainder rounding so the values sum exactly to
+// their target (100% and bar_w respectively) without 99%/101% drift.
+
+const BUCKET_DONE: usize = 0;
+const BUCKET_READY: usize = 1;
+const BUCKET_ACTIVE: usize = 2;
+const BUCKET_BLOCKED: usize = 3;
+
+/// One segment of the progress bar after proportional allocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Segment {
+    pct: u8,
+    width: usize,
+}
+
+/// Fold the 5 `CardStatus` variants into 4 progress-bar buckets:
+/// `[DONE, READY/OPEN, ACTIVE, BLOCKED]`. `Ready` and `Open` share a
+/// bucket so the user sees a single "available work" slice rather than
+/// two near-identical ones.
+fn bucket_counts(cards: &[Card]) -> [usize; 4] {
+    let mut counts = [0usize; 4];
+    for c in cards {
+        let idx = match c.status {
+            CardStatus::Done => BUCKET_DONE,
+            CardStatus::Ready | CardStatus::Open => BUCKET_READY,
+            CardStatus::Active => BUCKET_ACTIVE,
+            CardStatus::Blocked => BUCKET_BLOCKED,
+        };
+        counts[idx] += 1;
+    }
+    counts
+}
+
+/// Split a `bar_w`-cell bar into 4 segments proportional to `counts`.
+///
+/// Guarantees (when total > 0):
+/// - `widths` sum exactly to `bar_w`
+/// - `pct` values sum exactly to 100
+/// - Zero-count buckets get `width = 0, pct = 0`
+/// - A nonzero-count bucket that would round to 0 cells is forced to 1
+///   cell (stolen from the widest donor with `width >= 2`). This keeps
+///   a present-but-small bucket visible. If no donor qualifies (bar too
+///   narrow for all nonzero buckets), the bucket stays at 0.
+///
+/// When `total == 0` or `bar_w == 0` all widths are 0; percentages are
+/// all 0 only if `total == 0`.
+fn allocate_segments(counts: [usize; 4], bar_w: usize) -> [Segment; 4] {
+    let total: usize = counts.iter().sum();
+    if total == 0 {
+        return [Segment { pct: 0, width: 0 }; 4];
+    }
+
+    let pcts = largest_remainder(&counts, total, 100);
+    let widths = if bar_w == 0 {
+        [0usize; 4]
+    } else {
+        let raw = largest_remainder(&counts, total, bar_w);
+        enforce_min_one(raw, counts)
+    };
+
+    let mut out = [Segment { pct: 0, width: 0 }; 4];
+    for i in 0..4 {
+        out[i] = Segment {
+            pct: pcts[i] as u8,
+            width: widths[i],
+        };
+    }
+    out
+}
+
+/// Largest-remainder allocation: give each bucket `floor(count * target / total)`,
+/// then hand out the leftover units one at a time to the buckets with the
+/// largest fractional remainder. Ties break toward the lower index so the
+/// result is deterministic for identical inputs.
+fn largest_remainder(counts: &[usize; 4], total: usize, target: usize) -> [usize; 4] {
+    let mut raw = [0usize; 4];
+    let mut remainders = [0usize; 4];
+    for i in 0..4 {
+        raw[i] = counts[i] * target / total;
+        remainders[i] = counts[i] * target - raw[i] * total;
+    }
+
+    let assigned: usize = raw.iter().sum();
+    let leftover = target.saturating_sub(assigned);
+    if leftover == 0 {
+        return raw;
+    }
+
+    let mut order: [usize; 4] = [0, 1, 2, 3];
+    order.sort_by(|&a, &b| remainders[b].cmp(&remainders[a]).then_with(|| a.cmp(&b)));
+    for &idx in order.iter().take(leftover) {
+        raw[idx] += 1;
+    }
+    raw
+}
+
+/// Force nonzero-count buckets to at least 1 cell by stealing from the
+/// widest segment (must have `width >= 2` so it doesn't become invisible
+/// itself). Runs until every nonzero-count bucket has width ≥ 1 or no
+/// donor qualifies.
+fn enforce_min_one(mut widths: [usize; 4], counts: [usize; 4]) -> [usize; 4] {
+    loop {
+        let Some(victim) = (0..4).find(|&i| counts[i] > 0 && widths[i] == 0) else {
+            break;
+        };
+        let donor = (0..4)
+            .filter(|&i| widths[i] >= 2)
+            .max_by_key(|&i| widths[i]);
+        let Some(d) = donor else {
+            break;
+        };
+        widths[d] -= 1;
+        widths[victim] += 1;
+    }
+    widths
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn card_with_status(id: &str, status: CardStatus) -> Card {
+        Card {
+            id: id.into(),
+            title: String::new(),
+            priority: 2,
+            status,
+            rank: 0,
+            row: 0,
+            x: 0,
+            y: 0,
+            height: 3,
+            list_order: 0,
+        }
+    }
+
+    #[test]
+    fn bucket_counts_folds_ready_and_open_together() {
+        let cards = vec![
+            card_with_status("a", CardStatus::Done),
+            card_with_status("b", CardStatus::Ready),
+            card_with_status("c", CardStatus::Open),
+            card_with_status("d", CardStatus::Active),
+            card_with_status("e", CardStatus::Blocked),
+            card_with_status("f", CardStatus::Blocked),
+        ];
+        let counts = bucket_counts(&cards);
+        assert_eq!(counts[BUCKET_DONE], 1);
+        assert_eq!(counts[BUCKET_READY], 2); // Ready + Open
+        assert_eq!(counts[BUCKET_ACTIVE], 1);
+        assert_eq!(counts[BUCKET_BLOCKED], 2);
+    }
+
+    #[test]
+    fn bucket_counts_empty_input() {
+        assert_eq!(bucket_counts(&[]), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn allocate_empty_returns_all_zero() {
+        let segs = allocate_segments([0, 0, 0, 0], 30);
+        for s in segs {
+            assert_eq!(s.pct, 0);
+            assert_eq!(s.width, 0);
+        }
+    }
+
+    #[test]
+    fn allocate_single_bucket_takes_full_bar() {
+        let segs = allocate_segments([10, 0, 0, 0], 30);
+        assert_eq!(segs[BUCKET_DONE], Segment { pct: 100, width: 30 });
+        assert_eq!(segs[BUCKET_READY], Segment { pct: 0, width: 0 });
+        assert_eq!(segs[BUCKET_ACTIVE], Segment { pct: 0, width: 0 });
+        assert_eq!(segs[BUCKET_BLOCKED], Segment { pct: 0, width: 0 });
+    }
+
+    #[test]
+    fn allocate_bar_width_zero() {
+        let segs = allocate_segments([2, 1, 1, 0], 0);
+        // Widths all 0, but pcts still sum to 100.
+        assert!(segs.iter().all(|s| s.width == 0));
+        let pct_sum: u32 = segs.iter().map(|s| s.pct as u32).sum();
+        assert_eq!(pct_sum, 100);
+    }
+
+    #[test]
+    fn allocate_widths_sum_to_bar_w() {
+        // Fuzz-like coverage across many count configurations.
+        let cases: &[[usize; 4]] = &[
+            [1, 1, 1, 1],
+            [1, 1, 1, 0],
+            [3, 1, 1, 1],
+            [1, 2, 3, 4],
+            [10, 0, 0, 0],
+            [5, 5, 0, 0],
+            [7, 3, 2, 1],
+            [100, 1, 1, 1],
+            [1, 100, 1, 1],
+            [13, 17, 23, 29],
+        ];
+        for bar_w in [10usize, 20, 30, 40, 50] {
+            for counts in cases {
+                let segs = allocate_segments(*counts, bar_w);
+                let sum: usize = segs.iter().map(|s| s.width).sum();
+                assert_eq!(sum, bar_w, "counts={:?} bar_w={}", counts, bar_w);
+            }
+        }
+    }
+
+    #[test]
+    fn allocate_pcts_sum_to_100() {
+        let cases: &[[usize; 4]] = &[
+            [1, 1, 1, 1],
+            [1, 1, 1, 0],
+            [3, 1, 1, 1],
+            [1, 2, 3, 4],
+            [10, 0, 0, 0],
+            [7, 3, 2, 1],
+            [100, 1, 1, 1],
+            [13, 17, 23, 29],
+        ];
+        for counts in cases {
+            let segs = allocate_segments(*counts, 30);
+            let sum: u32 = segs.iter().map(|s| s.pct as u32).sum();
+            assert_eq!(sum, 100, "counts={:?}", counts);
+        }
+    }
+
+    #[test]
+    fn allocate_zero_buckets_stay_zero() {
+        // Zero-count buckets must never get forced to 1 by min-one logic.
+        let segs = allocate_segments([5, 0, 0, 0], 30);
+        assert_eq!(segs[BUCKET_READY].width, 0);
+        assert_eq!(segs[BUCKET_READY].pct, 0);
+        assert_eq!(segs[BUCKET_ACTIVE].width, 0);
+        assert_eq!(segs[BUCKET_BLOCKED].width, 0);
+    }
+
+    #[test]
+    fn allocate_forces_min_one_for_small_nonzero_bucket() {
+        // One huge bucket + three tiny ones in a narrow bar. Without the
+        // min-one fix, the tiny buckets round to 0 cells and disappear.
+        let segs = allocate_segments([100, 1, 1, 1], 10);
+        assert!(segs[BUCKET_READY].width >= 1);
+        assert!(segs[BUCKET_ACTIVE].width >= 1);
+        assert!(segs[BUCKET_BLOCKED].width >= 1);
+        // Widths still total the bar width.
+        let sum: usize = segs.iter().map(|s| s.width).sum();
+        assert_eq!(sum, 10);
+    }
+
+    #[test]
+    fn allocate_min_one_skipped_when_no_donor_qualifies() {
+        // bar_w=2, four nonzero buckets — impossible to give every bucket
+        // 1 cell without making some bucket invisible. Must not loop
+        // forever and must still sum to bar_w.
+        let segs = allocate_segments([1, 1, 1, 1], 2);
+        let sum: usize = segs.iter().map(|s| s.width).sum();
+        assert_eq!(sum, 2);
+        // Exactly two buckets get 1 cell, the other two stay at 0.
+        let nonzero = segs.iter().filter(|s| s.width > 0).count();
+        assert_eq!(nonzero, 2);
+    }
+
+    #[test]
+    fn allocate_even_split_deterministic() {
+        // Identical counts → deterministic order. Leftover cells go to
+        // lowest-index buckets first (stable tie-break).
+        let segs = allocate_segments([1, 1, 1, 1], 30);
+        // 30 / 4 = 7 each, 2 leftover → buckets 0,1 get 8; 2,3 get 7.
+        assert_eq!(segs[0].width, 8);
+        assert_eq!(segs[1].width, 8);
+        assert_eq!(segs[2].width, 7);
+        assert_eq!(segs[3].width, 7);
+    }
 }
