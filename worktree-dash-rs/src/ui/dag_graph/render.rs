@@ -1134,14 +1134,16 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 ///   `area.height - 1`  empty pad (matches minimap / legend pad row)
 ///   `area.height - 2`  caption: "done · ready/open · active · blocked"
 ///                      each label painted in its bucket color
-///   `area.height - 3`  the bar itself — 30 cells, proportional segments
-///                      with inline `NN%` labels where space allows
+///   `area.height - 3`  the bar itself, 50 cells wide, proportional
+///                      segments with inline `NN%` labels where space
+///                      allows
 ///
-/// The caption is slightly wider than the bar (36 vs 30 cells) and is
-/// centered on the same axis, so it extends a few cells past each edge
-/// of the bar. Skipped entirely if the area is too small to fit both.
+/// The caption may be wider than the bar depending on task counts (it
+/// includes each bucket's count as `done (N)` etc.) and is centered on
+/// the same axis, so it extends past each edge of the bar when needed.
+/// Skipped entirely if the area is too small to fit both.
 fn draw_progress_bar(area: Rect, buf: &mut Buffer, layout: &GraphLayout) {
-    const BAR_W: u16 = 30;
+    const BAR_W: u16 = 50;
     const EXT_PAD: u16 = 1;
     const REQUIRED_H: u16 = 3;
 
@@ -1149,11 +1151,19 @@ fn draw_progress_bar(area: Rect, buf: &mut Buffer, layout: &GraphLayout) {
         return;
     }
 
-    let captions: [(&str, Color); 4] = [
-        ("done", status_color(CardStatus::Done)),
-        ("ready/open", status_color(CardStatus::Ready)),
-        ("active", status_color(CardStatus::Active)),
-        ("blocked", status_color(CardStatus::Blocked)),
+    let counts = bucket_counts(&layout.cards);
+    let segs = allocate_segments(counts, BAR_W as usize);
+    if segs.iter().all(|s| s.width == 0) {
+        return;
+    }
+
+    // Captions carry the per-bucket count as "label (N)" so the user
+    // can read distribution without reaching for `bd stats`.
+    let captions: [(String, Color); 4] = [
+        (format!("done ({})", counts[BUCKET_DONE]), status_color(CardStatus::Done)),
+        (format!("ready/open ({})", counts[BUCKET_READY]), status_color(CardStatus::Ready)),
+        (format!("active ({})", counts[BUCKET_ACTIVE]), status_color(CardStatus::Active)),
+        (format!("blocked ({})", counts[BUCKET_BLOCKED]), status_color(CardStatus::Blocked)),
     ];
     const SEP: &str = " · ";
     let sep_w = SEP.chars().count();
@@ -1162,12 +1172,6 @@ fn draw_progress_bar(area: Rect, buf: &mut Buffer, layout: &GraphLayout) {
 
     let needed_w = (BAR_W as usize).max(caption_w) as u16 + 2 * EXT_PAD;
     if area.width < needed_w || area.height < REQUIRED_H + EXT_PAD {
-        return;
-    }
-
-    let counts = bucket_counts(&layout.cards);
-    let segs = allocate_segments(counts, BAR_W as usize);
-    if segs.iter().all(|s| s.width == 0) {
         return;
     }
 
@@ -1224,7 +1228,7 @@ fn draw_progress_bar(area: Rect, buf: &mut Buffer, layout: &GraphLayout) {
             cx += sep_w as u16;
         }
         let style = Style::default().fg(*color).bg(HEADER_BG);
-        buf.set_string(cx, caption_y, *text, style);
+        buf.set_string(cx, caption_y, text.as_str(), style);
         cx += text.chars().count() as u16;
     }
 }
@@ -1304,10 +1308,14 @@ fn allocate_segments(counts: [usize; 4], bar_w: usize) -> [Segment; 4] {
     out
 }
 
-/// Largest-remainder allocation: give each bucket `floor(count * target / total)`,
-/// then hand out the leftover units one at a time to the buckets with the
-/// largest fractional remainder. Ties break toward the lower index so the
-/// result is deterministic for identical inputs.
+/// Largest-remainder allocation with a count-equality guard.
+///
+/// Each bucket starts at `floor(count * target / total)`. Leftover units
+/// go to the highest-remainder buckets, but with one extra rule: if a
+/// tie group (all not-yet-done buckets sharing a count) can't all
+/// receive a unit, the whole group is skipped so same-count buckets
+/// never diverge in width. Zero-count buckets are never bumped. Ties
+/// break toward the lower index so results stay deterministic.
 fn largest_remainder(counts: &[usize; 4], total: usize, target: usize) -> [usize; 4] {
     let mut raw = [0usize; 4];
     let mut remainders = [0usize; 4];
@@ -1317,16 +1325,56 @@ fn largest_remainder(counts: &[usize; 4], total: usize, target: usize) -> [usize
     }
 
     let assigned: usize = raw.iter().sum();
-    let leftover = target.saturating_sub(assigned);
+    let mut leftover = target.saturating_sub(assigned);
     if leftover == 0 {
         return raw;
     }
 
     let mut order: [usize; 4] = [0, 1, 2, 3];
     order.sort_by(|&a, &b| remainders[b].cmp(&remainders[a]).then_with(|| a.cmp(&b)));
-    for &idx in order.iter().take(leftover) {
-        raw[idx] += 1;
+
+    let mut done = [false; 4];
+    for &idx in &order {
+        if done[idx] || leftover == 0 || counts[idx] == 0 {
+            continue;
+        }
+        let mut group: [usize; 4] = [0; 4];
+        let mut group_len = 0usize;
+        for j in 0..4 {
+            if !done[j] && counts[j] == counts[idx] {
+                group[group_len] = j;
+                group_len += 1;
+            }
+        }
+        if group_len <= leftover {
+            for &j in group.iter().take(group_len) {
+                raw[j] += 1;
+                done[j] = true;
+            }
+            leftover -= group_len;
+        } else {
+            for &j in group.iter().take(group_len) {
+                done[j] = true;
+            }
+        }
     }
+
+    // Unusual fallback: every remaining tie group was too large to
+    // absorb its leftover, so units haven't found a home yet. Dump them
+    // into nonzero-count buckets in index order so bar_w stays exact.
+    if leftover > 0 {
+        for (i, slot) in raw.iter_mut().enumerate() {
+            if leftover == 0 {
+                break;
+            }
+            if counts[i] == 0 {
+                continue;
+            }
+            *slot += 1;
+            leftover -= 1;
+        }
+    }
+
     raw
 }
 
@@ -1496,6 +1544,34 @@ mod tests {
         // Exactly two buckets get 1 cell, the other two stay at 0.
         let nonzero = segs.iter().filter(|s| s.width > 0).count();
         assert_eq!(nonzero, 2);
+    }
+
+    #[test]
+    fn allocate_zero_count_never_gets_leftover_cell() {
+        // Three buckets tied at count=1 with 1 leftover cell forces the
+        // tie group to be skipped. The zero-count bucket must still not
+        // absorb the leftover — it has no tasks to represent.
+        let segs = allocate_segments([1, 1, 1, 0], 10);
+        assert_eq!(segs[BUCKET_BLOCKED].width, 0);
+        let sum: usize = segs.iter().map(|s| s.width).sum();
+        assert_eq!(sum, 10);
+    }
+
+    #[test]
+    fn allocate_same_count_buckets_get_same_width() {
+        // Two buckets with identical counts must end up with identical
+        // widths even when only one leftover cell would fit. Guards
+        // against the "21% and 21% but different pixel widths" bug.
+        let segs = allocate_segments([21, 63, 8, 8], 50);
+        assert_eq!(segs[BUCKET_ACTIVE].width, segs[BUCKET_BLOCKED].width);
+        assert_eq!(segs[BUCKET_ACTIVE].pct, segs[BUCKET_BLOCKED].pct);
+        let sum: usize = segs.iter().map(|s| s.width).sum();
+        assert_eq!(sum, 50);
+
+        // Same property across a narrower bar where the tie group is
+        // the bottleneck for leftover distribution.
+        let segs = allocate_segments([21, 63, 8, 8], 30);
+        assert_eq!(segs[BUCKET_ACTIVE].width, segs[BUCKET_BLOCKED].width);
     }
 
     #[test]
