@@ -106,6 +106,12 @@ wt
 | Docker strategies | [docs/docker-strategies.md](docs/docker-strategies.md) |
 | Full config schema | [wt.config.schema.md](wt.config.schema.md) |
 
+## Beads Task Wiring
+
+The dashboard ships a DAG tab that visualizes [beads](https://github.com/elvisnm/beads) tasks as a dependency graph. The tab is only as useful as the wiring of the underlying `bd` issues: blocking edges (`bd dep add`) should live only within a phase between real work items, never chain epics across phases, and never gate a sub-feature behind its own parent epic. The DAG groups cards by priority into columns, renders epics as label headers, and colors cards Ready (cyan) or Blocked (red) based on whether their open dependencies have closed.
+
+For projects that use bd for orchestration (the blackbox-style "epic per phase, sub-features under each epic" pattern), the `/wire-beads` Claude Code skill is the canonical reference and audit tool. It explains the status-vs-readiness model, the `blocks` vs `parent-child` distinction, the within-phase linking rule, the anti-patterns to avoid, and ships an audit workflow that lists every current edge by type and flags violations. Invoke it before creating new bd issues, before adding deps, or when the DAG is showing tasks in an unexpected color (a column uniformly Ready means wiring is missing; uniformly Blocked behind one card means over-coupled). The skill lives in `~/dev/blackbox/.claude/skills/wire-beads/SKILL.md` and can be copied into any project that follows the same pattern.
+
 ## Project Structure
 
 ```
