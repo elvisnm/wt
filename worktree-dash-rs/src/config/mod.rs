@@ -8,7 +8,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const CONFIG_FILENAME: &str = "wt.config.js";
+/// Filenames probed when looking for a wt config, in priority order.
+/// `.cjs` is checked first because it works regardless of the project's
+/// package.json `"type"` field. `.js` only loads correctly as CommonJS;
+/// in an ESM project (`"type": "module"`) Node parses it as ESM and
+/// silently drops `module.exports`, leaving wt with an empty config.
+const CONFIG_FILENAMES: &[&str] = &["wt.config.cjs", "wt.config.js"];
+
+/// Display label for the config file in error messages.
+const CONFIG_FILENAME_LABEL: &str = "wt.config.{cjs,js}";
 
 /// Deserialize a String that may be null in JSON → empty String.
 fn deserialize_null_string<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
@@ -391,15 +399,18 @@ pub struct GitConfig {
 
 // ── Finding the config ──────────────────────────────────────────────────
 
-/// Walk upward from start_dir looking for wt.config.js.
-/// Returns (config_path, repo_root) or None.
+/// Walk upward from start_dir looking for a wt config file.
+/// Probes both `wt.config.cjs` and `wt.config.js` (in that order) at
+/// each level. Returns (config_path, repo_root) or None.
 pub fn find_config(start_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     let mut dir = start_dir.canonicalize().ok()?;
 
     loop {
-        let candidate = dir.join(CONFIG_FILENAME);
-        if candidate.exists() {
-            return Some((candidate, dir));
+        for name in CONFIG_FILENAMES {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                return Some((candidate, dir));
+            }
         }
 
         if !dir.pop() {
@@ -410,14 +421,28 @@ pub fn find_config(start_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
+/// Detect whether the project at `repo_root` is configured for ESM.
+/// True when `package.json` has `"type": "module"`, which causes Node
+/// to parse `.js` files as ESM and silently drop `module.exports`.
+pub fn is_esm_project(repo_root: &Path) -> bool {
+    let pkg_path = repo_root.join("package.json");
+    let Ok(content) = std::fs::read_to_string(&pkg_path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    value.get("type").and_then(|t| t.as_str()) == Some("module")
+}
+
 // ── Loading the config ──────────────────────────────────────────────────
 
-/// Find and parse wt.config.js, resolve defaults and paths.
+/// Find and parse the wt config, resolve defaults and paths.
 pub fn load(start_dir: &Path) -> Result<Config> {
     let (config_path, repo_root) = find_config(start_dir)
         .context(format!(
             "could not find {} in {} or any parent directory",
-            CONFIG_FILENAME,
+            CONFIG_FILENAME_LABEL,
             start_dir.display()
         ))?;
 
@@ -450,7 +475,19 @@ pub fn load_from_path(config_path: &Path, repo_root: &Path) -> Result<Config> {
         .context("failed to parse config JSON")?;
 
     if cfg.name.is_empty() {
-        bail!("{}: \"name\" is required", CONFIG_FILENAME);
+        // An empty config from a `.js` file in an ESM project is the
+        // most common failure mode: Node parses the file as ESM, the
+        // `module.exports = {...}` does nothing, and `require()` returns
+        // `{}`. Surface a specific actionable hint instead of the
+        // generic "name is required" error.
+        let is_js = config_path.extension().and_then(|e| e.to_str()) == Some("js");
+        if is_js && is_esm_project(repo_root) {
+            bail!(
+                "{} loaded as ESM (package.json has \"type\": \"module\"), so module.exports was ignored. Rename the file to wt.config.cjs.",
+                config_path.display()
+            );
+        }
+        bail!("{}: \"name\" is required", config_path.display());
     }
 
     cfg.config_path = config_path.to_path_buf();

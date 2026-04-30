@@ -118,7 +118,12 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, debug: bool) 
     terminal.draw(|frame| app.render(frame))?;
     std::thread::sleep(std::time::Duration::from_millis(800));
 
-    if app.cfg.is_none() {
+    if let Some(err) = app.cfg_load_error.clone() {
+        // Config file exists but failed to load. Don't fire the wizard
+        // (it would silently overwrite the user's broken file). Surface
+        // the error so they can see why discovery is empty.
+        app.push_toast("Config load failed", &err, ui::overlay::ToastKind::Error);
+    } else if app.cfg.is_none() {
         app.start_init_wizard();
     } else {
         app.run_discovery();

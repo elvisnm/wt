@@ -249,6 +249,10 @@ pub struct App {
     flow_scripts_dir: String,
     repo_root: String,
     pub cfg: Option<config::Config>,
+    /// Set when a config file was found but failed to parse. The wizard
+    /// must NOT fire in that case (it would silently overwrite the
+    /// user's broken config). main.rs surfaces this as an error toast.
+    pub cfg_load_error: Option<String>,
     pub palette: ui::style::Palette,
     pub agent_states: std::collections::HashMap<usize, crate::detect::AgentState>,
 
@@ -268,7 +272,19 @@ impl App {
         let services_visible = settings.default_panels.services;
 
         let cwd = std::env::current_dir().unwrap_or_default();
-        let cfg = config::load(&cwd).ok();
+        // Distinguish "no config file found anywhere" (legitimate wizard
+        // trigger) from "config file exists but failed to load" (must
+        // not fire the wizard, which would clobber the broken file).
+        let (cfg, cfg_load_error) = match config::load(&cwd) {
+            Ok(c) => (Some(c), None),
+            Err(e) => {
+                if config::find_config(&cwd).is_some() {
+                    (None, Some(e.to_string()))
+                } else {
+                    (None, None)
+                }
+            }
+        };
         let repo_root = cfg.as_ref()
             .map(|c| c.repo_root.to_string_lossy().to_string())
             .unwrap_or_else(|| cwd.to_string_lossy().to_string());
@@ -327,6 +343,7 @@ impl App {
             flow_scripts_dir,
             repo_root,
             cfg,
+            cfg_load_error,
             palette: ui::style::Palette::gruvbox(),
             agent_states: std::collections::HashMap::new(),
             fullscreen: false,
@@ -494,17 +511,20 @@ impl App {
             None => return,
         };
 
-        let content = crate::init::generate_config(&wizard.name, wizard.stack_id(), &wizard.worktrees_dir);
-        let config_path = std::path::Path::new(&wizard.project_root).join("wt.config.js");
+        let project_root = std::path::Path::new(&wizard.project_root);
+        let filename = crate::init::config_filename(project_root);
+        let content = crate::init::generate_config(&wizard.name, wizard.stack_id(), &wizard.worktrees_dir, filename);
+        let config_path = project_root.join(filename);
 
         if let Err(e) = std::fs::write(&config_path, &content) {
-            self.push_toast("Error", &format!("Failed to write wt.config.js: {}", e), ui::overlay::ToastKind::Error);
+            self.push_toast("Error", &format!("Failed to write {}: {}", filename, e), ui::overlay::ToastKind::Error);
             return;
         }
 
         // Reload config
         let cwd = std::env::current_dir().unwrap_or_default();
         self.cfg = config::load(&cwd).ok();
+        self.cfg_load_error = None;
         self.repo_root = self.cfg.as_ref()
             .map(|c| c.repo_root.to_string_lossy().to_string())
             .unwrap_or_else(|| cwd.to_string_lossy().to_string());
@@ -514,7 +534,7 @@ impl App {
         self.run_discovery();
         self.refresh_status();
 
-        self.push_toast("Success", "Created wt.config.js", ui::overlay::ToastKind::Success);
+        self.push_toast("Success", &format!("Created {}", filename), ui::overlay::ToastKind::Success);
     }
 
     /// Refresh running status for all worktrees.
