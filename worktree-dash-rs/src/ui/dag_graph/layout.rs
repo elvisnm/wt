@@ -146,12 +146,11 @@ pub fn compute_layout(tasks: &[Task]) -> GraphLayout {
     }
     let ranks: Vec<usize> = ranks.into_iter().map(|r| r.unwrap_or(0)).collect();
 
-    // Three-way classification of a task's direct blockers. Drives the
-    // DAG status so that a task waiting on normal open work reads
-    // differently from one stuck behind a blocked dep. Applies to any bd
-    // status, not just "open" — if a task is manually marked blocked but
-    // its blockers have since been closed, we surface it as ready
-    // because the dependency graph says it can proceed.
+    // Two-way classification of a task's direct blockers. Beads doesn't
+    // store "blocked" as a status (it's computed from open dependency
+    // edges), so the only thing that matters here is whether any dep is
+    // still non-closed. If yes, the dependent reads as Blocked; if all
+    // deps are closed, it reads as Ready.
     let blocker_states: Vec<BlockerState> =
         tasks.iter().map(|t| compute_blocker_state(t, tasks, &id_to_idx)).collect();
 
@@ -436,15 +435,13 @@ fn wrap_count(text: &str, width: usize) -> usize {
     wrap_text_cells(text, width).len()
 }
 
-/// Three-way summary of a task's direct blockers. Distinguishes "waiting
-/// on normal open work" (`SomeOpen`) from "stuck behind an explicitly
-/// blocked dep" (`SomeBlocked`), so the DAG can surface the two cases in
-/// different colors.
+/// Two-way summary of a task's direct blockers. Beads doesn't store
+/// "blocked" as a status — it's computed from open dependency edges. So
+/// the only thing that matters is whether any dep is still non-closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockerState {
     AllClear,
-    SomeOpen,
-    SomeBlocked,
+    HasOpen,
 }
 
 fn compute_blocker_state(
@@ -452,29 +449,15 @@ fn compute_blocker_state(
     tasks: &[Task],
     id_to_idx: &HashMap<&str, usize>,
 ) -> BlockerState {
-    let mut any_blocked = false;
-    let mut any_open = false;
     for dep_id in &task.dependencies {
         let Some(&idx) = id_to_idx.get(dep_id.as_str()) else {
             continue;
         };
-        let status = tasks[idx].status.as_str();
-        if is_closed(status) {
-            continue;
-        }
-        if status == "blocked" {
-            any_blocked = true;
-        } else {
-            any_open = true;
+        if !is_closed(tasks[idx].status.as_str()) {
+            return BlockerState::HasOpen;
         }
     }
-    if any_blocked {
-        BlockerState::SomeBlocked
-    } else if any_open {
-        BlockerState::SomeOpen
-    } else {
-        BlockerState::AllClear
-    }
+    BlockerState::AllClear
 }
 
 fn card_status(task: &Task, blockers: BlockerState) -> CardStatus {
@@ -483,8 +466,7 @@ fn card_status(task: &Task, blockers: BlockerState) -> CardStatus {
         "in_progress" => CardStatus::Active,
         _ => match blockers {
             BlockerState::AllClear => CardStatus::Ready,
-            BlockerState::SomeOpen => CardStatus::Open,
-            BlockerState::SomeBlocked => CardStatus::Blocked,
+            BlockerState::HasOpen => CardStatus::Blocked,
         },
     }
 }
@@ -567,8 +549,10 @@ mod tests {
     }
 
     #[test]
-    fn ready_vs_open_based_on_blockers() {
-        // blocker a closed → b is ready. blocker c open → d is open.
+    fn ready_vs_blocked_based_on_blockers() {
+        // blocker a closed → b is ready. blocker c open → d is blocked.
+        // Beads stores only open/in_progress/closed; any non-closed dep
+        // makes the dependent blocked.
         let tasks = vec![
             make_task("a", "closed", &[]),
             make_task("b", "open", &["a"]),
@@ -578,17 +562,16 @@ mod tests {
         let layout = compute_layout(&tasks);
         let card = |id: &str| layout.cards.iter().find(|c| c.id == id).unwrap();
         assert_eq!(card("b").status, CardStatus::Ready);
-        assert_eq!(card("d").status, CardStatus::Open);
+        assert_eq!(card("d").status, CardStatus::Blocked);
         assert_eq!(card("a").status, CardStatus::Done);
     }
 
     #[test]
-    fn blocked_when_any_dep_is_blocked() {
-        // e has two blockers: x (open) and y (blocked). The "blocked"
-        // dep should dominate — e reads as Blocked, not Open.
+    fn blocked_when_any_dep_is_non_closed() {
+        // e has two blockers, both non-closed. e reads as Blocked.
         let tasks = vec![
             make_task("x", "open", &[]),
-            make_task("y", "blocked", &[]),
+            make_task("y", "in_progress", &[]),
             make_task("e", "open", &["x", "y"]),
         ];
         let layout = compute_layout(&tasks);

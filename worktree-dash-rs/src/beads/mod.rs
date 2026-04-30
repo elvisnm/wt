@@ -58,12 +58,17 @@ fn run_list(args: &[&str]) -> Result<Vec<Task>, String> {
         .map_err(|e| format!("failed to parse tasks: {}", e))
 }
 
-/// Fetch the direct dependencies of a single task (issues it depends on).
-/// Returns the list of blocker ids via `bd dep list <id> --json`.
+/// Fetch the direct blocking dependencies of a single task via
+/// `bd dep list <id> --json`. Beads also emits `parent-child` edges from
+/// sub-features to their epic; those are grouping links, not blockers,
+/// so we filter them out — including them would mark every sub-feature
+/// as Blocked whenever its epic is open.
 pub fn fetch_dependencies(id: &str) -> Result<Vec<String>, String> {
     #[derive(Deserialize)]
     struct DepEntry {
         id: String,
+        #[serde(default)]
+        dependency_type: String,
     }
 
     let output = std::process::Command::new("bd")
@@ -78,7 +83,11 @@ pub fn fetch_dependencies(id: &str) -> Result<Vec<String>, String> {
 
     let entries: Vec<DepEntry> = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("failed to parse deps: {}", e))?;
-    Ok(entries.into_iter().map(|e| e.id).collect())
+    Ok(entries
+        .into_iter()
+        .filter(|e| e.dependency_type != "parent-child")
+        .map(|e| e.id)
+        .collect())
 }
 
 /// Events emitted by the background task+deps fetcher.
