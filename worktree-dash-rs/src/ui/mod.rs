@@ -1495,7 +1495,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
         match app.focus {
             Panel::Worktrees => vec![
                 ("Enter", "Actions"),
-                ("b", "Shell"),
+                ("z", "Shell"),
                 ("c", "Claude"),
                 ("n", "Create"),
                 ("j/k", "Navigate"),

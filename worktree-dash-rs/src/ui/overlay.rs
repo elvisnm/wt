@@ -36,9 +36,9 @@ pub fn maintenance_actions() -> Vec<PickerAction> {
 
 pub fn split_session_actions() -> Vec<PickerAction> {
     vec![
-        PickerAction::new("b", "Shell", "Container shell"),
+        PickerAction::new("z", "Shell", "Host shell"),
+        PickerAction::new("b", "Bash", "Container bash"),
         PickerAction::new("c", "Claude", "Claude Code"),
-        PickerAction::new("z", "Zsh", "Host shell"),
         PickerAction::new("l", "Logs", "Container logs"),
     ]
 }

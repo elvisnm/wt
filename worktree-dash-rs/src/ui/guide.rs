@@ -45,7 +45,7 @@ pub fn render_guide(frame: &mut Frame, area: Rect) {
             box_line(col_w, b, vec![s("  ", d), s("Shift+Tab", k), s("   prev panel", d)]),
         ),
         (
-            box_line(col_w, b, vec![s("    ", d), s("b", k), s("  shell            ", d), s("c", k), s("  claude code", d)]),
+            box_line(col_w, b, vec![s("    ", d), s("z", k), s("  shell    ", d), s("b", k), s("  bash    ", d), s("c", k), s("  claude code", d)]),
             box_empty(col_w, b),
         ),
         (

@@ -32,7 +32,7 @@ describe('without config', () => {
   });
 
   test('compute_ports throws without config', () => {
-    expect(() => sp.compute_ports(100)).toThrow(/wt\.config\.js/);
+    expect(() => sp.compute_ports(100)).toThrow(/wt\.config\.(cjs|js)/);
   });
 
   test('find_free_offset returns initial offset when no ports defined', () => {

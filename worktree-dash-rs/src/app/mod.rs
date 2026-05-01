@@ -1960,7 +1960,10 @@ impl App {
 
             // Direct actions from Worktrees panel
             KeyCode::Char('b') if self.focus == Panel::Worktrees && !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.open_shell_for_selected();
+                self.open_bash_for_selected();
+            }
+            KeyCode::Char('z') if self.focus == Panel::Worktrees && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.open_zsh_for_selected();
             }
             KeyCode::Char('c') if self.focus == Panel::Worktrees && !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_claude_for_selected();
@@ -2115,7 +2118,10 @@ impl App {
 
     // ── Tab management ───────────────────────────────────────────────
 
-    fn open_shell_for_selected(&mut self) {
+    /// Open container bash for the selected worktree. No-op when the worktree
+    /// has no running container — the per-worktree action menu hides the `b`
+    /// entry in that case, so this is defensive only.
+    fn open_bash_for_selected(&mut self) {
         if self.cursor >= self.worktrees.len() {
             return;
         }
@@ -2123,27 +2129,20 @@ impl App {
         let path = self.worktrees[self.cursor].path.to_string_lossy().to_string();
         let is_docker = self.worktrees[self.cursor].wt_type == crate::worktree::WorktreeType::Docker;
         let container = self.worktrees[self.cursor].container.clone();
+        let running = self.worktrees[self.cursor].running;
 
-        if is_docker && !container.is_empty() {
-            self.open_tab(
-                format!("Shell ({})", alias),
-                "docker",
-                &["exec", "-it", &container, "bash"],
-                "",
-                alias,
-                path,
-            );
-        } else {
-            let shell = default_shell();
-            self.open_tab(
-                format!("Shell ({})", alias),
-                &shell,
-                &[],
-                &path,
-                alias,
-                path.clone(),
-            );
+        if !is_docker || container.is_empty() || !running {
+            return;
         }
+
+        self.open_tab(
+            format!("Bash ({})", alias),
+            "docker",
+            &["exec", "-it", &container, "bash"],
+            "",
+            alias,
+            path,
+        );
     }
 
     fn open_claude_for_selected(&mut self) {
@@ -2360,7 +2359,7 @@ impl App {
         if wt.alias == "Root" {
             let actions = vec![
                 PickerAction::new("n", "Create", "Create a new worktree"),
-                PickerAction::new("b", "Shell", "Open shell at project root"),
+                PickerAction::new("z", "Shell", "Open shell at project root"),
                 PickerAction::new("c", "Claude", "Claude Code at project root"),
             ];
             self.open_picker(&title, actions);
@@ -2389,12 +2388,11 @@ impl App {
             actions.push(PickerAction::new("u", "Start", "Start worktree"));
         }
 
-        // Shell
+        // Shell — z is always the host shell at the worktree folder.
+        // b is the container bash, available only when a container is running.
+        actions.push(PickerAction::new("z", "Shell", "Host shell"));
         if has_docker && !wt.container.is_empty() && wt.running {
             actions.push(PickerAction::new("b", "Bash", "Container bash"));
-            actions.push(PickerAction::new("z", "Shell", "Host shell"));
-        } else {
-            actions.push(PickerAction::new("b", "Shell", "Open shell"));
         }
         actions.push(PickerAction::new("c", "Claude", "Claude Code"));
         actions.push(PickerAction::new("g", "Pull", "Pull latest changes"));
@@ -2442,7 +2440,7 @@ impl App {
         }
 
         match action.key.as_str() {
-            "b" => self.open_shell_for_selected(),
+            "b" => self.open_bash_for_selected(),
             "c" => self.open_claude_for_selected(),
             "l" => self.open_logs_for_selected(),
             "z" => self.open_zsh_for_selected(),
@@ -2588,13 +2586,16 @@ impl App {
 
         match action.key.as_str() {
             "b" => {
+                // Container bash. build_split_actions only registers `b`
+                // when a container is running, so this branch is the only
+                // valid path; if the gate is somehow bypassed, fall back
+                // to a no-op signal (None command) so the caller skips.
                 if let Some(wt) = wt {
-                    if wt.wt_type == WorktreeType::Docker && !wt.container.is_empty() {
-                        return (Some("docker".into()), vec!["exec".into(), "-it".into(), wt.container.clone(), "bash".into()], "Shell");
+                    if wt.wt_type == WorktreeType::Docker && !wt.container.is_empty() && wt.running {
+                        return (Some("docker".into()), vec!["exec".into(), "-it".into(), wt.container.clone(), "bash".into()], "Bash");
                     }
                 }
-                let shell = default_shell();
-                (Some(shell), vec![], "Shell")
+                (None, vec![], "Bash")
             }
             "c" => {
                 let args = if self.settings.claude_auto_mode {
@@ -3186,10 +3187,16 @@ impl App {
 
     fn build_split_actions(&self, alias: &str) -> Vec<PickerAction> {
         let mut actions = vec![
-            PickerAction::new("b", "Shell", "Container shell"),
+            PickerAction::new("z", "Shell", "Host shell at worktree"),
             PickerAction::new("c", "Claude", "Claude Code"),
-            PickerAction::new("z", "Zsh", "Host shell"),
         ];
+
+        // Bash (container) is only offered when the container is up.
+        if let Some(wt) = self.worktrees.iter().find(|w| w.alias == alias) {
+            if wt.wt_type == WorktreeType::Docker && !wt.container.is_empty() && wt.running {
+                actions.push(PickerAction::new("b", "Bash", "Container bash"));
+            }
+        }
 
         // Show single "Logs" entry if any log source exists
         let wt = self.worktrees.iter().find(|w| w.alias == alias);

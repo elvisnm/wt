@@ -423,6 +423,11 @@ function ensure_env_offset(env_file, offset) {
 
 function print_quick_links(ports, alias, lan) {
   const quick_links = config ? (config.services.quickLinks || []) : [];
+  // Skip the section entirely when there is nothing to surface — avoids
+  // emitting bogus "http://localhost:undefined" lines for projects whose
+  // wt.config defines no services.ports (Claude-host containers, etc.).
+  if (Object.keys(ports).length === 0 && quick_links.length === 0 && !lan) return;
+
   const domain = get_domain(alias);
 
   console.log('Quick Links:');
@@ -432,7 +437,7 @@ function print_quick_links(ports, alias, lan) {
       const url = domain ? `http://${domain}${ql.pathPrefix || ''}` : `http://localhost:${svc_port}${ql.pathPrefix || ''}`;
       console.log(`  ${ql.label}: ${url}`);
     }
-  } else {
+  } else if (Object.keys(ports).length > 0) {
     const primary = config ? config.services.primary : null;
     const primary_port = primary && ports[primary] ? ports[primary] : Object.values(ports)[0];
     console.log(`  http://localhost:${primary_port}`);
@@ -441,10 +446,23 @@ function print_quick_links(ports, alias, lan) {
 }
 
 function print_service_ports(ports) {
+  if (Object.keys(ports).length === 0) return;
   console.log('Service Ports:');
   for (const [name, port] of Object.entries(ports)) {
     console.log(`  ${name.padEnd(20)} ${port}`);
   }
+}
+
+function print_commands(alias) {
+  // The shell-level `wt` binary opens the TUI; subcommand routing is in the
+  // dashboard, not on the command line. Surface the keybindings the user
+  // will actually use, scoped to the worktree we just created.
+  console.log(`Next: open the wt dashboard (run \`wt\`), select '${alias}', then press:`);
+  console.log('  z   shell        (host shell at the worktree folder)');
+  console.log('  b   bash         (container bash, when running)');
+  console.log('  c   claude       (Claude Code)');
+  console.log('  l   logs         (container logs)');
+  console.log('  r   restart      t  stop      u  start');
 }
 
 // ── Traefik override (shared compose strategy) ──────────────────────────
@@ -930,8 +948,9 @@ function restart_shared(repo_root, worktree_path, alias, options) {
   if (domain) console.log(`Domain: ${domain}`);
   console.log('');
   print_quick_links(ports, alias, null);
-  console.log('');
   print_service_ports(ports);
+  console.log('');
+  print_commands(alias);
 }
 
 // ── Shared compose: create ──────────────────────────────────────────────
@@ -1013,13 +1032,9 @@ function create_shared(repo_root, worktree_path, target_branch, alias, options) 
   if (domain) console.log(`Domain: ${domain}`);
   console.log('');
   print_quick_links(ports, alias, null);
-  console.log('');
   print_service_ports(ports);
   console.log('');
-  console.log('Commands:');
-  console.log(`  Logs:    wt logs ${alias}`);
-  console.log(`  Stop:    wt down ${alias}`);
-  console.log(`  Status:  wt status`);
+  print_commands(alias);
 }
 
 // ── Generate strategy: restart ──────────────────────────────────────────
@@ -1070,13 +1085,14 @@ function restart_generate(repo_root, worktree_path, target_branch, alias, env_fi
   if (lan) console.log(`LAN:    ${lan.domain}`);
   console.log('');
   print_quick_links(ports, alias, lan);
-  console.log('');
   if (config) {
     print_service_ports(ports);
   } else {
     console.log('Service Ports:');
     console.log(format_port_table(restart_offset));
   }
+  console.log('');
+  print_commands(alias);
 }
 
 // ── Generate strategy: create ───────────────────────────────────────────
@@ -1131,13 +1147,14 @@ function create_generate(repo_root, worktree_path, target_branch, alias, env_fil
   if (lan) console.log(`LAN:    ${lan.domain}`);
   console.log('');
   print_quick_links(ports, alias, lan);
-  console.log('');
   if (config) {
     print_service_ports(ports);
   } else {
     console.log('Service Ports:');
     console.log(format_port_table(port_offset));
   }
+  console.log('');
+  print_commands(alias);
 
   // Database info
   if (has_local_db() && !options.shared_db) {
