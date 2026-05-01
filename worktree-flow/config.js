@@ -13,7 +13,11 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const CONFIG_FILENAME = 'wt.config.js';
+// .cjs first: required when the project's package.json declares "type": "module",
+// since Node refuses to require() a .js file under ESM. Plain .js still works for
+// CommonJS projects and remains the default for `wt init`-generated configs.
+const CONFIG_FILENAMES = ['wt.config.cjs', 'wt.config.js'];
+const CONFIG_FILENAME = CONFIG_FILENAMES[1]; // legacy alias for back-compat exports
 
 // ── Defaults ────────────────────────────────────────────────────────────
 
@@ -160,7 +164,9 @@ function deep_merge(target, source) {
 // ── Path resolution ─────────────────────────────────────────────────────
 
 /**
- * Walk upward from `start_dir` looking for CONFIG_FILENAME.
+ * Walk upward from `start_dir` looking for any of CONFIG_FILENAMES.
+ * Within a single directory, earlier names in the list win — `.cjs` is preferred
+ * over `.js` so ESM repos that ship both for compat resolve to the working one.
  * Returns { configPath, repoRoot } or null.
  */
 function find_config(start_dir) {
@@ -168,9 +174,11 @@ function find_config(start_dir) {
   const root = path.parse(dir).root;
 
   while (dir !== root) {
-    const candidate = path.join(dir, CONFIG_FILENAME);
-    if (fs.existsSync(candidate)) {
-      return { configPath: candidate, repoRoot: resolve_repo_root(dir) };
+    for (const name of CONFIG_FILENAMES) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) {
+        return { configPath: candidate, repoRoot: resolve_repo_root(dir) };
+      }
     }
     dir = path.dirname(dir);
   }
@@ -247,7 +255,7 @@ function load_config(options = {}) {
   if (!found) {
     if (required) {
       throw new Error(
-        `Could not find ${CONFIG_FILENAME} in ${cwd} or any parent directory.\n` +
+        `Could not find ${CONFIG_FILENAMES.join(' or ')} in ${cwd} or any parent directory.\n` +
         `Run "workflow init" to create one, or create it manually.`
       );
     }
@@ -268,7 +276,7 @@ function load_config(options = {}) {
 
   // Validate required fields
   if (!user_config.name || typeof user_config.name !== 'string') {
-    throw new Error(`${CONFIG_FILENAME}: "name" is required and must be a string.`);
+    throw new Error(`${path.basename(configPath)}: "name" is required and must be a string.`);
   }
 
   // Deep merge with defaults
@@ -484,6 +492,7 @@ function get_compose_info(config, worktree_path) {
 
 module.exports = {
   CONFIG_FILENAME,
+  CONFIG_FILENAMES,
   load_config,
   find_config,
 

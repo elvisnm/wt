@@ -141,7 +141,7 @@ describe('load_config', () => {
     try {
       expect(() => {
         config_mod.load_config({ cwd: empty_dir, required: true });
-      }).toThrow(/Could not find wt\.config\.js/);
+      }).toThrow(/Could not find wt\.config\.(cjs|js)/);
     } finally {
       fs.rmSync(empty_dir, { recursive: true, force: true });
     }
@@ -874,8 +874,44 @@ describe('get_compose_info', () => {
 });
 
 describe('CONFIG_FILENAME', () => {
-  test('is wt.config.js', () => {
+  test('legacy alias still points at wt.config.js for back-compat', () => {
     expect(config_mod.CONFIG_FILENAME).toBe('wt.config.js');
+  });
+
+  test('CONFIG_FILENAMES lists .cjs first, then .js', () => {
+    expect(config_mod.CONFIG_FILENAMES).toEqual(['wt.config.cjs', 'wt.config.js']);
+  });
+});
+
+describe('find_config: .cjs vs .js precedence', () => {
+  let tmp;
+
+  beforeEach(() => {
+    config_mod = fresh_config_mod();
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-cjs-'));
+  });
+
+  afterEach(() => {
+    if (tmp && fs.existsSync(tmp)) fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test('finds wt.config.cjs alone', () => {
+    fs.writeFileSync(path.join(tmp, 'wt.config.cjs'), `module.exports = { name: 'cjsapp' };`);
+    const found = config_mod.find_config(tmp);
+    expect(found.configPath).toBe(path.join(tmp, 'wt.config.cjs'));
+  });
+
+  test('finds wt.config.js alone', () => {
+    fs.writeFileSync(path.join(tmp, 'wt.config.js'), `module.exports = { name: 'jsapp' };`);
+    const found = config_mod.find_config(tmp);
+    expect(found.configPath).toBe(path.join(tmp, 'wt.config.js'));
+  });
+
+  test('prefers .cjs when both exist in the same directory', () => {
+    fs.writeFileSync(path.join(tmp, 'wt.config.cjs'), `module.exports = { name: 'cjsapp' };`);
+    fs.writeFileSync(path.join(tmp, 'wt.config.js'), `module.exports = { name: 'jsapp' };`);
+    const found = config_mod.find_config(tmp);
+    expect(found.configPath).toBe(path.join(tmp, 'wt.config.cjs'));
   });
 });
 
