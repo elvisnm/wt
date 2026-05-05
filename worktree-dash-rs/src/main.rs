@@ -63,6 +63,39 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Handle --inspect: dump worktree state and exit, bypassing the TUI.
+    // Useful for debugging container detection without entering raw mode.
+    if args.iter().any(|a| a == "--inspect") {
+        let cwd = std::env::current_dir()?;
+        match config::load(&cwd) {
+            Ok(cfg) => {
+                println!("config name: {}", cfg.name);
+                println!("docker.compose_strategy: {:?}", cfg.docker.compose_strategy);
+                println!("docker.compose_file: {:?}", cfg.docker.compose_file);
+                println!("compose_file_abs: {:?}", cfg.compose_file_abs);
+                println!("docker.exec_user: {:?}", cfg.docker.exec_user);
+                println!("services.primary: {:?}", cfg.services.primary);
+                println!("services.ports: {:?}", cfg.services.ports);
+                let wts_dir = worktree::resolve_worktrees_dir(&cfg.repo_root, Some(&cfg));
+                println!("\nworktrees_dir: {:?}", wts_dir);
+                let mut wts = worktree::discover(&wts_dir, &[], Some(&cfg));
+                println!("\ndiscovered {} worktrees:", wts.len());
+                for w in &wts {
+                    println!("  pre-refresh: name={} type={:?} alias={:?} container={:?} running={}",
+                        w.name, w.wt_type, w.alias, w.container, w.running);
+                }
+                docker::fetch_container_status(&mut wts, Some(&cfg));
+                println!("\nafter container refresh:");
+                for w in &wts {
+                    println!("  post-refresh: name={} type={:?} alias={:?} container={:?} running={} container_exists={}",
+                        w.name, w.wt_type, w.alias, w.container, w.running, w.container_exists);
+                }
+            }
+            Err(e) => println!("config load failed: {e}"),
+        }
+        return Ok(());
+    }
+
     let bin_name = args.first()
         .and_then(|a| std::path::Path::new(a).file_name())
         .map(|n| n.to_string_lossy().to_string())

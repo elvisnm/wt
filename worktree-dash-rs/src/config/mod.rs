@@ -110,6 +110,13 @@ pub struct DockerConfig {
     pub proxy: ProxyConfig,
     #[serde(default)]
     pub env_files: Vec<String>,
+    /// Optional user passed as `--user <name>` to `docker exec` for the
+    /// dashboard's Bash and Claude actions. Containers without a `USER`
+    /// directive run exec as root by default, which breaks tools like
+    /// `claude --dangerously-skip-permissions` that refuse root.
+    /// Set to e.g. "dev" to match the user the entrypoint drops to.
+    #[serde(default, deserialize_with = "deserialize_null_string")]
+    pub exec_user: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

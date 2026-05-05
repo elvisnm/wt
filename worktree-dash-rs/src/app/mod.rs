@@ -2135,10 +2135,22 @@ impl App {
             return;
         }
 
+        let exec_user = self.cfg.as_ref()
+            .map(|c| c.docker.exec_user.clone())
+            .unwrap_or_default();
+
+        let mut args: Vec<&str> = vec!["exec", "-it"];
+        if !exec_user.is_empty() {
+            args.push("--user");
+            args.push(&exec_user);
+        }
+        args.push(&container);
+        args.push("bash");
+
         self.open_tab(
             format!("Bash ({})", alias),
             "docker",
-            &["exec", "-it", &container, "bash"],
+            &args,
             "",
             alias,
             path,
@@ -2151,19 +2163,58 @@ impl App {
         }
         let alias = self.worktrees[self.cursor].alias.clone();
         let path = self.worktrees[self.cursor].path.to_string_lossy().to_string();
+        let is_docker = self.worktrees[self.cursor].wt_type == crate::worktree::WorktreeType::Docker;
+        let container = self.worktrees[self.cursor].container.clone();
+        let running = self.worktrees[self.cursor].running;
         let auto_mode = self.settings.claude_auto_mode;
 
-        // Resolve claude binary: config → local install → PATH
-        let claude_bin = {
-            let from_config = self.cfg.as_ref()
-                .and_then(|c| c.dash.commands.get("claude"))
-                .map(|cmd| cmd.cmd.clone())
-                .filter(|s| !s.is_empty());
+        let configured_cmd = self.cfg.as_ref()
+            .and_then(|c| c.dash.commands.get("claude"))
+            .map(|cmd| cmd.cmd.clone())
+            .filter(|s| !s.is_empty());
 
+        // When the worktree is a running Docker worktree, run Claude inside
+        // the container so it picks up the container-mounted credentials
+        // (e.g. a shared `claude_state` volume holding ~/.claude). Running
+        // on the host would resolve to the host's own ~/.claude and miss
+        // any auth configured inside the container.
+        if is_docker && !container.is_empty() && running {
+            let inner_cmd = configured_cmd.unwrap_or_else(|| "claude".to_string());
+            let full_cmd = if auto_mode {
+                format!("{} --enable-auto-mode", inner_cmd)
+            } else {
+                inner_cmd
+            };
+            let exec_user = self.cfg.as_ref()
+                .map(|c| c.docker.exec_user.clone())
+                .unwrap_or_default();
+
+            let mut args: Vec<&str> = vec!["exec", "-it"];
+            if !exec_user.is_empty() {
+                args.push("--user");
+                args.push(&exec_user);
+            }
+            args.push(&container);
+            args.push("bash");
+            args.push("-lc");
+            args.push(&full_cmd);
+
+            self.open_tab(
+                format!("Claude ({})", alias),
+                "docker",
+                &args,
+                "",
+                alias,
+                path,
+            );
+            return;
+        }
+
+        // Host fallback: resolve claude binary via config → local install → PATH.
+        let claude_bin = {
             let home = std::env::var("HOME").unwrap_or_default();
             let local_path = format!("{}/.claude/local/claude", home);
-
-            match from_config {
+            match configured_cmd {
                 Some(cmd) if std::path::Path::new(&cmd).exists() => cmd,
                 Some(cmd) if cmd == "claude" && std::path::Path::new(&local_path).exists() => local_path,
                 Some(cmd) => cmd,

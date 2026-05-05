@@ -95,8 +95,14 @@ pub fn discover(worktrees_dir: &Path, existing: &[Worktree], cfg: Option<&Config
         let has_pm2_home = full_path.join(".pm2").exists();
         let has_git = full_path.join(".git").exists();
 
-        // Determine worktree type
-        let mut has_docker = has_compose;
+        // Determine worktree type. Generate-strategy worktrees always have a
+        // docker-compose.worktree.yml in-tree; shared-compose ones do not
+        // (they reference the repo's main compose file directly), so for
+        // those we infer "docker" from the config plus the presence of the
+        // worktree env file that wt-up.js writes during create_shared.
+        let is_shared_compose = cfg
+            .is_some_and(|c| c.docker.compose_strategy != "generate" && c.compose_file_abs.is_some());
+        let mut has_docker = has_compose || (is_shared_compose && has_env);
         if has_env {
             if let Some(wt_type) = read_env_file(&full_path, env_filename, "WORKTREE_TYPE") {
                 has_docker = wt_type == "docker";

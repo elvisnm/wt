@@ -1496,6 +1496,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             Panel::Worktrees => vec![
                 ("Enter", "Actions"),
                 ("z", "Shell"),
+                ("b", "Bash"),
                 ("c", "Claude"),
                 ("n", "Create"),
                 ("j/k", "Navigate"),
